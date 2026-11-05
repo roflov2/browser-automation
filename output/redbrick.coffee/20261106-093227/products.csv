@@ -1,0 +1,25 @@
+name,price,sold_out,is_coffee,product_type,url
+Coffee Coffee,From $21.00,False,True,whole_bean_or_ground,4-2501
+Good Day Coffee,From $23.00,False,True,whole_bean_or_ground,4-2542
+Rogue Coffee,From $23.00,False,True,whole_bean_or_ground,4-2583
+Dark Coffee,From $21.00,False,True,whole_bean_or_ground,4-2624
+Decaf Coffee,From $22.00,False,True,whole_bean_or_ground,4-2665
+Blend Pack,$65.00,True,True,whole_bean_or_ground,4-2707
+"Floripondio Pacamara, Bolivia",$74.00,False,True,whole_bean_or_ground,4-2749
+Drip Coffee,$35.00,False,True,drip_or_steep_bags,4-2790
+Drip Coffee Bag,$3.50,False,True,drip_or_steep_bags,4-2831
+Steep Coffee,$35.00,False,True,drip_or_steep_bags,4-2872
+Steep Coffee Bag,$3.50,False,True,drip_or_steep_bags,4-2913
+Coffee Coffee Pods,$12.00,False,True,pods_or_capsules,4-2954
+Complex Coffee Pods,$12.50,False,True,pods_or_capsules,4-2995
+Rich Coffee Pods,$12.50,False,True,pods_or_capsules,4-3036
+"Kamvara Estate AA, Kenya",From $34.00,False,True,whole_bean_or_ground,4-3077
+"Gandula, Brazil",From $31.00,False,True,whole_bean_or_ground,4-3118
+"Lomaverde, Colombia",From $38.00,False,True,whole_bean_or_ground,4-3159
+"Ayla Bombe, Ethiopia",From $31.00,False,True,whole_bean_or_ground,4-3200
+Shuffle Club,$25.00,False,False,subscription,4-3241
+Home Barista Course,$130.00,False,False,course,4-3282
+Redbrick Gift Cards,From $50.00,False,False,gift_card,4-3323
+Milk Glass Mug,$69.00,False,False,merch,4-3364
+Worn Everywhere Beanie,$44.00,False,False,merch,4-3405
+Brick Tee,$60.00,False,False,merch,4-3446
