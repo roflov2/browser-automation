@@ -1,0 +1,2 @@
+stagehand>=4.4.0
+python-dotenv

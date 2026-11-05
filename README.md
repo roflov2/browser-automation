@@ -2,9 +2,27 @@
 
 A [Stagehand](https://docs.stagehand.dev) (v4) script that opens
 [redbrick.coffee](https://redbrick.coffee/), lets Stagehand find the shop page on its own,
-and records every product with its price.
+and records every product with its price. Both versions use Google Gemini and read the API key from `.env`.
 
-## How it works
+There are two versions:
+
+- **Python:** `scrape_shop.py`, a short version that writes `output/redbrick_products.csv`.
+- **TypeScript:** `scrape-shop.ts`, which adds pagination, JSON output and derived price fields.
+
+## Python
+
+```bash
+python3 -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
+cp .env.example .env     # then set GOOGLE_GENERATIVE_AI_API_KEY
+python scrape_shop.py
+```
+
+`GEMINI_MODEL`, `HEADLESS` and `CHROME_PATH` work the same way as described for the TypeScript version below.
+
+## TypeScript
+
+### How it works
 
 1. Opens the homepage in a local Chrome.
 2. **Discovers the shop page.** The script never gives Stagehand a shop URL or link name.
@@ -15,7 +33,7 @@ and records every product with its price.
    If the page has a "Next" or "Load more" control, it follows it, up to 10 pages.
 4. Prints a table and saves `output/redbrick-products-<timestamp>.json` and `.csv`.
 
-## Setup
+### Setup
 
 Requires Node 20.12+, pnpm and Google Chrome. The script uses Google Gemini, so you also need a
 Gemini API key from [Google AI Studio](https://aistudio.google.com/apikey).
@@ -31,7 +49,7 @@ Then open `.env` and set your key:
 GOOGLE_GENERATIVE_AI_API_KEY=your-gemini-key
 ```
 
-## Run
+### Run
 
 ```bash
 pnpm scrape
@@ -48,7 +66,7 @@ The script loads `.env` on startup. Variables already set in your shell take pre
 | `HEADLESS` | `false` | Set to `true` to run without a window |
 | `CHROME_PATH` | auto-detected | Path to Chrome/Chromium if it isn't found automatically |
 
-## Output
+### Output
 
 Each product row has:
 
@@ -63,7 +81,7 @@ Each product row has:
 Prices are in whatever currency the store shows your location. The detected currency is saved in the
 JSON file.
 
-## Notes
+### Notes
 
 - `zod` is pinned to `~4.6.6` to match the version Stagehand 4.4.0 uses internally. The quickstart's
   `~4.4.3` causes type errors when passing schemas to `extract()` with this Stagehand release.
