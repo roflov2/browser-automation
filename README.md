@@ -17,25 +17,34 @@ and records every product with its price.
 
 ## Setup
 
-Requires Node 20+, pnpm and Google Chrome.
+Requires Node 20.12+, pnpm and Google Chrome. The script uses Google Gemini, so you also need a
+Gemini API key from [Google AI Studio](https://aistudio.google.com/apikey).
 
 ```bash
 pnpm install
+cp .env.example .env
+```
+
+Then open `.env` and set your key:
+
+```
+GOOGLE_GENERATIVE_AI_API_KEY=your-gemini-key
 ```
 
 ## Run
 
 ```bash
-export OPENAI_API_KEY="sk-..."
 pnpm scrape
 ```
 
 A Chrome window opens so you can watch each step.
 
-| Env var | Default | Purpose |
+The script loads `.env` on startup. Variables already set in your shell take precedence.
+
+| Variable | Default | Purpose |
 | --- | --- | --- |
-| `OPENAI_API_KEY` | (required) | API key for the default model |
-| `STAGEHAND_MODEL` | `openai/gpt-5.6-sol` | Any `openai/`, `anthropic/`, `google/`, `groq/` or `cerebras/` model. Set the matching key, e.g. `ANTHROPIC_API_KEY` |
+| `GOOGLE_GENERATIVE_AI_API_KEY` | (required) | Gemini API key. `GEMINI_API_KEY` is accepted too |
+| `GEMINI_MODEL` | `gemini-3.8-flash` | Gemini model to use, with or without the `google/` prefix |
 | `HEADLESS` | `false` | Set to `true` to run without a window |
 | `CHROME_PATH` | auto-detected | Path to Chrome/Chromium if it isn't found automatically |
 

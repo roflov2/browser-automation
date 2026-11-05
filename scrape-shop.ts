@@ -2,7 +2,7 @@
  * Opens https://redbrick.coffee/, lets Stagehand find the shop page on its
  * own, then records every product and its price.
  *
- * Run:  OPENAI_API_KEY=sk-... pnpm scrape
+ * Run:  put GOOGLE_GENERATIVE_AI_API_KEY=... in .env, then `pnpm scrape`
  *
  * Results are printed as a table and saved to output/ as JSON and CSV.
  */
@@ -10,28 +10,29 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { localBrowser, Stagehand, type ModelName } from "@browserbasehq/stagehand";
 import { z } from "zod/v4";
 
+// Load .env into process.env (built into Node 20.12+). Variables already set in
+// the shell take precedence. A missing .env is fine if the shell provides them.
+try {
+  process.loadEnvFile(".env");
+} catch (err) {
+  if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
+}
+
 const START_URL = "https://redbrick.coffee/";
 const MAX_NAVIGATION_STEPS = 4; // act() attempts allowed to reach the shop page
 const MAX_PAGES = 10; // safety cap if the shop is paginated
 
 // ---------------------------------------------------------------------------
-// Model configuration. Stagehand never reads env vars itself, so we do it here.
+// Model configuration: Google Gemini. Stagehand never reads env vars itself,
+// so we read the key here and pass it in.
 // ---------------------------------------------------------------------------
-const MODEL_NAME = (process.env.STAGEHAND_MODEL ?? "openai/gpt-5.6-sol") as ModelName;
-const API_KEY_ENV: Record<string, string> = {
-  openai: "OPENAI_API_KEY",
-  anthropic: "ANTHROPIC_API_KEY",
-  google: "GOOGLE_API_KEY",
-  groq: "GROQ_API_KEY",
-  cerebras: "CEREBRAS_API_KEY",
-};
+const geminiModel = process.env.GEMINI_MODEL ?? "gemini-3.8-flash";
+const MODEL_NAME = (geminiModel.startsWith("google/") ? geminiModel : `google/${geminiModel}`) as ModelName;
 
-function modelApiKey(): string {
-  const provider = MODEL_NAME.split("/")[0];
-  const envVar = API_KEY_ENV[provider];
-  const key = envVar ? process.env[envVar] : undefined;
+function geminiApiKey(): string {
+  const key = process.env.GOOGLE_GENERATIVE_AI_API_KEY ?? process.env.GEMINI_API_KEY;
   if (!key) {
-    throw new Error(`Set ${envVar ?? "an API key env var"} for model "${MODEL_NAME}".`);
+    throw new Error("Missing Gemini API key: add GOOGLE_GENERATIVE_AI_API_KEY=... to .env (see .env.example).");
   }
   return key;
 }
@@ -165,13 +166,14 @@ async function saveResults(shopUrl: string, currency: string | null, products: P
 // Main
 // ---------------------------------------------------------------------------
 async function main() {
+  const apiKey = geminiApiKey(); // fail fast, before opening a browser
   const browser = await localBrowser.launch({
     headless: process.env.HEADLESS === "true", // visible window by default, like the quickstart
   });
   try {
     const stagehand = await Stagehand.create({
       browser,
-      model: { modelName: MODEL_NAME, apiKey: modelApiKey() },
+      model: { modelName: MODEL_NAME, apiKey },
     });
     try {
       const [page] = await browser.context.pages();
