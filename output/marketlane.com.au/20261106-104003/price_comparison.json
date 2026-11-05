@@ -1,9 +1,9 @@
 {
   "site": "https://marketlane.com.au",
   "shop_url": "https://marketlane.com.au/pages/coffee",
-  "checkout_url": "https://marketlane.com.au/cart",
-  "status": "no_checkout",
-  "message": "Checkout page not reached",
+  "checkout_url": "https://marketlane.com.au/checkouts/cn/hWNIoV9CxjhQytJi1eciZRoK/en-au?_r=AQAB015NIIge0wnHCtghJ2QPiNsYmIuhmDnzyGdbpYRh5gqEbay2&auto_redirect=false&edge_redirect=true&skip_shop_pay=true",
+  "status": "ok",
+  "message": "",
   "items": [
     {
       "name": "SEASONAL BLEND",
@@ -61,11 +61,11 @@
   "other_fees": [],
   "other_fees_total": 0.0,
   "tax_amount_display": null,
-  "tax_included": true,
+  "tax_included": false,
   "checkout_total_display": "$74.00",
   "checkout_total": 74.0,
-  "currency": null,
+  "currency": "AUD",
   "drip_detected": false,
   "drip_reasons": [],
-  "checkout_summary": "Currently in the shopping bag/cart with 3 items (Ayla, Santa Isabel, and Seasonal Blend) for a subtotal of $74.00 incl. GST. Shipping is calculated at checkout."
+  "checkout_summary": "Checkout page displays 3 items (Ayla, Santa Isabel, and Seasonal Blend) for a subtotal of $74.00 AUD. Shipping has not yet been calculated."
 }

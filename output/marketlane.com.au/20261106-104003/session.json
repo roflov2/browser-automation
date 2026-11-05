@@ -1,0 +1,2259 @@
+{
+  "site": "https://marketlane.com.au",
+  "status": "ok",
+  "message": "",
+  "execution_time_ms": 326435,
+  "tokens_used": 201251.0,
+  "metrics_cumulative": {
+    "act_prompt_tokens": 66510.0,
+    "act_completion_tokens": 3744.0,
+    "act_reasoning_tokens": 0.0,
+    "act_cached_input_tokens": 0.0,
+    "act_inference_time_ms": 55878.0,
+    "extract_prompt_tokens": 82994.0,
+    "extract_completion_tokens": 14705.0,
+    "extract_reasoning_tokens": 0.0,
+    "extract_cached_input_tokens": 0.0,
+    "extract_inference_time_ms": 165238.0,
+    "observe_prompt_tokens": 31925.0,
+    "observe_completion_tokens": 1373.0,
+    "observe_reasoning_tokens": 0.0,
+    "observe_cached_input_tokens": 0.0,
+    "observe_inference_time_ms": 33699.0,
+    "total_prompt_tokens": 181429.0,
+    "total_completion_tokens": 19822.0,
+    "total_reasoning_tokens": 0.0,
+    "total_cached_input_tokens": 0.0,
+    "total_inference_time_ms": 254815.0
+  },
+  "resource_usage": {
+    "avg_memory_mb": 508.04,
+    "peak_memory_mb": 508.04,
+    "avg_cpu_load": 0.86,
+    "data_points": 327
+  },
+  "history": [
+    {
+      "level": "info",
+      "message": "Starting observation",
+      "data": {
+        "category": "observation",
+        "instruction": "Find the close, accept, dismiss or 'no thanks' button of any visible cookie banner, newsletter/discount popup, region or currency selector modal, or age-verification modal. Return nothing if there is none."
+      },
+      "timestamp": "2026-11-05T23:40:10.966355+00:00"
+    },
+    {
+      "level": "info",
+      "message": "Observation completed",
+      "data": {
+        "category": "observation",
+        "promptTokens": 4196,
+        "completionTokens": 201,
+        "reasoningTokens": 0,
+        "cachedInputTokens": 0,
+        "inferenceTimeMs": 3468,
+        "resultCount": 0
+      },
+      "timestamp": "2026-11-05T23:40:14.482714+00:00"
+    },
+    {
+      "level": "info",
+      "message": "Starting extraction using an accessibility snapshot",
+      "data": {
+        "category": "extraction",
+        "instruction": "Is the current page the store's coffee shop page?"
+      },
+      "timestamp": "2026-11-05T23:40:14.543298+00:00"
+    },
+    {
+      "level": "info",
+      "message": "Extraction completed successfully",
+      "data": {
+        "category": "extraction",
+        "promptTokens": 4505,
+        "completionTokens": 467,
+        "inferenceTimeMs": 7432
+      },
+      "timestamp": "2026-11-05T23:40:21.976158+00:00"
+    },
+    {
+      "level": "info",
+      "message": "Act inference completed",
+      "data": {
+        "category": "action",
+        "promptTokens": 4914,
+        "completionTokens": 814,
+        "reasoningTokens": 0,
+        "cachedInputTokens": 0,
+        "inferenceTimeMs": 7925
+      },
+      "timestamp": "2026-11-05T23:40:30.450383+00:00"
+    },
+    {
+      "level": "info",
+      "message": "Starting observation",
+      "data": {
+        "category": "observation",
+        "instruction": "Find the close, accept, dismiss or 'no thanks' button of any visible cookie banner, newsletter/discount popup, region or currency selector modal, or age-verification modal. Return nothing if there is none."
+      },
+      "timestamp": "2026-11-05T23:40:32.012205+00:00"
+    },
+    {
+      "level": "info",
+      "message": "Observation completed",
+      "data": {
+        "category": "observation",
+        "promptTokens": 4454,
+        "completionTokens": 218,
+        "reasoningTokens": 0,
+        "cachedInputTokens": 0,
+        "inferenceTimeMs": 3188,
+        "resultCount": 1
+      },
+      "timestamp": "2026-11-05T23:40:35.243924+00:00"
+    },
+    {
+      "level": "info",
+      "message": "Starting extraction using an accessibility snapshot",
+      "data": {
+        "category": "extraction",
+        "instruction": "Is the current page the store's coffee shop page?"
+      },
+      "timestamp": "2026-11-05T23:40:35.326539+00:00"
+    },
+    {
+      "level": "info",
+      "message": "Extraction completed successfully",
+      "data": {
+        "category": "extraction",
+        "promptTokens": 4501,
+        "completionTokens": 445,
+        "inferenceTimeMs": 6465
+      },
+      "timestamp": "2026-11-05T23:40:41.792045+00:00"
+    },
+    {
+      "level": "info",
+      "message": "Act inference completed",
+      "data": {
+        "category": "action",
+        "promptTokens": 4656,
+        "completionTokens": 341,
+        "reasoningTokens": 0,
+        "cachedInputTokens": 0,
+        "inferenceTimeMs": 4199
+      },
+      "timestamp": "2026-11-05T23:40:46.534127+00:00"
+    },
+    {
+      "level": "info",
+      "message": "Starting observation",
+      "data": {
+        "category": "observation",
+        "instruction": "Find the close, accept, dismiss or 'no thanks' button of any visible cookie banner, newsletter/discount popup, region or currency selector modal, or age-verification modal. Return nothing if there is none."
+      },
+      "timestamp": "2026-11-05T23:40:49.249497+00:00"
+    },
+    {
+      "level": "info",
+      "message": "Observation completed",
+      "data": {
+        "category": "observation",
+        "promptTokens": 5880,
+        "completionTokens": 237,
+        "reasoningTokens": 0,
+        "cachedInputTokens": 0,
+        "inferenceTimeMs": 3620,
+        "resultCount": 0
+      },
+      "timestamp": "2026-11-05T23:40:52.933537+00:00"
+    },
+    {
+      "level": "info",
+      "message": "Starting extraction using an accessibility snapshot",
+      "data": {
+        "category": "extraction",
+        "instruction": "Is the current page the store's coffee shop page?"
+      },
+      "timestamp": "2026-11-05T23:40:52.984257+00:00"
+    },
+    {
+      "level": "info",
+      "message": "Extraction completed successfully",
+      "data": {
+        "category": "extraction",
+        "promptTokens": 5924,
+        "completionTokens": 472,
+        "inferenceTimeMs": 6936
+      },
+      "timestamp": "2026-11-05T23:40:59.920431+00:00"
+    },
+    {
+      "level": "info",
+      "message": "Starting extraction using an accessibility snapshot",
+      "data": {
+        "category": "extraction",
+        "instruction": "Extract every product listed on this page with its price, availability, whether it is coffee, its type and link."
+      },
+      "timestamp": "2026-11-05T23:40:59.980831+00:00"
+    },
+    {
+      "level": "info",
+      "message": "Extraction completed successfully",
+      "data": {
+        "category": "extraction",
+        "promptTokens": 6909,
+        "completionTokens": 2519,
+        "inferenceTimeMs": 18659
+      },
+      "timestamp": "2026-11-05T23:41:18.640553+00:00"
+    },
+    {
+      "level": "info",
+      "message": "Act inference completed",
+      "data": {
+        "category": "action",
+        "promptTokens": 6302,
+        "completionTokens": 350,
+        "reasoningTokens": 0,
+        "cachedInputTokens": 0,
+        "inferenceTimeMs": 3609
+      },
+      "timestamp": "2026-11-05T23:41:22.813551+00:00"
+    },
+    {
+      "level": "info",
+      "message": "Starting observation",
+      "data": {
+        "category": "observation",
+        "instruction": "Find the close, accept, dismiss or 'no thanks' button of any visible cookie banner, newsletter/discount popup, region or currency selector modal, or age-verification modal. Return nothing if there is none."
+      },
+      "timestamp": "2026-11-05T23:41:25.358975+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 480,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "19E64E6D1EF5C219476FE1E88AD16618"
+      },
+      "timestamp": "2026-11-05T23:41:25.397469+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 490,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "19E64E6D1EF5C219476FE1E88AD16618"
+      },
+      "timestamp": "2026-11-05T23:41:25.401178+00:00"
+    },
+    {
+      "level": "info",
+      "message": "Observation completed",
+      "data": {
+        "category": "observation",
+        "promptTokens": 5407,
+        "completionTokens": 229,
+        "reasoningTokens": 0,
+        "cachedInputTokens": 0,
+        "inferenceTimeMs": 14943,
+        "resultCount": 0
+      },
+      "timestamp": "2026-11-05T23:41:40.345227+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 501,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "19E64E6D1EF5C219476FE1E88AD16618"
+      },
+      "timestamp": "2026-11-05T23:41:40.396728+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 511,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "19E64E6D1EF5C219476FE1E88AD16618"
+      },
+      "timestamp": "2026-11-05T23:41:40.400330+00:00"
+    },
+    {
+      "level": "info",
+      "message": "Starting extraction using an accessibility snapshot",
+      "data": {
+        "category": "extraction",
+        "instruction": "Does this product offer one-time purchase vs subscription, and is one-time purchase selected?"
+      },
+      "timestamp": "2026-11-05T23:41:40.401372+00:00"
+    },
+    {
+      "level": "info",
+      "message": "Extraction completed successfully",
+      "data": {
+        "category": "extraction",
+        "promptTokens": 5482,
+        "completionTokens": 487,
+        "inferenceTimeMs": 7930
+      },
+      "timestamp": "2026-11-05T23:41:48.332308+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 522,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "19E64E6D1EF5C219476FE1E88AD16618"
+      },
+      "timestamp": "2026-11-05T23:41:48.372325+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 532,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "19E64E6D1EF5C219476FE1E88AD16618"
+      },
+      "timestamp": "2026-11-05T23:41:48.377393+00:00"
+    },
+    {
+      "level": "info",
+      "message": "Starting extraction using an accessibility snapshot",
+      "data": {
+        "category": "extraction",
+        "instruction": "Does this product (shop price: $24.00) have package size or weight options, and is the smallest/cheapest one selected? Report the price shown for the selected one-time purchase option."
+      },
+      "timestamp": "2026-11-05T23:41:48.378260+00:00"
+    },
+    {
+      "level": "info",
+      "message": "Extraction completed successfully",
+      "data": {
+        "category": "extraction",
+        "promptTokens": 5572,
+        "completionTokens": 3653,
+        "inferenceTimeMs": 42502
+      },
+      "timestamp": "2026-11-05T23:42:30.881528+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 547,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "19E64E6D1EF5C219476FE1E88AD16618"
+      },
+      "timestamp": "2026-11-05T23:42:31.419949+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 557,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "19E64E6D1EF5C219476FE1E88AD16618"
+      },
+      "timestamp": "2026-11-05T23:42:31.423187+00:00"
+    },
+    {
+      "level": "info",
+      "message": "Act inference completed",
+      "data": {
+        "category": "action",
+        "promptTokens": 5839,
+        "completionTokens": 246,
+        "reasoningTokens": 0,
+        "cachedInputTokens": 0,
+        "inferenceTimeMs": 3555
+      },
+      "timestamp": "2026-11-05T23:42:34.979292+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 607,
+        "method": "Page.getFrameTree",
+        "error": "-32001 Session with given id not found.",
+        "targetId": "1F8C6AED89DBBCA5B67DFB5AEA5F7B17"
+      },
+      "timestamp": "2026-11-05T23:42:37.635823+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 655,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "19E64E6D1EF5C219476FE1E88AD16618"
+      },
+      "timestamp": "2026-11-05T23:42:40.062262+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 656,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "19E64E6D1EF5C219476FE1E88AD16618"
+      },
+      "timestamp": "2026-11-05T23:42:40.062639+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 666,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "19E64E6D1EF5C219476FE1E88AD16618"
+      },
+      "timestamp": "2026-11-05T23:42:40.067154+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 667,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "19E64E6D1EF5C219476FE1E88AD16618"
+      },
+      "timestamp": "2026-11-05T23:42:40.067404+00:00"
+    },
+    {
+      "level": "info",
+      "message": "Act inference completed",
+      "data": {
+        "category": "action",
+        "promptTokens": 7700,
+        "completionTokens": 306,
+        "reasoningTokens": 0,
+        "cachedInputTokens": 0,
+        "inferenceTimeMs": 3630
+      },
+      "timestamp": "2026-11-05T23:42:43.699144+00:00"
+    },
+    {
+      "level": "info",
+      "message": "Starting observation",
+      "data": {
+        "category": "observation",
+        "instruction": "Find the close, accept, dismiss or 'no thanks' button of any visible cookie banner, newsletter/discount popup, region or currency selector modal, or age-verification modal. Return nothing if there is none."
+      },
+      "timestamp": "2026-11-05T23:42:46.448547+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 731,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "19E64E6D1EF5C219476FE1E88AD16618"
+      },
+      "timestamp": "2026-11-05T23:42:46.489448+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 732,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "19E64E6D1EF5C219476FE1E88AD16618"
+      },
+      "timestamp": "2026-11-05T23:42:46.489740+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 733,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "19E64E6D1EF5C219476FE1E88AD16618"
+      },
+      "timestamp": "2026-11-05T23:42:46.490280+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 743,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "19E64E6D1EF5C219476FE1E88AD16618"
+      },
+      "timestamp": "2026-11-05T23:42:46.495169+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 744,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "19E64E6D1EF5C219476FE1E88AD16618"
+      },
+      "timestamp": "2026-11-05T23:42:46.495504+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 745,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "19E64E6D1EF5C219476FE1E88AD16618"
+      },
+      "timestamp": "2026-11-05T23:42:46.495816+00:00"
+    },
+    {
+      "level": "info",
+      "message": "Observation completed",
+      "data": {
+        "category": "observation",
+        "promptTokens": 5975,
+        "completionTokens": 267,
+        "reasoningTokens": 0,
+        "cachedInputTokens": 0,
+        "inferenceTimeMs": 4310,
+        "resultCount": 0
+      },
+      "timestamp": "2026-11-05T23:42:50.806991+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 756,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "19E64E6D1EF5C219476FE1E88AD16618"
+      },
+      "timestamp": "2026-11-05T23:42:50.846931+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 757,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "19E64E6D1EF5C219476FE1E88AD16618"
+      },
+      "timestamp": "2026-11-05T23:42:50.847163+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 758,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "19E64E6D1EF5C219476FE1E88AD16618"
+      },
+      "timestamp": "2026-11-05T23:42:50.847468+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 768,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "19E64E6D1EF5C219476FE1E88AD16618"
+      },
+      "timestamp": "2026-11-05T23:42:50.851415+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 769,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "19E64E6D1EF5C219476FE1E88AD16618"
+      },
+      "timestamp": "2026-11-05T23:42:50.851788+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 770,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "19E64E6D1EF5C219476FE1E88AD16618"
+      },
+      "timestamp": "2026-11-05T23:42:50.852192+00:00"
+    },
+    {
+      "level": "info",
+      "message": "Starting extraction using an accessibility snapshot",
+      "data": {
+        "category": "extraction",
+        "instruction": "Does this product offer one-time purchase vs subscription, and is one-time purchase selected?"
+      },
+      "timestamp": "2026-11-05T23:42:50.855983+00:00"
+    },
+    {
+      "level": "info",
+      "message": "Extraction completed successfully",
+      "data": {
+        "category": "extraction",
+        "promptTokens": 6051,
+        "completionTokens": 381,
+        "inferenceTimeMs": 6494
+      },
+      "timestamp": "2026-11-05T23:42:57.350491+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 781,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "19E64E6D1EF5C219476FE1E88AD16618"
+      },
+      "timestamp": "2026-11-05T23:42:57.396429+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 782,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "19E64E6D1EF5C219476FE1E88AD16618"
+      },
+      "timestamp": "2026-11-05T23:42:57.396849+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 783,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "19E64E6D1EF5C219476FE1E88AD16618"
+      },
+      "timestamp": "2026-11-05T23:42:57.397374+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 793,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "19E64E6D1EF5C219476FE1E88AD16618"
+      },
+      "timestamp": "2026-11-05T23:42:57.400749+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 794,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "19E64E6D1EF5C219476FE1E88AD16618"
+      },
+      "timestamp": "2026-11-05T23:42:57.400888+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 795,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "19E64E6D1EF5C219476FE1E88AD16618"
+      },
+      "timestamp": "2026-11-05T23:42:57.401097+00:00"
+    },
+    {
+      "level": "info",
+      "message": "Starting extraction using an accessibility snapshot",
+      "data": {
+        "category": "extraction",
+        "instruction": "Does this product (shop price: $24.00) have package size or weight options, and is the smallest/cheapest one selected? Report the price shown for the selected one-time purchase option."
+      },
+      "timestamp": "2026-11-05T23:42:57.403045+00:00"
+    },
+    {
+      "level": "info",
+      "message": "Extraction completed successfully",
+      "data": {
+        "category": "extraction",
+        "promptTokens": 6134,
+        "completionTokens": 919,
+        "inferenceTimeMs": 9611
+      },
+      "timestamp": "2026-11-05T23:43:07.014761+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 810,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "19E64E6D1EF5C219476FE1E88AD16618"
+      },
+      "timestamp": "2026-11-05T23:43:07.559602+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 811,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "19E64E6D1EF5C219476FE1E88AD16618"
+      },
+      "timestamp": "2026-11-05T23:43:07.560195+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 812,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "19E64E6D1EF5C219476FE1E88AD16618"
+      },
+      "timestamp": "2026-11-05T23:43:07.560985+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 822,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "19E64E6D1EF5C219476FE1E88AD16618"
+      },
+      "timestamp": "2026-11-05T23:43:07.565064+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 823,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "19E64E6D1EF5C219476FE1E88AD16618"
+      },
+      "timestamp": "2026-11-05T23:43:07.565223+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 824,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "19E64E6D1EF5C219476FE1E88AD16618"
+      },
+      "timestamp": "2026-11-05T23:43:07.565979+00:00"
+    },
+    {
+      "level": "info",
+      "message": "Act inference completed",
+      "data": {
+        "category": "action",
+        "promptTokens": 6407,
+        "completionTokens": 270,
+        "reasoningTokens": 0,
+        "cachedInputTokens": 0,
+        "inferenceTimeMs": 3572
+      },
+      "timestamp": "2026-11-05T23:43:11.139276+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 911,
+        "method": "Page.getFrameTree",
+        "error": "-32001 Session with given id not found.",
+        "targetId": "1406EE0B68227005E8B78BAEF01AE279"
+      },
+      "timestamp": "2026-11-05T23:43:14.196252+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 924,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "19E64E6D1EF5C219476FE1E88AD16618"
+      },
+      "timestamp": "2026-11-05T23:43:15.998760+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 925,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "19E64E6D1EF5C219476FE1E88AD16618"
+      },
+      "timestamp": "2026-11-05T23:43:15.999677+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 926,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "19E64E6D1EF5C219476FE1E88AD16618"
+      },
+      "timestamp": "2026-11-05T23:43:16.002768+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 927,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "19E64E6D1EF5C219476FE1E88AD16618"
+      },
+      "timestamp": "2026-11-05T23:43:16.004823+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 937,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "19E64E6D1EF5C219476FE1E88AD16618"
+      },
+      "timestamp": "2026-11-05T23:43:16.008832+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 938,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "19E64E6D1EF5C219476FE1E88AD16618"
+      },
+      "timestamp": "2026-11-05T23:43:16.008986+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 939,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "19E64E6D1EF5C219476FE1E88AD16618"
+      },
+      "timestamp": "2026-11-05T23:43:16.009171+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 940,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "19E64E6D1EF5C219476FE1E88AD16618"
+      },
+      "timestamp": "2026-11-05T23:43:16.009432+00:00"
+    },
+    {
+      "level": "info",
+      "message": "Act inference completed",
+      "data": {
+        "category": "action",
+        "promptTokens": 7694,
+        "completionTokens": 444,
+        "reasoningTokens": 0,
+        "cachedInputTokens": 0,
+        "inferenceTimeMs": 16038
+      },
+      "timestamp": "2026-11-05T23:43:32.049171+00:00"
+    },
+    {
+      "level": "info",
+      "message": "Starting observation",
+      "data": {
+        "category": "observation",
+        "instruction": "Find the close, accept, dismiss or 'no thanks' button of any visible cookie banner, newsletter/discount popup, region or currency selector modal, or age-verification modal. Return nothing if there is none."
+      },
+      "timestamp": "2026-11-05T23:43:34.698409+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 1002,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "19E64E6D1EF5C219476FE1E88AD16618"
+      },
+      "timestamp": "2026-11-05T23:43:34.748021+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 1003,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "19E64E6D1EF5C219476FE1E88AD16618"
+      },
+      "timestamp": "2026-11-05T23:43:34.748526+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 1004,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "19E64E6D1EF5C219476FE1E88AD16618"
+      },
+      "timestamp": "2026-11-05T23:43:34.748898+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 1005,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "19E64E6D1EF5C219476FE1E88AD16618"
+      },
+      "timestamp": "2026-11-05T23:43:34.749385+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 1006,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "19E64E6D1EF5C219476FE1E88AD16618"
+      },
+      "timestamp": "2026-11-05T23:43:34.749627+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 1016,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "19E64E6D1EF5C219476FE1E88AD16618"
+      },
+      "timestamp": "2026-11-05T23:43:34.753181+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 1017,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "19E64E6D1EF5C219476FE1E88AD16618"
+      },
+      "timestamp": "2026-11-05T23:43:34.753379+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 1018,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "19E64E6D1EF5C219476FE1E88AD16618"
+      },
+      "timestamp": "2026-11-05T23:43:34.753618+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 1019,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "19E64E6D1EF5C219476FE1E88AD16618"
+      },
+      "timestamp": "2026-11-05T23:43:34.753829+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 1020,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "19E64E6D1EF5C219476FE1E88AD16618"
+      },
+      "timestamp": "2026-11-05T23:43:34.754083+00:00"
+    },
+    {
+      "level": "info",
+      "message": "Observation completed",
+      "data": {
+        "category": "observation",
+        "promptTokens": 6013,
+        "completionTokens": 221,
+        "reasoningTokens": 0,
+        "cachedInputTokens": 0,
+        "inferenceTimeMs": 4170,
+        "resultCount": 0
+      },
+      "timestamp": "2026-11-05T23:43:38.925264+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 1031,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "19E64E6D1EF5C219476FE1E88AD16618"
+      },
+      "timestamp": "2026-11-05T23:43:38.968780+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 1032,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "19E64E6D1EF5C219476FE1E88AD16618"
+      },
+      "timestamp": "2026-11-05T23:43:38.969294+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 1033,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "19E64E6D1EF5C219476FE1E88AD16618"
+      },
+      "timestamp": "2026-11-05T23:43:38.971638+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 1034,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "19E64E6D1EF5C219476FE1E88AD16618"
+      },
+      "timestamp": "2026-11-05T23:43:38.972471+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 1035,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "19E64E6D1EF5C219476FE1E88AD16618"
+      },
+      "timestamp": "2026-11-05T23:43:38.972861+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 1045,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "19E64E6D1EF5C219476FE1E88AD16618"
+      },
+      "timestamp": "2026-11-05T23:43:38.976640+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 1046,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "19E64E6D1EF5C219476FE1E88AD16618"
+      },
+      "timestamp": "2026-11-05T23:43:38.976822+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 1047,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "19E64E6D1EF5C219476FE1E88AD16618"
+      },
+      "timestamp": "2026-11-05T23:43:38.977208+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 1048,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "19E64E6D1EF5C219476FE1E88AD16618"
+      },
+      "timestamp": "2026-11-05T23:43:38.977486+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 1049,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "19E64E6D1EF5C219476FE1E88AD16618"
+      },
+      "timestamp": "2026-11-05T23:43:38.977768+00:00"
+    },
+    {
+      "level": "info",
+      "message": "Starting extraction using an accessibility snapshot",
+      "data": {
+        "category": "extraction",
+        "instruction": "Does this product offer one-time purchase vs subscription, and is one-time purchase selected?"
+      },
+      "timestamp": "2026-11-05T23:43:38.978898+00:00"
+    },
+    {
+      "level": "info",
+      "message": "Extraction completed successfully",
+      "data": {
+        "category": "extraction",
+        "promptTokens": 6075,
+        "completionTokens": 408,
+        "inferenceTimeMs": 7933
+      },
+      "timestamp": "2026-11-05T23:43:46.911909+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 1060,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "19E64E6D1EF5C219476FE1E88AD16618"
+      },
+      "timestamp": "2026-11-05T23:43:46.954278+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 1061,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "19E64E6D1EF5C219476FE1E88AD16618"
+      },
+      "timestamp": "2026-11-05T23:43:46.954566+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 1062,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "19E64E6D1EF5C219476FE1E88AD16618"
+      },
+      "timestamp": "2026-11-05T23:43:46.954870+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 1063,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "19E64E6D1EF5C219476FE1E88AD16618"
+      },
+      "timestamp": "2026-11-05T23:43:46.955144+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 1064,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "19E64E6D1EF5C219476FE1E88AD16618"
+      },
+      "timestamp": "2026-11-05T23:43:46.955502+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 1074,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "19E64E6D1EF5C219476FE1E88AD16618"
+      },
+      "timestamp": "2026-11-05T23:43:46.958339+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 1075,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "19E64E6D1EF5C219476FE1E88AD16618"
+      },
+      "timestamp": "2026-11-05T23:43:46.958523+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 1076,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "19E64E6D1EF5C219476FE1E88AD16618"
+      },
+      "timestamp": "2026-11-05T23:43:46.958738+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 1077,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "19E64E6D1EF5C219476FE1E88AD16618"
+      },
+      "timestamp": "2026-11-05T23:43:46.959019+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 1078,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "19E64E6D1EF5C219476FE1E88AD16618"
+      },
+      "timestamp": "2026-11-05T23:43:46.959246+00:00"
+    },
+    {
+      "level": "info",
+      "message": "Starting extraction using an accessibility snapshot",
+      "data": {
+        "category": "extraction",
+        "instruction": "Does this product (shop price: $26.00) have package size or weight options, and is the smallest/cheapest one selected? Report the price shown for the selected one-time purchase option."
+      },
+      "timestamp": "2026-11-05T23:43:46.960188+00:00"
+    },
+    {
+      "level": "info",
+      "message": "Extraction completed successfully",
+      "data": {
+        "category": "extraction",
+        "promptTokens": 6174,
+        "completionTokens": 776,
+        "inferenceTimeMs": 10602
+      },
+      "timestamp": "2026-11-05T23:43:57.563473+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 1093,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "19E64E6D1EF5C219476FE1E88AD16618"
+      },
+      "timestamp": "2026-11-05T23:43:58.105440+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 1094,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "19E64E6D1EF5C219476FE1E88AD16618"
+      },
+      "timestamp": "2026-11-05T23:43:58.105927+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 1095,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "19E64E6D1EF5C219476FE1E88AD16618"
+      },
+      "timestamp": "2026-11-05T23:43:58.106491+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 1096,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "19E64E6D1EF5C219476FE1E88AD16618"
+      },
+      "timestamp": "2026-11-05T23:43:58.108293+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 1097,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "19E64E6D1EF5C219476FE1E88AD16618"
+      },
+      "timestamp": "2026-11-05T23:43:58.108761+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 1107,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "19E64E6D1EF5C219476FE1E88AD16618"
+      },
+      "timestamp": "2026-11-05T23:43:58.112899+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 1108,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "19E64E6D1EF5C219476FE1E88AD16618"
+      },
+      "timestamp": "2026-11-05T23:43:58.113214+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 1109,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "19E64E6D1EF5C219476FE1E88AD16618"
+      },
+      "timestamp": "2026-11-05T23:43:58.113731+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 1110,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "19E64E6D1EF5C219476FE1E88AD16618"
+      },
+      "timestamp": "2026-11-05T23:43:58.114769+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 1111,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "19E64E6D1EF5C219476FE1E88AD16618"
+      },
+      "timestamp": "2026-11-05T23:43:58.115153+00:00"
+    },
+    {
+      "level": "info",
+      "message": "Act inference completed",
+      "data": {
+        "category": "action",
+        "promptTokens": 6445,
+        "completionTokens": 334,
+        "reasoningTokens": 0,
+        "cachedInputTokens": 0,
+        "inferenceTimeMs": 4361
+      },
+      "timestamp": "2026-11-05T23:44:02.477345+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 1145,
+        "method": "Page.getFrameTree",
+        "error": "-32001 Session with given id not found.",
+        "targetId": "21D707CBE728B7E230D076B19827D951"
+      },
+      "timestamp": "2026-11-05T23:44:02.606821+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 1207,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "19E64E6D1EF5C219476FE1E88AD16618"
+      },
+      "timestamp": "2026-11-05T23:44:06.491553+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 1208,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "19E64E6D1EF5C219476FE1E88AD16618"
+      },
+      "timestamp": "2026-11-05T23:44:06.491857+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 1209,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "19E64E6D1EF5C219476FE1E88AD16618"
+      },
+      "timestamp": "2026-11-05T23:44:06.492268+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 1210,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "19E64E6D1EF5C219476FE1E88AD16618"
+      },
+      "timestamp": "2026-11-05T23:44:06.492589+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 1211,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "19E64E6D1EF5C219476FE1E88AD16618"
+      },
+      "timestamp": "2026-11-05T23:44:06.492952+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 1212,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "19E64E6D1EF5C219476FE1E88AD16618"
+      },
+      "timestamp": "2026-11-05T23:44:06.493313+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 1222,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "19E64E6D1EF5C219476FE1E88AD16618"
+      },
+      "timestamp": "2026-11-05T23:44:06.497062+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 1223,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "19E64E6D1EF5C219476FE1E88AD16618"
+      },
+      "timestamp": "2026-11-05T23:44:06.497271+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 1224,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "19E64E6D1EF5C219476FE1E88AD16618"
+      },
+      "timestamp": "2026-11-05T23:44:06.497434+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 1225,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "19E64E6D1EF5C219476FE1E88AD16618"
+      },
+      "timestamp": "2026-11-05T23:44:06.497632+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 1226,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "19E64E6D1EF5C219476FE1E88AD16618"
+      },
+      "timestamp": "2026-11-05T23:44:06.498012+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 1227,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "19E64E6D1EF5C219476FE1E88AD16618"
+      },
+      "timestamp": "2026-11-05T23:44:06.498542+00:00"
+    },
+    {
+      "level": "info",
+      "message": "Starting extraction using an accessibility snapshot",
+      "data": {
+        "category": "extraction",
+        "instruction": "Is a cart page or cart drawer open? List its line items, subtotal and whether there is a checkout button."
+      },
+      "timestamp": "2026-11-05T23:44:06.499847+00:00"
+    },
+    {
+      "level": "info",
+      "message": "Extraction completed successfully",
+      "data": {
+        "category": "extraction",
+        "promptTokens": 7484,
+        "completionTokens": 2037,
+        "inferenceTimeMs": 17735
+      },
+      "timestamp": "2026-11-05T23:44:24.235491+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 1242,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "19E64E6D1EF5C219476FE1E88AD16618"
+      },
+      "timestamp": "2026-11-05T23:44:24.800064+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 1243,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "19E64E6D1EF5C219476FE1E88AD16618"
+      },
+      "timestamp": "2026-11-05T23:44:24.800734+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 1244,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "19E64E6D1EF5C219476FE1E88AD16618"
+      },
+      "timestamp": "2026-11-05T23:44:24.801486+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 1245,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "19E64E6D1EF5C219476FE1E88AD16618"
+      },
+      "timestamp": "2026-11-05T23:44:24.802025+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 1246,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "19E64E6D1EF5C219476FE1E88AD16618"
+      },
+      "timestamp": "2026-11-05T23:44:24.802459+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 1247,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "19E64E6D1EF5C219476FE1E88AD16618"
+      },
+      "timestamp": "2026-11-05T23:44:24.802861+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 1257,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "19E64E6D1EF5C219476FE1E88AD16618"
+      },
+      "timestamp": "2026-11-05T23:44:24.806796+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 1258,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "19E64E6D1EF5C219476FE1E88AD16618"
+      },
+      "timestamp": "2026-11-05T23:44:24.806951+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 1259,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "19E64E6D1EF5C219476FE1E88AD16618"
+      },
+      "timestamp": "2026-11-05T23:44:24.807211+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 1260,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "19E64E6D1EF5C219476FE1E88AD16618"
+      },
+      "timestamp": "2026-11-05T23:44:24.807581+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 1261,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "19E64E6D1EF5C219476FE1E88AD16618"
+      },
+      "timestamp": "2026-11-05T23:44:24.807912+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 1262,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "19E64E6D1EF5C219476FE1E88AD16618"
+      },
+      "timestamp": "2026-11-05T23:44:24.808921+00:00"
+    },
+    {
+      "level": "info",
+      "message": "Act inference completed",
+      "data": {
+        "category": "action",
+        "promptTokens": 7798,
+        "completionTokens": 422,
+        "reasoningTokens": 0,
+        "cachedInputTokens": 0,
+        "inferenceTimeMs": 5521
+      },
+      "timestamp": "2026-11-05T23:44:30.331969+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 1290,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "19E64E6D1EF5C219476FE1E88AD16618"
+      },
+      "timestamp": "2026-11-05T23:44:31.940398+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 1291,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "19E64E6D1EF5C219476FE1E88AD16618"
+      },
+      "timestamp": "2026-11-05T23:44:31.940738+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 1292,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "19E64E6D1EF5C219476FE1E88AD16618"
+      },
+      "timestamp": "2026-11-05T23:44:31.941078+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 1293,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "19E64E6D1EF5C219476FE1E88AD16618"
+      },
+      "timestamp": "2026-11-05T23:44:31.941599+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 1294,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "19E64E6D1EF5C219476FE1E88AD16618"
+      },
+      "timestamp": "2026-11-05T23:44:31.942089+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 1295,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "19E64E6D1EF5C219476FE1E88AD16618"
+      },
+      "timestamp": "2026-11-05T23:44:31.942655+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 1305,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "19E64E6D1EF5C219476FE1E88AD16618"
+      },
+      "timestamp": "2026-11-05T23:44:31.946695+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 1306,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "19E64E6D1EF5C219476FE1E88AD16618"
+      },
+      "timestamp": "2026-11-05T23:44:31.946863+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 1307,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "19E64E6D1EF5C219476FE1E88AD16618"
+      },
+      "timestamp": "2026-11-05T23:44:31.947077+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 1308,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "19E64E6D1EF5C219476FE1E88AD16618"
+      },
+      "timestamp": "2026-11-05T23:44:31.947437+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 1309,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "19E64E6D1EF5C219476FE1E88AD16618"
+      },
+      "timestamp": "2026-11-05T23:44:31.947775+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 1310,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "19E64E6D1EF5C219476FE1E88AD16618"
+      },
+      "timestamp": "2026-11-05T23:44:31.948162+00:00"
+    },
+    {
+      "level": "info",
+      "message": "Starting extraction using an accessibility snapshot",
+      "data": {
+        "category": "extraction",
+        "instruction": "Is a cart page or cart drawer open? List its line items, subtotal and whether there is a checkout button."
+      },
+      "timestamp": "2026-11-05T23:44:31.949471+00:00"
+    },
+    {
+      "level": "info",
+      "message": "Extraction completed successfully",
+      "data": {
+        "category": "extraction",
+        "promptTokens": 8579,
+        "completionTokens": 1033,
+        "inferenceTimeMs": 10684
+      },
+      "timestamp": "2026-11-05T23:44:42.633977+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 1364,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "19E64E6D1EF5C219476FE1E88AD16618"
+      },
+      "timestamp": "2026-11-05T23:44:45.427961+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 1365,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "19E64E6D1EF5C219476FE1E88AD16618"
+      },
+      "timestamp": "2026-11-05T23:44:45.428155+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 1366,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "19E64E6D1EF5C219476FE1E88AD16618"
+      },
+      "timestamp": "2026-11-05T23:44:45.428831+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 1367,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "19E64E6D1EF5C219476FE1E88AD16618"
+      },
+      "timestamp": "2026-11-05T23:44:45.429188+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 1368,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "19E64E6D1EF5C219476FE1E88AD16618"
+      },
+      "timestamp": "2026-11-05T23:44:45.429616+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 1369,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "19E64E6D1EF5C219476FE1E88AD16618"
+      },
+      "timestamp": "2026-11-05T23:44:45.429991+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 1379,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "19E64E6D1EF5C219476FE1E88AD16618"
+      },
+      "timestamp": "2026-11-05T23:44:45.434928+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 1380,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "19E64E6D1EF5C219476FE1E88AD16618"
+      },
+      "timestamp": "2026-11-05T23:44:45.435146+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 1381,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "19E64E6D1EF5C219476FE1E88AD16618"
+      },
+      "timestamp": "2026-11-05T23:44:45.435399+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 1382,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "19E64E6D1EF5C219476FE1E88AD16618"
+      },
+      "timestamp": "2026-11-05T23:44:45.435773+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 1383,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "19E64E6D1EF5C219476FE1E88AD16618"
+      },
+      "timestamp": "2026-11-05T23:44:45.436232+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 1384,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "19E64E6D1EF5C219476FE1E88AD16618"
+      },
+      "timestamp": "2026-11-05T23:44:45.436682+00:00"
+    },
+    {
+      "level": "info",
+      "message": "Act inference completed",
+      "data": {
+        "category": "action",
+        "promptTokens": 8755,
+        "completionTokens": 217,
+        "reasoningTokens": 0,
+        "cachedInputTokens": 0,
+        "inferenceTimeMs": 3468
+      },
+      "timestamp": "2026-11-05T23:44:48.906776+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 1415,
+        "method": "Page.getFrameTree",
+        "error": "-32001 Session with given id not found.",
+        "targetId": "9EFC4D8CB8C4FC3BEF590B3536271A4B"
+      },
+      "timestamp": "2026-11-05T23:44:49.041347+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 1816,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "19E64E6D1EF5C219476FE1E88AD16618"
+      },
+      "timestamp": "2026-11-05T23:45:17.121444+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 1817,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "19E64E6D1EF5C219476FE1E88AD16618"
+      },
+      "timestamp": "2026-11-05T23:45:17.122009+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 1818,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "19E64E6D1EF5C219476FE1E88AD16618"
+      },
+      "timestamp": "2026-11-05T23:45:17.122503+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 1819,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "19E64E6D1EF5C219476FE1E88AD16618"
+      },
+      "timestamp": "2026-11-05T23:45:17.122995+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 1820,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "19E64E6D1EF5C219476FE1E88AD16618"
+      },
+      "timestamp": "2026-11-05T23:45:17.123301+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 1821,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "19E64E6D1EF5C219476FE1E88AD16618"
+      },
+      "timestamp": "2026-11-05T23:45:17.125141+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 1822,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "19E64E6D1EF5C219476FE1E88AD16618"
+      },
+      "timestamp": "2026-11-05T23:45:17.125601+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 1823,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "19E64E6D1EF5C219476FE1E88AD16618"
+      },
+      "timestamp": "2026-11-05T23:45:17.126160+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 1824,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "19E64E6D1EF5C219476FE1E88AD16618"
+      },
+      "timestamp": "2026-11-05T23:45:17.126554+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 1882,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "19E64E6D1EF5C219476FE1E88AD16618"
+      },
+      "timestamp": "2026-11-05T23:45:17.209293+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 1883,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "19E64E6D1EF5C219476FE1E88AD16618"
+      },
+      "timestamp": "2026-11-05T23:45:17.209592+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 1884,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "19E64E6D1EF5C219476FE1E88AD16618"
+      },
+      "timestamp": "2026-11-05T23:45:17.210090+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 1885,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "19E64E6D1EF5C219476FE1E88AD16618"
+      },
+      "timestamp": "2026-11-05T23:45:17.210306+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 1886,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "19E64E6D1EF5C219476FE1E88AD16618"
+      },
+      "timestamp": "2026-11-05T23:45:17.210663+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 1887,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "19E64E6D1EF5C219476FE1E88AD16618"
+      },
+      "timestamp": "2026-11-05T23:45:17.211198+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 1888,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "19E64E6D1EF5C219476FE1E88AD16618"
+      },
+      "timestamp": "2026-11-05T23:45:17.212285+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 1889,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "19E64E6D1EF5C219476FE1E88AD16618"
+      },
+      "timestamp": "2026-11-05T23:45:17.212707+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 1890,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "19E64E6D1EF5C219476FE1E88AD16618"
+      },
+      "timestamp": "2026-11-05T23:45:17.213140+00:00"
+    },
+    {
+      "level": "info",
+      "message": "Starting extraction using an accessibility snapshot",
+      "data": {
+        "category": "extraction",
+        "instruction": "Extract the checkout order summary: line items, subtotal, shipping, any other fees, tax, total and currency. Also report if a login, CAPTCHA or bot check is blocking checkout."
+      },
+      "timestamp": "2026-11-05T23:45:17.219119+00:00"
+    },
+    {
+      "level": "info",
+      "message": "Extraction completed successfully",
+      "data": {
+        "category": "extraction",
+        "promptTokens": 9604,
+        "completionTokens": 1108,
+        "inferenceTimeMs": 12255
+      },
+      "timestamp": "2026-11-05T23:45:29.475313+00:00"
+    }
+  ]
+}

@@ -305,7 +305,7 @@ async def add_product_to_cart(stagehand: Stagehand, page: Page, product: Product
         item["selected_price_display"] = size.current_price
         item["selected_price"] = parse_price(size.current_price)
 
-    add = await stagehand.act("Click the 'Add to cart' (or 'Add to bag' / 'Buy') button for this product.")
+    add = await stagehand.act("Click the 'Add to cart', 'ADD TO BAG', 'Add to bag' or 'Buy' button for this product.")
     print(f"    Added: {add.data.action_description}")
     await page.wait_for_timeout(2000)
     item["status"] = "added" if add.data.success else "add_failed"
@@ -432,9 +432,29 @@ async def run_site(stagehand: Stagehand, page: Page, url: str, n_products: int, 
 
     checkout: CheckoutDetails | None = None
     if cart.has_checkout_button:
-        step = await stagehand.act("Click the 'Check out' / 'Checkout' button to proceed to checkout.")
+        step = await stagehand.act("Click the 'Check out' / 'CHECKOUT' / 'Checkout' button to proceed to the checkout page.")
         print(f"  Checkout: {step.data.action_description}")
-        await settle(page, 3000)
+        await page.wait_for_timeout(3000)
+        curr_url = await page.url()
+
+        # If the page hasn't navigated away from /cart (e.g. button was a decoy link or required form submit),
+        # direct navigation to /checkout activates the session's checkout on Shopify and other platforms:
+        if "checkouts" not in curr_url and "checkout" not in curr_url.split("?")[0].rstrip("/").split("/")[-1]:
+            print("  Still on cart; navigating to /checkout directly...")
+            await page.goto(urljoin(shop_url, "/checkout"))
+            await page.wait_for_timeout(3000)
+            curr_url = await page.url()
+
+        # Wait for checkout to render (hydration of client-side checkout apps)
+        print("  Waiting for checkout page to render...")
+        for _ in range(15):
+            await page.wait_for_timeout(1000)
+            with contextlib.suppress(Exception):
+                ready = await page.evaluate("() => document.body && document.body.innerText.trim().length > 100")
+                if ready:
+                    break
+
+        await page.wait_for_timeout(2000)
         await page.screenshot(path=str(out / "checkout.png"))
         checkout = (
             await stagehand.extract(
@@ -471,7 +491,7 @@ async def run_site(stagehand: Stagehand, page: Page, url: str, n_products: int, 
     print(f"  Drip pricing detected: {'YES - ' + '; '.join(c['drip_reasons']) if c['drip_detected'] else 'NO'}")
 
 
-def append_summary(result: SiteResult) -> None:
+def update_summary(result: SiteResult) -> None:
     path = OUTPUT_ROOT / "summary.csv"
     c = result.comparison
     row = {
@@ -489,12 +509,18 @@ def append_summary(result: SiteResult) -> None:
         "drip_detected": c.get("drip_detected"),
         "output_dir": str(result.out_dir),
     }
-    new_file = not path.exists()
-    with open(path, "a", newline="") as f:
+    existing_rows: list[dict] = []
+    if path.exists():
+        with open(path, newline="") as f:
+            reader = csv.DictReader(f)
+            for r in reader:
+                if r.get("site") != result.site:
+                    existing_rows.append(r)
+    existing_rows.append(row)
+    with open(path, "w", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=list(row))
-        if new_file:
-            writer.writeheader()
-        writer.writerow(row)
+        writer.writeheader()
+        writer.writerows(existing_rows)
 
 
 # ---------------------------------------------------------------------------
@@ -575,7 +601,7 @@ async def main() -> None:
                     info = bb_client.sessions.retrieve(bb_session_id)
                     session["browserbase_session"] = {"id": info.id, "status": info.status, "region": info.region}
                 (out_dir / "session.json").write_text(json.dumps(session, indent=2))
-                append_summary(result)
+                update_summary(result)
                 print(f"  Status: {result.status} {result.message} -> {out_dir}")
         finally:
             with contextlib.suppress(Exception):

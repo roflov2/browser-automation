@@ -1,4 +1,0 @@
-name,selected_variant,shop_price_display,selected_price_display,checkout_price_display,checkout_vs_expected_diff,price_increased,status
-Maple,200g,$17.50,$17.50,,,False,added
-Raspberry Candy,200g,$24.00,$24.00,,,,add_failed
-Aspen,200g,$17.50,$17.50,,,False,added

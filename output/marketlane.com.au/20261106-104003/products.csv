@@ -1,0 +1,14 @@
+name,price,sold_out,is_coffee,product_type,url
+SEASONAL BLEND,$24.00,False,True,whole_bean_or_ground,4-4498
+SANTA ISABEL,$24.00,False,True,whole_bean_or_ground,4-4562
+AYLA,$26.00,False,True,whole_bean_or_ground,4-4624
+LOMAVERDE DECAF,$24.00,False,True,whole_bean_or_ground,4-4686
+ESPRESSO COFFEE BUNDLE,$45.00,False,True,whole_bean_or_ground,4-4746
+YAYE,$34.00,False,True,whole_bean_or_ground,4-4813
+EL FALDÓN,$26.00,False,True,whole_bean_or_ground,4-4877
+KII,$30.00,False,True,whole_bean_or_ground,4-4941
+COFFEE DRIP BAGS – LA ESPERANZA,$25.00,False,True,drip_or_steep_bags,4-5006
+COFFEE DRIP BAGS – SAN ANTONIO DECAF,$25.00,False,True,drip_or_steep_bags,4-5045
+CASCARA COFFEE TEA,$12.00,False,False,other,4-5093
+COFFEE FLOWER TEA,$16.00,False,False,other,4-5134
+COFFEE TEA BUNDLE,$25.00,False,False,other,4-5175
