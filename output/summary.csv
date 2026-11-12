@@ -1,5 +1,0 @@
-run_at,site,status,message,items_added,expected_subtotal,checkout_subtotal,checkout_total,currency,other_fees_total,shipping,drip_detected,output_dir
-2026-11-05T22:36:45+00:00,https://redbrick.coffee,ok,,3,67.0,67.0,67.0,AUD,0.0,not calculated (address required),False,output/redbrick.coffee/20261106-093227
-2026-11-05T23:45:29+00:00,https://marketlane.com.au,ok,,3,74.0,74.0,74.0,AUD,0.0,not calculated (address required),False,output/marketlane.com.au/20261106-104003
-2026-11-05T23:50:15+00:00,https://onacoffee.com.au,ok,,2,41.5,41.5,41.5,AUD,0.0,not calculated (address required),False,output/onacoffee.com.au/20261106-104529
-2026-11-05T23:58:14+00:00,https://www.padrecoffee.com.au/,ok,,3,67.0,67.0,67.0,AUD,0.0,not calculated (address required),False,output/padrecoffee.com.au/20261106-105352

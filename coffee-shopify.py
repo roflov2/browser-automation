@@ -5,22 +5,32 @@ add 1-5 coffee products (one-time purchase, smallest size) to the cart, go to ch
 screenshot it, and compare shop-page prices against checkout prices to flag drip pricing.
 
 Usage:
-    python coffee-shopify.py https://redbrick.coffee https://another-roaster.com --products 3
+    python scrape_shop.py https://redbrick.coffee https://onacoffee.com.au --products 3
 """
+
+import os
+import sys
+
+os.environ["NO_PROXY"] = "127.0.0.1,localhost"
+os.environ["no_proxy"] = "127.0.0.1,localhost"
 
 import argparse
 import asyncio
 import contextlib
 import csv
 import json
-import os
+import logging
 import re
-import resource
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from time import perf_counter
 from urllib.parse import urljoin, urlparse
+
+try:
+    import psutil
+except ImportError:
+    psutil = None
 
 from browserbase import Browserbase
 from dotenv import load_dotenv
@@ -38,6 +48,52 @@ load_dotenv()
 SETTLE_MS = 1500  # fixed wait after navigation/clicks; increase for slow sites
 MAX_SHOP_STEPS = 4
 OUTPUT_ROOT = Path("output")
+CHROME_PROFILE_DIR = Path(".chrome-profile")
+
+
+# ---------------------------------------------------------------------------
+# Logging & Stream Noise Filter
+# ---------------------------------------------------------------------------
+_NOISY_CDP_PHRASES = (
+    "CDP response failed",
+    "Frame with the given id was not found",
+    "Cannot find context with specified id",
+    "Session with given id not found",
+)
+
+
+class _CdpNoiseFilter(logging.Filter):
+    """Suppress harmless transient CDP frame/context race errors in Python logging."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        msg = record.getMessage()
+        return not any(phrase in msg for phrase in _NOISY_CDP_PHRASES)
+
+
+for _logger_name in ("", "stagehand", "stagehand.cdp_client", "websockets"):
+    logging.getLogger(_logger_name).addFilter(_CdpNoiseFilter())
+
+
+class _FilteredStream:
+    """Suppress Stagehand's raw JSON CDP race errors written directly to stdout/stderr."""
+
+    def __init__(self, stream):
+        self._stream = stream
+
+    def write(self, text: str) -> int:
+        if any(phrase in text for phrase in _NOISY_CDP_PHRASES):
+            return len(text)
+        return self._stream.write(text)
+
+    def flush(self) -> None:
+        self._stream.flush()
+
+    def __getattr__(self, name: str):
+        return getattr(self._stream, name)
+
+
+sys.stdout = _FilteredStream(sys.stdout)
+sys.stderr = _FilteredStream(sys.stderr)
 
 
 # ---------------------------------------------------------------------------
@@ -51,7 +107,9 @@ class PageCheck(BaseModel):
 
 
 class Product(BaseModel):
-    name: str
+    name: str = Field(
+        description="Clean product title without duplicated collection/category prefixes (e.g. 'Ethiopia Worka Sakaro', not 'Coffee Ethiopia Worka Sakaro')"
+    )
     price: str = Field(description="Price as displayed, e.g. 'From $15.00'")
     sold_out: bool
     is_coffee: bool = Field(
@@ -68,19 +126,18 @@ class Products(BaseModel):
     products: list[Product]
 
 
-class PurchaseOptionCheck(BaseModel):
+class ProductPageState(BaseModel):
+    is_product_page: bool = Field(
+        description="True if on an individual product page with an Add to Cart / Buy button (not a collection or catalogue page)"
+    )
     has_purchase_options: bool = Field(
         description="True if the product page offers a choice between one-time purchase and subscription"
     )
     one_time_selected: bool = Field(
-        description="True if there is no such choice, or if one-time purchase is currently selected"
+        description="True if there is no subscription choice, or if one-time purchase is currently selected"
     )
-    reason: str
-
-
-class SizeOptionCheck(BaseModel):
     has_size_options: bool = Field(
-        description="True if the product page has a package size, weight or quantity-pack selector (e.g. 250g, 500g, 1kg, 10 pack)"
+        description="True if the product page has a package size, weight or quantity-pack selector (e.g. 225g, 250g, 500g, 1kg, 10 pack)"
     )
     lowest_size_selected: bool = Field(
         description="True only if there are no size options, or the smallest/cheapest size is currently selected"
@@ -173,23 +230,27 @@ class LocalResourceMonitor:
     def __init__(self) -> None:
         self.cpu_usage: list[float] = []
         self.memory_usage: list[float] = []
+        self._process = psutil.Process(os.getpid()) if psutil else None
 
     def start(self) -> asyncio.Task[None]:
         async def sample() -> None:
+            if self._process is None:
+                return
+            self._process.cpu_percent(interval=None)  # prime baseline measurement
             while True:
-                self.memory_usage.append(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024)
-                self.cpu_usage.append(os.getloadavg()[0])
                 await asyncio.sleep(1)
+                self.memory_usage.append(self._process.memory_info().rss / (1024 * 1024))
+                self.cpu_usage.append(self._process.cpu_percent(interval=None))
 
         return asyncio.create_task(sample())
 
     def summary(self) -> dict[str, float]:
         if not self.memory_usage:
-            return {"avg_memory_mb": 0.0, "peak_memory_mb": 0.0, "avg_cpu_load": 0.0, "data_points": 0}
+            return {"avg_memory_mb": 0.0, "peak_memory_mb": 0.0, "avg_cpu_percent": 0.0, "data_points": 0}
         return {
             "avg_memory_mb": round(sum(self.memory_usage) / len(self.memory_usage), 2),
             "peak_memory_mb": round(max(self.memory_usage), 2),
-            "avg_cpu_load": round(sum(self.cpu_usage) / len(self.cpu_usage), 2),
+            "avg_cpu_percent": round(sum(self.cpu_usage) / len(self.cpu_usage), 2),
             "data_points": len(self.cpu_usage),
         }
 
@@ -225,21 +286,59 @@ async def dismiss_popups(stagehand: Stagehand) -> None:
             await stagehand.act(action)
 
 
+async def maybe_dismiss_popups(stagehand: Stagehand, page: Page) -> None:
+    """Fast DOM check for visible modal/dialog overlays before invoking LLM observe()."""
+    has_overlay = False
+    with contextlib.suppress(Exception):
+        has_overlay = bool(
+            await page.evaluate(
+                """() => {
+                    const selectors = [
+                        '[role="dialog"]', '[aria-modal="true"]',
+                        '[class*="popup" i]', '[class*="modal" i]', '[class*="newsletter" i]',
+                        '[id*="klaviyo" i]', '[class*="klaviyo" i]', '[class*="cookie" i]',
+                        '[id*="cookie" i]', '[class*="privy" i]', '[class*="age-gate" i]'
+                    ];
+                    for (const el of document.querySelectorAll(selectors.join(','))) {
+                        const style = window.getComputedStyle(el);
+                        const rect = el.getBoundingClientRect();
+                        if (style.display !== 'none' && style.visibility !== 'hidden'
+                            && parseFloat(style.opacity || '1') > 0.1
+                            && rect.width > 120 && rect.height > 60) {
+                            return true;
+                        }
+                    }
+                    return false;
+                }"""
+            )
+        )
+    if has_overlay:
+        await dismiss_popups(stagehand)
+
+
 async def find_shop_page(stagehand: Stagehand, page: Page) -> str:
-    check = await stagehand.extract("Is the current page the store's coffee shop page?", PageCheck)
-    for _ in range(MAX_SHOP_STEPS):
+    for _ in range(MAX_SHOP_STEPS + 2):
+        curr_url = await page.url()
+        if "login.microsoftonline.com" in curr_url or "login.windows.net" in curr_url:
+            print("  Waiting for corporate SSO redirect...")
+            await page.wait_for_timeout(3000)
+            continue
+        if curr_url.startswith("chrome-error://"):
+            raise RuntimeError(f"Page failed to load ({curr_url})")
+
+        check = await stagehand.extract("Is the current page the store's coffee shop page?", PageCheck)
         if check.data.is_shop_page:
-            return await page.url()
+            return curr_url
+        if "ERR_" in check.data.reason or "failed to load" in check.data.reason.lower():
+            raise RuntimeError(check.data.reason)
+
         step = await stagehand.act(
             "Take the next step to get to this store's shop page where its coffee is listed for sale "
             "(e.g. a 'Shop', 'Coffee' or 'Shop Coffee' link). If navigation links are hidden behind a menu button, open the menu first."
         )
         await settle(page)
-        await dismiss_popups(stagehand)
-        check = await stagehand.extract("Is the current page the store's coffee shop page?", PageCheck)
+        await maybe_dismiss_popups(stagehand, page)
         print(f"  {step.data.action_description} -> {check.data.reason}")
-    if check.data.is_shop_page:
-        return await page.url()
     raise RuntimeError("Couldn't find the shop page")
 
 
@@ -248,6 +347,53 @@ def choose_coffees(products: list[Product], n: int) -> list[Product]:
     preferred = [p for p in available if p.product_type == "whole_bean_or_ground"]
     others = [p for p in available if p.product_type != "whole_bean_or_ground"]
     return (preferred + others)[:n]
+
+
+async def resolve_product_url(page: Page, product: Product, shop_url: str) -> str | None:
+    """Return a validated product URL from extraction or exact DOM match; None if clicking is required."""
+    if product.url and product.url.startswith(("http://", "https://", "/")):
+        full = urljoin(shop_url, product.url)
+        if full.split("?")[0].rstrip("/") != shop_url.split("?")[0].rstrip("/"):
+            return full
+
+    clean_name = re.sub(r"(?i)^coffee\s+|\s+coffee$", "", product.name).strip()
+    with contextlib.suppress(Exception):
+        href = await page.evaluate(
+            """({ exactName, cleanName, currentUrl }) => {
+                const norm = s => (s || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+                const targets = new Set([norm(exactName), norm(cleanName)].filter(Boolean));
+                const base = currentUrl.split('?')[0].replace(/\\/+$/, '');
+
+                const anchors = Array.from(document.querySelectorAll('a[href]'));
+                // Prefer links containing /products/ or /product/ when multiple links match
+                anchors.sort((a, b) => (b.href.includes('/product') ? 1 : 0) - (a.href.includes('/product') ? 1 : 0));
+
+                for (const a of anchors) {
+                    const rawHref = a.getAttribute('href') || '';
+                    if (!rawHref || rawHref.startsWith('#') || rawHref.startsWith('javascript:')) continue;
+
+                    const resolved = a.href.split('?')[0].replace(/\\/+$/, '');
+                    if (!resolved || resolved === base) continue;
+
+                    const heading = a.querySelector('h1, h2, h3, h4, h5, [class*="title" i], [class*="name" i]');
+                    const candidates = [
+                        heading ? norm(heading.innerText) : '',
+                        norm(a.getAttribute('aria-label')),
+                        norm(a.title),
+                        norm(a.innerText)
+                    ].filter(Boolean);
+
+                    if (candidates.some(c => targets.has(c))) {
+                        return a.href;
+                    }
+                }
+                return null;
+            }""",
+            {"exactName": product.name, "cleanName": clean_name, "currentUrl": shop_url},
+        )
+        if href:
+            return href
+    return None
 
 
 async def add_product_to_cart(stagehand: Stagehand, page: Page, product: Product, shop_url: str) -> dict:
@@ -261,53 +407,68 @@ async def add_product_to_cart(stagehand: Stagehand, page: Page, product: Product
         "status": "skipped",
     }
 
-    # Open the product page: navigate directly if we have a real link, otherwise click it.
-    href = product.url or ""
-    if href.startswith(("http://", "https://", "/")):
-        await page.goto(urljoin(shop_url, href))
+    # Open the product page: navigate directly via resolved URL, otherwise fall back to Stagehand click.
+    target_url = await resolve_product_url(page, product, shop_url)
+    if target_url:
+        await page.goto(target_url)
     else:
         await stagehand.act(f"Click on the product '{product.name}' to open its product page.")
-    await settle(page)
-    await dismiss_popups(stagehand)
+    await settle(page, 1000)
+    await maybe_dismiss_popups(stagehand, page)
 
-    # One-time purchase rather than subscription.
-    purchase = await stagehand.extract(
-        "Does this product offer one-time purchase vs subscription, and is one-time purchase selected?",
-        PurchaseOptionCheck,
-    )
-    if purchase.data.has_purchase_options and not purchase.data.one_time_selected:
-        step = await stagehand.act("Select the one-time purchase option instead of subscription.")
-        print(f"    Purchase option: {step.data.action_description}")
-        await page.wait_for_timeout(1000)
-
-    # Smallest size / weight.
-    size = None
-    for _ in range(3):
-        size = (
+    # Combined check for product page validity, one-time purchase option, and smallest size (allows multi-step dropdowns).
+    state: ProductPageState | None = None
+    for attempt in range(3):
+        state = (
             await stagehand.extract(
-                f"Does this product (shop price: {product.price}) have package size or weight options, and is the "
-                "smallest/cheapest one selected? Report the price shown for the selected one-time purchase option.",
-                SizeOptionCheck,
+                f"Check this page for product '{product.name}' (shop price: {product.price}): "
+                "1) Is this an individual product page with an Add to Cart / Buy button? "
+                "2) Does it offer one-time purchase vs subscription, and is one-time purchase selected? "
+                "3) Does it have package size or weight options, and is the smallest/cheapest one selected? "
+                "4) Report the price currently displayed for the selected one-time purchase option.",
+                ProductPageState,
             )
         ).data
-        print(f"    Size: selected={size.selected_size}, lowest={size.lowest_available_size}, price={size.current_price}")
-        if not size.has_size_options or size.lowest_size_selected:
-            break
-        target = size.lowest_available_size or "the smallest/cheapest option"
-        step = await stagehand.act(
-            f"Change the package size or weight selector (currently '{size.selected_size}') to {target}."
-        )
-        print(f"    Size selection: {step.data.action_description}")
-        await page.wait_for_timeout(1000)
 
-    if size is not None:
-        item["selected_variant"] = size.selected_size
-        item["selected_price_display"] = size.current_price
-        item["selected_price"] = parse_price(size.current_price)
+        if not state.is_product_page:
+            if attempt == 0 and not target_url:
+                # If the initial click didn't open the product page, try once more
+                await stagehand.act(f"Click on the product link or title for '{product.name}' to open its product page.")
+                await settle(page, 1000)
+                continue
+            print(f"    Not on a valid product page for '{product.name}' ({state.reason}), skipping.")
+            return item
+
+        acted = False
+        if state.has_purchase_options and not state.one_time_selected:
+            step = await stagehand.act("Select the one-time purchase option instead of subscription.")
+            print(f"    Purchase option: {step.data.action_description}")
+            await page.wait_for_timeout(800)
+            acted = True
+
+        print(f"    Size: selected={state.selected_size}, lowest={state.lowest_available_size}, price={state.current_price}")
+        if state.has_size_options and not state.lowest_size_selected:
+            target = state.lowest_available_size or "the smallest/cheapest option"
+            step = await stagehand.act(
+                f"Change the package size or weight selector (currently '{state.selected_size}') to {target}."
+            )
+            print(f"    Size selection: {step.data.action_description}")
+            await page.wait_for_timeout(800)
+            acted = True
+
+        if not acted:
+            break
+
+    if state is not None:
+        item["selected_variant"] = state.selected_size
+        item["selected_price_display"] = state.current_price or product.price
+        item["selected_price"] = parse_price(state.current_price) or item["shop_price"]
 
     add = await stagehand.act("Click the 'Add to cart', 'ADD TO BAG', 'Add to bag' or 'Buy' button for this product.")
     print(f"    Added: {add.data.action_description}")
-    await page.wait_for_timeout(2000)
+    with contextlib.suppress(Exception):
+        await page.wait_for_load_state("networkidle", timeout=3000)
+    await page.wait_for_timeout(1200)
     item["status"] = "added" if add.data.success else "add_failed"
     return item
 
@@ -328,16 +489,57 @@ async def open_cart(stagehand: Stagehand, page: Page) -> CartLines:
     raise RuntimeError("Couldn't open the shopping cart")
 
 
+def _match_checkout_item(item_name: str, candidates: list[LineItem]) -> LineItem | None:
+    """Find and remove the best-matching checkout LineItem without substring collisions like 'Coffee' in 'Good Day Coffee'."""
+    if not candidates:
+        return None
+
+    def norm(s: str) -> str:
+        return re.sub(r"[^a-z0-9]+", " ", s.lower()).strip()
+
+    def strip_coffee(s: str) -> str:
+        cleaned = re.sub(r"(?i)^coffee\s+|\s+coffee$", "", s).strip()
+        return norm(cleaned) if cleaned else norm(s)
+
+    target_full = norm(item_name)
+    target_clean = strip_coffee(item_name)
+    target_tokens = set(target_clean.split()) or set(target_full.split())
+
+    best_idx: int | None = None
+    best_score: float = 0.0
+
+    for idx, li in enumerate(candidates):
+        li_full = norm(li.name)
+        li_clean = strip_coffee(li.name)
+        li_tokens = set(li_clean.split()) or set(li_full.split())
+
+        if li_clean == target_clean or li_full == target_full:
+            score = 100.0  # Exact match
+        elif target_tokens and li_tokens:
+            # Jaccard token similarity so "Coffee" (1 token) doesn't beat "Good Day" (2 tokens)
+            overlap = len(target_tokens & li_tokens)
+            score = (overlap / len(target_tokens | li_tokens)) * 50.0
+        else:
+            score = 0.0
+
+        if score > best_score:
+            best_score = score
+            best_idx = idx
+
+    if best_idx is not None and best_score >= 25.0:
+        return candidates.pop(best_idx)
+    return None
+
+
 def compare_prices(items: list[dict], cart: CartLines, checkout: CheckoutDetails | None) -> dict:
     added = [i for i in items if i["status"] == "added"]
+    remaining_checkout = list(checkout.items) if checkout else []
+
     for item in added:
         expected = item["selected_price"] if item["selected_price"] is not None else item["shop_price"]
         item["expected_price"] = expected
         item["selected_vs_shop_diff"] = diff(item["selected_price"], item["shop_price"])
-        match = None
-        if checkout:
-            match = next((li for li in checkout.items if item["name"].lower() in li.name.lower()
-                          or li.name.lower() in item["name"].lower()), None)
+        match = _match_checkout_item(item["name"], remaining_checkout)
         item["checkout_price_display"] = match.price if match else None
         checkout_unit = parse_price(match.price) if match else None
         if checkout_unit is not None and match and match.quantity > 1:
@@ -371,11 +573,13 @@ def compare_prices(items: list[dict], cart: CartLines, checkout: CheckoutDetails
         "currency": checkout.currency if checkout else None,
         "drip_detected": bool(item_increase or subtotal_increase or fees_total > 0),
         "drip_reasons": [
-            r for r, hit in (
+            r
+            for r, hit in (
                 ("item price increased at checkout", item_increase),
                 ("checkout subtotal higher than selected prices", subtotal_increase),
                 ("non-tax, non-shipping fees added", fees_total > 0),
-            ) if hit
+            )
+            if hit
         ],
         "checkout_summary": checkout.summary if checkout else None,
     }
@@ -397,7 +601,7 @@ async def run_site(stagehand: Stagehand, page: Page, url: str, n_products: int, 
             Products,
         )
     ).data.products
-    with open(out / "products.csv", "w", newline="") as f:
+    with open(out / "products.csv", "w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=list(Product.model_fields))
         writer.writeheader()
         writer.writerows(p.model_dump() for p in products)
@@ -409,17 +613,25 @@ async def run_site(stagehand: Stagehand, page: Page, url: str, n_products: int, 
         result.message = "No in-stock coffee products on the shop page"
         return
 
-    for product in chosen:
-        print(f"  Adding: {product.name} ({product.price})")
+    for idx, product in enumerate(chosen):
+        print(f"  Adding ({idx + 1}/{len(chosen)}): {product.name} ({product.price})")
         try:
             item = await add_product_to_cart(stagehand, page, product, shop_url)
         except Exception as error:  # keep going with the remaining products
-            item = {"name": product.name, "shop_price_display": product.price,
-                    "shop_price": parse_price(product.price), "status": "skipped", "error": str(error)}
+            item = {
+                "name": product.name,
+                "shop_price_display": product.price,
+                "shop_price": parse_price(product.price),
+                "status": "skipped",
+                "error": str(error),
+            }
             print(f"    Skipped: {error}")
         result.items.append(item)
-        await page.goto(shop_url)
-        await settle(page, 1000)
+        # Only navigate back to shop_url if there are more products to add;
+        # staying on the final product page preserves any auto-opened cart drawer.
+        if idx < len(chosen) - 1:
+            await page.goto(shop_url)
+            await settle(page, 1000)
 
     if not any(i["status"] == "added" for i in result.items):
         result.status = "add_to_cart_failed"
@@ -474,20 +686,36 @@ async def run_site(stagehand: Stagehand, page: Page, url: str, n_products: int, 
     else:
         result.status = "ok"
 
-    report = {"site": url, "shop_url": shop_url, "checkout_url": await page.url(),
-              "status": result.status, "message": result.message,
-              "items": result.items, **result.comparison}
-    (out / "price_comparison.json").write_text(json.dumps(report, indent=2))
-    with open(out / "price_comparison.csv", "w", newline="") as f:
-        fields = ["name", "selected_variant", "shop_price_display", "selected_price_display",
-                  "checkout_price_display", "checkout_vs_expected_diff", "price_increased", "status"]
+    report = {
+        "site": url,
+        "shop_url": shop_url,
+        "checkout_url": await page.url(),
+        "status": result.status,
+        "message": result.message,
+        "items": result.items,
+        **result.comparison,
+    }
+    (out / "price_comparison.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
+    with open(out / "price_comparison.csv", "w", newline="", encoding="utf-8") as f:
+        fields = [
+            "name",
+            "selected_variant",
+            "shop_price_display",
+            "selected_price_display",
+            "checkout_price_display",
+            "checkout_vs_expected_diff",
+            "price_increased",
+            "status",
+        ]
         writer = csv.DictWriter(f, fieldnames=fields, extrasaction="ignore")
         writer.writeheader()
         writer.writerows(result.items)
 
     c = result.comparison
-    print(f"  Expected subtotal: {c['expected_subtotal']} | Checkout subtotal: {c['checkout_subtotal_display']} "
-          f"| Total: {c['checkout_total_display']} | Fees: {c['other_fees_total']} | Shipping: {c['shipping']}")
+    print(
+        f"  Expected subtotal: {c['expected_subtotal']} | Checkout subtotal: {c['checkout_subtotal_display']} "
+        f"| Total: {c['checkout_total_display']} | Fees: {c['other_fees_total']} | Shipping: {c['shipping']}"
+    )
     print(f"  Drip pricing detected: {'YES - ' + '; '.join(c['drip_reasons']) if c['drip_detected'] else 'NO'}")
 
 
@@ -511,13 +739,13 @@ def update_summary(result: SiteResult) -> None:
     }
     existing_rows: list[dict] = []
     if path.exists():
-        with open(path, newline="") as f:
+        with open(path, newline="", encoding="utf-8") as f:
             reader = csv.DictReader(f)
             for r in reader:
                 if r.get("site") != result.site:
                     existing_rows.append(r)
     existing_rows.append(row)
-    with open(path, "w", newline="") as f:
+    with open(path, "w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=list(row))
         writer.writeheader()
         writer.writerows(existing_rows)
@@ -529,8 +757,14 @@ def update_summary(result: SiteResult) -> None:
 async def main() -> None:
     parser = argparse.ArgumentParser(description="Coffee-site drip-pricing POC")
     parser.add_argument("urls", nargs="+", help="Coffee website URL(s)")
-    parser.add_argument("--products", type=int, default=3, choices=range(1, 6), metavar="N",
-                        help="Number of coffee products to add to the cart (1-5, default 3)")
+    parser.add_argument(
+        "--products",
+        type=int,
+        default=3,
+        choices=range(1, 6),
+        metavar="N",
+        help="Number of coffee products to add to the cart (1-5, default 3)",
+    )
     args = parser.parse_args()
 
     api_key = os.environ["GOOGLE_GENERATIVE_AI_API_KEY"]
@@ -539,6 +773,9 @@ async def main() -> None:
     history: list[dict] = []
 
     def record(log) -> None:
+        msg = getattr(log, "message", "") or ""
+        if any(phrase in msg for phrase in _NOISY_CDP_PHRASES):
+            return
         entry = log.model_dump(mode="json")
         entry["timestamp"] = datetime.now(timezone.utc).isoformat()
         history.append(entry)
@@ -551,7 +788,12 @@ async def main() -> None:
         bb_session_id = bb_client.sessions.create(project_id=bb_project_id).id
         browser = await stagehand_browserbase.connect(api_key=bb_api_key, session_id=bb_session_id)
     else:
-        browser = await local_browser.launch(headless=os.getenv("HEADLESS") == "true")
+        profile_dir = CHROME_PROFILE_DIR.resolve()
+        profile_dir.mkdir(parents=True, exist_ok=True)
+        browser = await local_browser.launch(
+            headless=os.getenv("HEADLESS") == "true",
+            user_data_dir=str(profile_dir),
+        )
 
     monitor = LocalResourceMonitor()
     monitor_task = monitor.start()
@@ -560,7 +802,7 @@ async def main() -> None:
             browser=browser,
             model=model,
             model_api_key=api_key,
-            logging=StagehandClientLoggingConfig(level="info", format="json", on_log=record),
+            logging=StagehandClientLoggingConfig(level="warn", format="json", on_log=record),
         )
         try:
             page = (await browser.context.pages())[0]
@@ -575,7 +817,8 @@ async def main() -> None:
                 start = perf_counter()
                 before = await stagehand.metrics()
                 with contextlib.suppress(Exception):
-                    await browser.context.clear_cookies()  # fresh cart per site
+                    # Clear only storefront cookies so corporate SSO/proxy auth tokens persist
+                    await browser.context.clear_cookies(domain=domain)
 
                 try:
                     await run_site(stagehand, page, url, args.products, result)
@@ -585,7 +828,10 @@ async def main() -> None:
                     with contextlib.suppress(Exception):
                         await page.screenshot(path=str(out_dir / "error.png"))
 
-                after = await stagehand.metrics()
+                after = before
+                with contextlib.suppress(Exception):
+                    after = await stagehand.metrics()
+
                 session = {
                     "site": url,
                     "status": result.status,
@@ -600,7 +846,7 @@ async def main() -> None:
                 if bb_client and bb_session_id:
                     info = bb_client.sessions.retrieve(bb_session_id)
                     session["browserbase_session"] = {"id": info.id, "status": info.status, "region": info.region}
-                (out_dir / "session.json").write_text(json.dumps(session, indent=2))
+                (out_dir / "session.json").write_text(json.dumps(session, indent=2), encoding="utf-8")
                 update_summary(result)
                 print(f"  Status: {result.status} {result.message} -> {out_dir}")
         finally:
