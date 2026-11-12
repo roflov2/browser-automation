@@ -5,7 +5,7 @@ add 1-5 coffee products (one-time purchase, smallest size) to the cart, go to ch
 screenshot it, and compare shop-page prices against checkout prices to flag drip pricing.
 
 Usage:
-    python scrape_shop.py https://redbrick.coffee https://another-roaster.com --products 3
+    python coffee-shopify.py https://redbrick.coffee https://another-roaster.com --products 3
 """
 
 import argparse
