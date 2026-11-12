@@ -1,0 +1,36 @@
+{
+  "site": "https://www.padrecoffee.com.au",
+  "status": "ok",
+  "message": "",
+  "execution_time_ms": 212419,
+  "tokens_used": 157829.0,
+  "metrics_cumulative": {
+    "act_prompt_tokens": 192179.0,
+    "act_completion_tokens": 14290.0,
+    "act_reasoning_tokens": 0.0,
+    "act_cached_input_tokens": 0.0,
+    "act_inference_time_ms": 161041.0,
+    "extract_prompt_tokens": 301471.0,
+    "extract_completion_tokens": 38430.0,
+    "extract_reasoning_tokens": 0.0,
+    "extract_cached_input_tokens": 0.0,
+    "extract_inference_time_ms": 410146.0,
+    "observe_prompt_tokens": 41109.0,
+    "observe_completion_tokens": 2185.0,
+    "observe_reasoning_tokens": 0.0,
+    "observe_cached_input_tokens": 0.0,
+    "observe_inference_time_ms": 36165.0,
+    "total_prompt_tokens": 534759.0,
+    "total_completion_tokens": 54905.0,
+    "total_reasoning_tokens": 0.0,
+    "total_cached_input_tokens": 0.0,
+    "total_inference_time_ms": 607352.0
+  },
+  "resource_usage": {
+    "avg_memory_mb": 67.9,
+    "peak_memory_mb": 68.76,
+    "avg_cpu_percent": 0.11,
+    "data_points": 834
+  },
+  "history": []
+}

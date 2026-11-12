@@ -1,0 +1,36 @@
+{
+  "site": "https://blackboardcoffee.com.au",
+  "status": "ok",
+  "message": "",
+  "execution_time_ms": 183788,
+  "tokens_used": 159074.0,
+  "metrics_cumulative": {
+    "act_prompt_tokens": 136181.0,
+    "act_completion_tokens": 10147.0,
+    "act_reasoning_tokens": 0.0,
+    "act_cached_input_tokens": 0.0,
+    "act_inference_time_ms": 115381.0,
+    "extract_prompt_tokens": 216045.0,
+    "extract_completion_tokens": 28604.0,
+    "extract_reasoning_tokens": 0.0,
+    "extract_cached_input_tokens": 0.0,
+    "extract_inference_time_ms": 307060.0,
+    "observe_prompt_tokens": 38838.0,
+    "observe_completion_tokens": 2020.0,
+    "observe_reasoning_tokens": 0.0,
+    "observe_cached_input_tokens": 0.0,
+    "observe_inference_time_ms": 33024.0,
+    "total_prompt_tokens": 391064.0,
+    "total_completion_tokens": 40771.0,
+    "total_reasoning_tokens": 0.0,
+    "total_cached_input_tokens": 0.0,
+    "total_inference_time_ms": 455465.0
+  },
+  "resource_usage": {
+    "avg_memory_mb": 67.72,
+    "peak_memory_mb": 68.39,
+    "avg_cpu_percent": 0.1,
+    "data_points": 622
+  },
+  "history": []
+}

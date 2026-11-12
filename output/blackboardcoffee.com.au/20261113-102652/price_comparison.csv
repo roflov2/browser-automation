@@ -1,0 +1,4 @@
+name,selected_variant,shop_price_display,selected_price_display,checkout_price_display,checkout_vs_expected_diff,price_increased,status
+Seasonal Espresso Coffee Blend,250g,From $22.00,$22.00,$22.00,0.0,False,added
+Bold Espresso Coffee Blend,250g,From $22.00,$22.00,$22.00,0.0,False,added
+Organic Coffee Blend,250G,From $25.00,$25.00,$25.00,0.0,False,added

@@ -1,0 +1,28 @@
+name,price,sold_out,is_coffee,product_type,url
+Seasonal Espresso Coffee Blend,From $22.00,False,True,whole_bean_or_ground,4-50456
+Bold Espresso Coffee Blend,From $22.00,False,True,whole_bean_or_ground,4-50482
+Organic Coffee Blend,From $25.00,False,True,whole_bean_or_ground,4-50508
+Dark Espresso Coffee Blend,From $22.00,False,True,whole_bean_or_ground,4-50532
+Roaster's Pick - Single Origin Espresso,From $26.00,False,True,whole_bean_or_ground,4-50570
+Burundi Nemba Washing St Red Bourbon Natural,From $26.00,False,True,whole_bean_or_ground,4-50593
+Brazil Chapadão Farm Natural Anaerobic,From $26.00,False,True,whole_bean_or_ground,4-50616
+Uganda Nyabubare Washing St SL14 & SL28 Oro Yeast Fully Washed,From $26.00,False,True,whole_bean_or_ground,4-50639
+Roaster's Pick - Single Origin Filter,From $26.00,False,True,whole_bean_or_ground,4-50674
+Brazil Chapadão Farm Natural Aerobic,From $26.00,False,True,whole_bean_or_ground,4-50697
+Colombia El Muro Caturra Washed,From $26.00,False,True,whole_bean_or_ground,4-50720
+Colombia La Primavera Mix Varieties Anaerobic Washed,From $26.00,False,True,whole_bean_or_ground,4-50743
+Ethiopia Gesha Village Semi Anaerobic Honey,$40.00,False,True,whole_bean_or_ground,4-50778
+Ethiopia Gesha Village Anaerobic Natural,$40.00,False,True,whole_bean_or_ground,4-50820
+Kenya Anaerobic Red Honey - Muhindi Coffee Estate,$34.00,False,True,whole_bean_or_ground,4-50862
+Brazil Espigao Mundo Novo Natural Aerobic,$30.00,False,True,whole_bean_or_ground,4-50902
+Colombia Bourbon Chiroso Washed Anaerobic,$30.00,False,True,whole_bean_or_ground,4-50942
+Panama Geisha Lerida Coffee Estate Special Reserve Coffee,From $60.00,True,True,whole_bean_or_ground,4-50994
+Ecuador Pepe Jijón - Finca Soledad Special Reserve,From $40.00,False,True,whole_bean_or_ground,4-51068
+Gesha Village Oma Natural Lot 26/120 Special Reserve Coffee,$65.00,False,True,whole_bean_or_ground,4-51145
+Gesha Village Oma Natural Lot 26/142 Special Reserve Coffee,$65.00,False,True,whole_bean_or_ground,4-51185
+Gesha Village Surma Natural Lot 26/143 Special Reserve Coffee,$65.00,False,True,whole_bean_or_ground,4-51225
+Gesha Village Narsha Natural Lot 26/146 Special Reserve Coffee,$65.00,False,True,whole_bean_or_ground,4-51265
+Gesha Village FULL SET Special Reserve Coffee,$220.00,False,True,whole_bean_or_ground,4-51305
+Single Origin Coffee Drip Bags,From $19.00,False,True,drip_or_steep_bags,4-51359
+Coffee Pods Seasonal Blend,From $11.00,False,True,pods_or_capsules,4-51396
+Instant Specialty Coffee - 30g Box,$25.00,False,True,other,4-51433

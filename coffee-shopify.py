@@ -5,7 +5,7 @@ add 1-5 coffee products (one-time purchase, smallest size) to the cart, go to ch
 screenshot it, and compare shop-page prices against checkout prices to flag drip pricing.
 
 Usage:
-    python scrape_shop.py https://redbrick.coffee https://onacoffee.com.au --products 3
+    python coffee-shopify.py https://redbrick.coffee https://onacoffee.com.au --products 3
 """
 
 import os
@@ -292,7 +292,7 @@ async def maybe_dismiss_popups(stagehand: Stagehand, page: Page) -> None:
     with contextlib.suppress(Exception):
         has_overlay = bool(
             await page.evaluate(
-                """() => {
+                """(() => {
                     const selectors = [
                         '[role="dialog"]', '[aria-modal="true"]',
                         '[class*="popup" i]', '[class*="modal" i]', '[class*="newsletter" i]',
@@ -309,7 +309,7 @@ async def maybe_dismiss_popups(stagehand: Stagehand, page: Page) -> None:
                         }
                     }
                     return false;
-                }"""
+                })()"""
             )
         )
     if has_overlay:
@@ -357,9 +357,10 @@ async def resolve_product_url(page: Page, product: Product, shop_url: str) -> st
             return full
 
     clean_name = re.sub(r"(?i)^coffee\s+|\s+coffee$", "", product.name).strip()
+    payload = json.dumps({"exactName": product.name, "cleanName": clean_name, "currentUrl": shop_url})
     with contextlib.suppress(Exception):
         href = await page.evaluate(
-            """({ exactName, cleanName, currentUrl }) => {
+            f"""(({{ exactName, cleanName, currentUrl }}) => {{
                 const norm = s => (s || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
                 const targets = new Set([norm(exactName), norm(cleanName)].filter(Boolean));
                 const base = currentUrl.split('?')[0].replace(/\\/+$/, '');
@@ -368,7 +369,7 @@ async def resolve_product_url(page: Page, product: Product, shop_url: str) -> st
                 // Prefer links containing /products/ or /product/ when multiple links match
                 anchors.sort((a, b) => (b.href.includes('/product') ? 1 : 0) - (a.href.includes('/product') ? 1 : 0));
 
-                for (const a of anchors) {
+                for (const a of anchors) {{
                     const rawHref = a.getAttribute('href') || '';
                     if (!rawHref || rawHref.startsWith('#') || rawHref.startsWith('javascript:')) continue;
 
@@ -383,15 +384,14 @@ async def resolve_product_url(page: Page, product: Product, shop_url: str) -> st
                         norm(a.innerText)
                     ].filter(Boolean);
 
-                    if (candidates.some(c => targets.has(c))) {
+                    if (candidates.some(c => targets.has(c))) {{
                         return a.href;
-                    }
-                }
+                    }}
+                }}
                 return null;
-            }""",
-            {"exactName": product.name, "cleanName": clean_name, "currentUrl": shop_url},
+            }})({payload})"""
         )
-        if href:
+        if isinstance(href, str) and href:
             return href
     return None
 
@@ -662,7 +662,7 @@ async def run_site(stagehand: Stagehand, page: Page, url: str, n_products: int, 
         for _ in range(15):
             await page.wait_for_timeout(1000)
             with contextlib.suppress(Exception):
-                ready = await page.evaluate("() => document.body && document.body.innerText.trim().length > 100")
+                ready = await page.evaluate("(() => Boolean(document.body && document.body.innerText.trim().length > 100))()")
                 if ready:
                     break
 

@@ -1,0 +1,25 @@
+name,price,sold_out,is_coffee,product_type,url
+Maple,$17.50,False,True,whole_bean_or_ground,4-21454
+Aspen,$17.50,False,True,whole_bean_or_ground,4-21704
+Raspberry Candy,$24.00,False,True,whole_bean_or_ground,4-21954
+Milk-Blend Bundle,$70.00,False,True,whole_bean_or_ground,4-22204
+Gateway,$19.00,False,True,whole_bean_or_ground,4-22349
+Raspberry Candy Filter,$26.00,False,True,whole_bean_or_ground,4-22599
+Unwind,$22.00,False,True,whole_bean_or_ground,4-22740
+Filter Drip Bags - Raspberry Candy,$21.00,False,True,drip_or_steep_bags,4-22990
+ONA Coffee Mug,$20.00,False,False,merch,4-23133
+Instant Coffee - Aspen,$16.50,False,True,other,4-23266
+Instant Coffee - Raspberry Candy,$20.50,False,True,other,4-23382
+"Yirgacheffe Amederaro Lot 1626, Ethiopia, Nitrogen Natural Jasper",$23.75,False,True,whole_bean_or_ground,4-23498
+"La Huerta, Honduras, Washed",$22.00,False,True,whole_bean_or_ground,4-23617
+"La Merced, Guatemala, Natural",$22.00,False,True,whole_bean_or_ground,4-23757
+"Drip Bags - Iris Estate Afterglow, Panama, Natural",$32.00,False,True,drip_or_steep_bags,4-23900
+"Filter Drip Bags - Guji Yabitu Koba G1, Ethiopia, Natural",$17.00,False,True,drip_or_steep_bags,4-24019
+Single Origin Subscription (Espresso Coffee),$66.00,False,False,subscription,4-24138
+"Filter Drip Bag Box - Guji Uraga Siko G1, Ethiopia, Washed",$17.00,False,True,drip_or_steep_bags,4-24363
+"Instant Coffee - Gititu AB, Kenya, Washed",$16.50,False,True,other,4-24482
+"Instant Coffee - Mutheka Kiandu AB, Kenya, Washed",$16.50,False,True,other,4-24597
+Filter Drip Bags - Unwind,$18.00,False,True,drip_or_steep_bags,4-24712
+"Bridazul Lot 1, Nicaragua, Supernatural",$22.00,False,True,whole_bean_or_ground,4-24831
+"Primavera Family, Guatemala, Washed",$22.00,False,True,whole_bean_or_ground,4-24973
+"Drip Bags - Iris Estate, Panama, Mixed Process",$33.00,False,True,drip_or_steep_bags,4-25115

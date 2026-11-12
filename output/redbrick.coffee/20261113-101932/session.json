@@ -1,0 +1,36 @@
+{
+  "site": "https://redbrick.coffee",
+  "status": "ok",
+  "message": "",
+  "execution_time_ms": 217936,
+  "tokens_used": 134411.0,
+  "metrics_cumulative": {
+    "act_prompt_tokens": 40658.0,
+    "act_completion_tokens": 3150.0,
+    "act_reasoning_tokens": 0.0,
+    "act_cached_input_tokens": 0.0,
+    "act_inference_time_ms": 37859.0,
+    "extract_prompt_tokens": 58231.0,
+    "extract_completion_tokens": 8563.0,
+    "extract_reasoning_tokens": 0.0,
+    "extract_cached_input_tokens": 0.0,
+    "extract_inference_time_ms": 100360.0,
+    "observe_prompt_tokens": 22423.0,
+    "observe_completion_tokens": 1386.0,
+    "observe_reasoning_tokens": 0.0,
+    "observe_cached_input_tokens": 0.0,
+    "observe_inference_time_ms": 22486.0,
+    "total_prompt_tokens": 121312.0,
+    "total_completion_tokens": 13099.0,
+    "total_reasoning_tokens": 0.0,
+    "total_cached_input_tokens": 0.0,
+    "total_inference_time_ms": 160705.0
+  },
+  "resource_usage": {
+    "avg_memory_mb": 66.89,
+    "peak_memory_mb": 67.97,
+    "avg_cpu_percent": 0.08,
+    "data_points": 217
+  },
+  "history": []
+}

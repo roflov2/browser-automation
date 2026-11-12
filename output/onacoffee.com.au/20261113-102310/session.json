@@ -1,0 +1,36 @@
+{
+  "site": "https://onacoffee.com.au",
+  "status": "ok",
+  "message": "",
+  "execution_time_ms": 221718,
+  "tokens_used": 138350.0,
+  "metrics_cumulative": {
+    "act_prompt_tokens": 82469.0,
+    "act_completion_tokens": 7403.0,
+    "act_reasoning_tokens": 0.0,
+    "act_cached_input_tokens": 0.0,
+    "act_inference_time_ms": 82707.0,
+    "extract_prompt_tokens": 132873.0,
+    "extract_completion_tokens": 17792.0,
+    "extract_reasoning_tokens": 0.0,
+    "extract_cached_input_tokens": 0.0,
+    "extract_inference_time_ms": 206061.0,
+    "observe_prompt_tokens": 30325.0,
+    "observe_completion_tokens": 1899.0,
+    "observe_reasoning_tokens": 0.0,
+    "observe_cached_input_tokens": 0.0,
+    "observe_inference_time_ms": 29685.0,
+    "total_prompt_tokens": 245667.0,
+    "total_completion_tokens": 27094.0,
+    "total_reasoning_tokens": 0.0,
+    "total_cached_input_tokens": 0.0,
+    "total_inference_time_ms": 318453.0
+  },
+  "resource_usage": {
+    "avg_memory_mb": 67.44,
+    "peak_memory_mb": 68.39,
+    "avg_cpu_percent": 0.09,
+    "data_points": 439
+  },
+  "history": []
+}

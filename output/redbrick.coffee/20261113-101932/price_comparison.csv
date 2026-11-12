@@ -1,0 +1,4 @@
+name,selected_variant,shop_price_display,selected_price_display,checkout_price_display,checkout_vs_expected_diff,price_increased,status
+Coffee Coffee,225g,From $21.00,$21.00,$21.00,0.0,False,added
+Good Day Coffee,225g,From $23.00,$23.00,$23.00,0.0,False,added
+Rogue Coffee,225g,From $23.00,$23.00,$23.00,0.0,False,added

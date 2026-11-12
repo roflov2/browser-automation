@@ -1,0 +1,25 @@
+name,price,sold_out,is_coffee,product_type,url
+Coffee Coffee,From $21.00,False,True,whole_bean_or_ground,4-2475
+Good Day Coffee,From $23.00,False,True,whole_bean_or_ground,4-1590
+Rogue Coffee,From $23.00,False,True,whole_bean_or_ground,4-2556
+Dark Coffee,From $21.00,False,True,whole_bean_or_ground,4-2597
+Decaf Coffee,From $22.00,False,True,whole_bean_or_ground,4-2638
+Blend Pack,$65.00,False,True,whole_bean_or_ground,4-2679
+"Floripondio Pacamara, Bolivia",$74.00,False,True,whole_bean_or_ground,4-2720
+Adventure Coffee,$27.00,False,True,whole_bean_or_ground,4-2761
+Adventure Coffee Steep Box,$35.00,False,True,drip_or_steep_bags,4-2802
+Drip Coffee,$35.00,False,True,drip_or_steep_bags,4-2843
+Drip Coffee Bag,$3.50,False,True,drip_or_steep_bags,4-2884
+Steep Coffee,$35.00,False,True,drip_or_steep_bags,4-2925
+Steep Coffee Bag,$3.50,False,True,drip_or_steep_bags,4-2966
+Coffee Coffee Pods,$12.00,False,True,pods_or_capsules,4-3007
+Complex Coffee Pods,$12.50,False,True,pods_or_capsules,4-3048
+Rich Coffee Pods,$12.50,False,True,pods_or_capsules,4-3089
+"Kamvara Estate AA, Kenya",From $34.00,False,True,whole_bean_or_ground,4-3130
+"Elver Maluquis Guevara, Peru",From $28.00,False,True,whole_bean_or_ground,4-3171
+"Gandula, Brazil",From $31.00,False,True,whole_bean_or_ground,4-3212
+"Lomaverde, Colombia",From $38.00,False,True,whole_bean_or_ground,4-3253
+"Ayla Bombe, Ethiopia",From $31.00,False,True,whole_bean_or_ground,4-3294
+Shuffle Club,$25.00,False,True,subscription,4-3335
+Home Barista Course,$130.00,False,False,course,4-3376
+Redbrick Gift Cards,From $50.00,False,False,gift_card,4-3417
