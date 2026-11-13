@@ -1,0 +1,286 @@
+{
+  "site": "https://www.virginaustralia.com/au/en/",
+  "shop_url": "https://book.virginaustralia.com/dx/VADX/#/flight-selection?ADT=1&class=First&tpid=VAPC_V2_23b6d797-e7bb-4d65-ac7b-50ef0fca9790&cabinType=E&fareType=REVENUE&awardBooking=false&op=385&tp=385&journeyType=one-way&businessTravel=false&pos=au-en&origin=BNE&destination=PER&date=02-14-2027&activeMonth=02-14-2027&va-flow=booking-hub&execution=4bb9f7e2-633d-4deb-a277-58ee6cbecf46",
+  "checkout_url": "https://book.virginaustralia.com/dx/VADX/#/payment?journeyType=one-way&activeMonth=02-14-2027&awardBooking=false&businessTravel=false&class=First&ADT=1&CHD=0&INF=0&origin=BNE&destination=PER&date=02-14-2027&flight=-967825575&direction=1&execution=4bb9f7e2-633d-4deb-a277-58ee6cbecf46",
+  "status": "ok",
+  "message": "",
+  "search": {
+    "origin": "BNE",
+    "destination": "PER",
+    "depart_date": "2027-02-14",
+    "passengers": "1 adult",
+    "trip_type": "one_way"
+  },
+  "items": [
+    {
+      "name": "VA 470 4:45pm - 8:10pm",
+      "shop_price_display": "From $385.00",
+      "shop_price": 385.0,
+      "selected_variant": "Lite",
+      "selected_price_display": "$385.00",
+      "selected_price": 385.0,
+      "status": "added",
+      "cart_total_display": "$385.00 AUD",
+      "price_basis": "Price per adult, one-way, in AUD.",
+      "expected_price": 385.0,
+      "selected_vs_shop_diff": 0.0,
+      "checkout_price_display": "$385.00",
+      "checkout_price": 385.0,
+      "checkout_vs_expected_diff": 0.0,
+      "price_increased": false
+    }
+  ],
+  "items_added": 1,
+  "expected_subtotal": 385.0,
+  "cart_subtotal_display": "$385.00 AUD",
+  "checkout_subtotal_display": "$385.00",
+  "checkout_subtotal": 385.0,
+  "subtotal_vs_expected_diff": 0.0,
+  "total_vs_expected_diff": 0.0,
+  "shipping": "n/a (flight booking)",
+  "other_fees": [],
+  "other_fees_total": 0.0,
+  "extras_in_total": [],
+  "payment_surcharges": [],
+  "extras_offered": 10,
+  "extras_offered_by_category": {
+    "flexibility": 2,
+    "seat_selection": 4,
+    "checked_baggage": 1,
+    "travel_insurance": 1,
+    "carbon_offset": 1,
+    "lounge": 1
+  },
+  "extras_preselected": [],
+  "tax_amount_display": null,
+  "tax_included": true,
+  "checkout_total_display": "$385.00 AUD",
+  "checkout_total": 385.0,
+  "currency": "AUD",
+  "drip_detected": false,
+  "drip_reasons": [],
+  "checkout_summary": "One-way flight from Brisbane to Perth on Sunday 14 February for 1 guest. Total booking fare is $385.00 AUD, with no additional extras or fees itemised. Payment methods displayed include Apple Pay, Google Pay, Card, PayPal, PayID, Zip, Points, and Travel Bank, with no specific payment surcharges advertised on the page.",
+  "extras": [
+    {
+      "step": 1,
+      "step_type": "review",
+      "step_heading": "Review your flight selection",
+      "category": "flexibility",
+      "label": "Cancel For Any Reason (100% of airfare refundable, Get AUD 385 refunded)",
+      "price_display": "+AUD 108 total",
+      "price": 108.0,
+      "price_basis": "total",
+      "selected_by_default": false,
+      "mandatory": false
+    },
+    {
+      "step": 1,
+      "step_type": "review",
+      "step_heading": "Review your flight selection",
+      "category": "flexibility",
+      "label": "Cancel For Any Reason (80% of airfare refundable, Get AUD 308 refunded)",
+      "price_display": "+AUD 58 total",
+      "price": 58.0,
+      "price_basis": "total",
+      "selected_by_default": false,
+      "mandatory": false
+    },
+    {
+      "step": 3,
+      "step_type": "passenger_details",
+      "step_heading": "Who will be travelling?",
+      "category": "seat_selection",
+      "label": "Economy X",
+      "price_display": null,
+      "price": null,
+      "price_basis": null,
+      "selected_by_default": false,
+      "mandatory": false
+    },
+    {
+      "step": 4,
+      "step_type": "seats",
+      "step_heading": "See if your favourite seats are available",
+      "category": "seat_selection",
+      "label": "Economy X seat",
+      "price_display": "$35.00 - $84.00",
+      "price": 35.0,
+      "price_basis": null,
+      "selected_by_default": false,
+      "mandatory": false
+    },
+    {
+      "step": 4,
+      "step_type": "seats",
+      "step_heading": "See if your favourite seats are available",
+      "category": "seat_selection",
+      "label": "Preferred seat",
+      "price_display": "$11.00 - $15.00",
+      "price": 11.0,
+      "price_basis": null,
+      "selected_by_default": false,
+      "mandatory": false
+    },
+    {
+      "step": 4,
+      "step_type": "seats",
+      "step_heading": "See if your favourite seats are available",
+      "category": "seat_selection",
+      "label": "Standard seat",
+      "price_display": "$12.00",
+      "price": 12.0,
+      "price_basis": null,
+      "selected_by_default": false,
+      "mandatory": false
+    },
+    {
+      "step": 6,
+      "step_type": "extras",
+      "step_heading": "Would you like to customise your trip?",
+      "category": "checked_baggage",
+      "label": "Add checked baggage",
+      "price_display": null,
+      "price": null,
+      "price_basis": null,
+      "selected_by_default": false,
+      "mandatory": false
+    },
+    {
+      "step": 6,
+      "step_type": "extras",
+      "step_heading": "Would you like to customise your trip?",
+      "category": "travel_insurance",
+      "label": "Protect your trip with Cover-More",
+      "price_display": "$17.50",
+      "price": 17.5,
+      "price_basis": "Per guest from",
+      "selected_by_default": false,
+      "mandatory": false
+    },
+    {
+      "step": 6,
+      "step_type": "extras",
+      "step_heading": "Would you like to customise your trip?",
+      "category": "carbon_offset",
+      "label": "Help protect the places you love to explore",
+      "price_display": "$11.11",
+      "price": 11.11,
+      "price_basis": "Per guest from",
+      "selected_by_default": false,
+      "mandatory": false
+    },
+    {
+      "step": 7,
+      "step_type": "payment",
+      "step_heading": "Let\u2019s do one final check!",
+      "category": "lounge",
+      "label": "Amex Velocity Platinum Card (Lounge access)",
+      "price_display": "$440",
+      "price": 440.0,
+      "price_basis": "annual card fee",
+      "selected_by_default": false,
+      "mandatory": false
+    }
+  ],
+  "steps": [
+    {
+      "step": 1,
+      "step_type": "review",
+      "heading": "Review your flight selection",
+      "url": "https://book.virginaustralia.com/dx/VADX/#/flight-selection?journeyType=one-way&activeMonth=02-14-2027&awardBooking=false&businessTravel=false&class=First&ADT=1&CHD=0&INF=0&origin=BNE&destination=PER&date=02-14-2027&flight=-967825575&direction=1&execution=4bb9f7e2-633d-4deb-a277-58ee6cbecf46",
+      "total_display": "$385.00 AUD",
+      "total": 385.0,
+      "price_lines": [
+        {
+          "label": "Lite fare (BNE to PER)",
+          "amount": "$385.00"
+        }
+      ],
+      "offers": 2,
+      "validation_errors": [],
+      "summary": "Currently on the 'Review your flight selection' page. Virgin Australia is offering an optional 'Cancel For Any Reason' add-on (+AUD 108 for 100% refund or +AUD 58 for 80% refund), with 'No, thank you' selected by default. The current booking total is $385.00 AUD."
+    },
+    {
+      "step": 2,
+      "step_type": "login_prompt",
+      "heading": "Log in now to pre-fill your details",
+      "url": "https://book.virginaustralia.com/dx/VADX/#/flight-selection?journeyType=one-way&activeMonth=02-14-2027&awardBooking=false&businessTravel=false&class=First&ADT=1&CHD=0&INF=0&origin=BNE&destination=PER&date=02-14-2027&flight=-967825575&direction=1&execution=4bb9f7e2-633d-4deb-a277-58ee6cbecf46",
+      "total_display": null,
+      "total": null,
+      "price_lines": [],
+      "offers": 0,
+      "validation_errors": [],
+      "summary": "Login prompt modal is displayed with options to log in or skip."
+    },
+    {
+      "step": 3,
+      "step_type": "passenger_details",
+      "heading": "Who will be travelling?",
+      "url": "https://book.virginaustralia.com/dx/VADX/#/passengers?journeyType=one-way&activeMonth=02-14-2027&awardBooking=false&businessTravel=false&class=First&ADT=1&CHD=0&INF=0&origin=BNE&destination=PER&date=02-14-2027&flight=-967825575&direction=1&execution=4bb9f7e2-633d-4deb-a277-58ee6cbecf46",
+      "total_display": "$385.00 AUD",
+      "total": 385.0,
+      "price_lines": [],
+      "offers": 1,
+      "validation_errors": [],
+      "summary": "Currently on the 'Guests' (passenger details) step. Basic passenger details (name, gender, contact details) are requested. An informational promo for Economy X seats is shown with no price listed."
+    },
+    {
+      "step": 4,
+      "step_type": "seats",
+      "heading": "See if your favourite seats are available",
+      "url": "https://book.virginaustralia.com/dx/VADX/#/seat-selection?journeyType=one-way&activeMonth=02-14-2027&awardBooking=false&businessTravel=false&class=First&ADT=1&CHD=0&INF=0&origin=BNE&destination=PER&date=02-14-2027&flight=-967825575&direction=1&execution=4bb9f7e2-633d-4deb-a277-58ee6cbecf46",
+      "total_display": "$385.00 AUD",
+      "total": 385.0,
+      "price_lines": [],
+      "offers": 3,
+      "validation_errors": [],
+      "summary": "Currently on the seat selection step ('Seats'). Optional paid seat assignments are available across Economy X ($35 - $84), Preferred seats ($11 - $15), and Standard seats ($12). No seat is currently selected, and the running total is $385.00 AUD."
+    },
+    {
+      "step": 5,
+      "step_type": "upsell_modal",
+      "heading": "Unassigned seating",
+      "url": "https://book.virginaustralia.com/dx/VADX/#/seat-selection?journeyType=one-way&activeMonth=02-14-2027&awardBooking=false&businessTravel=false&class=First&ADT=1&CHD=0&INF=0&origin=BNE&destination=PER&date=02-14-2027&flight=-967825575&direction=1&execution=4bb9f7e2-633d-4deb-a277-58ee6cbecf46",
+      "total_display": null,
+      "total": null,
+      "price_lines": [],
+      "offers": 0,
+      "validation_errors": [],
+      "summary": "An 'Unassigned seating' modal prompt appears asking 'Not all seats have been assigned. Are you sure you want to continue with unassigned seating?' with options to 'Choose seats' or 'Continue anyway'."
+    },
+    {
+      "step": 6,
+      "step_type": "extras",
+      "heading": "Would you like to customise your trip?",
+      "url": "https://book.virginaustralia.com/dx/VADX/#/ancillaries?journeyType=one-way&activeMonth=02-14-2027&awardBooking=false&businessTravel=false&class=First&ADT=1&CHD=0&INF=0&origin=BNE&destination=PER&date=02-14-2027&flight=-967825575&direction=1&execution=4bb9f7e2-633d-4deb-a277-58ee6cbecf46",
+      "total_display": "$385.00 AUD",
+      "total": 385.0,
+      "price_lines": [
+        {
+          "label": "Booking total",
+          "amount": "$385.00 AUD"
+        }
+      ],
+      "offers": 3,
+      "validation_errors": [],
+      "summary": "On the 'Extras' step titled 'Would you like to customise your trip?'. Optional extras include checked baggage (price unstated until selected), Cover-More travel insurance ($17.50), and Climate Action carbon offset ($11.11). Current running total is $385.00 AUD."
+    },
+    {
+      "step": 7,
+      "step_type": "payment",
+      "heading": "Let\u2019s do one final check!",
+      "url": "https://book.virginaustralia.com/dx/VADX/#/payment?journeyType=one-way&activeMonth=02-14-2027&awardBooking=false&businessTravel=false&class=First&ADT=1&CHD=0&INF=0&origin=BNE&destination=PER&date=02-14-2027&flight=-967825575&direction=1&execution=4bb9f7e2-633d-4deb-a277-58ee6cbecf46",
+      "total_display": "$385.00 AUD",
+      "total": 385.0,
+      "price_lines": [
+        {
+          "label": "Fares",
+          "amount": "$385.00"
+        }
+      ],
+      "offers": 1,
+      "validation_errors": [],
+      "summary": "Reached the final payment page ('Let\u2019s do one final check!' / 'How would you like to pay?'). Total is $385.00 AUD with no added extras. Payment options include Apple Pay, Google Pay, Card, PayPal, PayID, Zip, Velocity Points, and Travel Bank."
+    }
+  ]
+}

@@ -1,0 +1,1603 @@
+{
+  "site": "https://www.virginaustralia.com/au/en/",
+  "status": "ok",
+  "message": "",
+  "execution_time_ms": 843415,
+  "tokens_used": 553770.0,
+  "metrics_cumulative": {
+    "act_prompt_tokens": 236834.0,
+    "act_completion_tokens": 18171.0,
+    "act_reasoning_tokens": 0.0,
+    "act_cached_input_tokens": 0.0,
+    "act_inference_time_ms": 181492.0,
+    "extract_prompt_tokens": 236084.0,
+    "extract_completion_tokens": 50690.0,
+    "extract_reasoning_tokens": 0.0,
+    "extract_cached_input_tokens": 0.0,
+    "extract_inference_time_ms": 453403.0,
+    "observe_prompt_tokens": 11418.0,
+    "observe_completion_tokens": 573.0,
+    "observe_reasoning_tokens": 0.0,
+    "observe_cached_input_tokens": 0.0,
+    "observe_inference_time_ms": 6272.0,
+    "total_prompt_tokens": 484336.0,
+    "total_completion_tokens": 69434.0,
+    "total_reasoning_tokens": 0.0,
+    "total_cached_input_tokens": 0.0,
+    "total_inference_time_ms": 641167.0
+  },
+  "resource_usage": {
+    "avg_memory_mb": 74.47,
+    "peak_memory_mb": 80.89,
+    "avg_cpu_load": 0.45,
+    "data_points": 843
+  },
+  "history": [
+    {
+      "level": "info",
+      "message": "stagehand.init",
+      "data": {},
+      "timestamp": "2026-11-12T23:55:22.127378+00:00"
+    },
+    {
+      "level": "info",
+      "message": "Starting observation",
+      "data": {
+        "category": "observation",
+        "instruction": "Find the close, accept, dismiss or 'no thanks' button of any visible cookie banner, promotional/newsletter popup, app-install banner or region selector modal. Return nothing if there is none."
+      },
+      "timestamp": "2026-11-12T23:55:28.665854+00:00"
+    },
+    {
+      "level": "info",
+      "message": "Observation completed",
+      "data": {
+        "category": "observation",
+        "promptTokens": 11418,
+        "completionTokens": 573,
+        "reasoningTokens": 0,
+        "cachedInputTokens": 0,
+        "inferenceTimeMs": 6272,
+        "resultCount": 1
+      },
+      "timestamp": "2026-11-12T23:55:35.065142+00:00"
+    },
+    {
+      "level": "info",
+      "message": "Starting extraction using an accessibility snapshot",
+      "data": {
+        "category": "extraction",
+        "instruction": "We are searching for a ONE-WAY flight for 1 adult from BNE to PER departing Sunday 14 February 2027, paying with money (not Velocity Points). Report the current state of the flight search form, or whether the flight results page is already showing."
+      },
+      "timestamp": "2026-11-12T23:55:35.381786+00:00"
+    },
+    {
+      "level": "info",
+      "message": "Extraction completed successfully",
+      "data": {
+        "category": "extraction",
+        "promptTokens": 11543,
+        "completionTokens": 1353,
+        "inferenceTimeMs": 14639
+      },
+      "timestamp": "2026-11-12T23:55:50.022617+00:00"
+    },
+    {
+      "level": "info",
+      "message": "Act inference completed",
+      "data": {
+        "category": "action",
+        "promptTokens": 11798,
+        "completionTokens": 562,
+        "reasoningTokens": 0,
+        "cachedInputTokens": 0,
+        "inferenceTimeMs": 7594
+      },
+      "timestamp": "2026-11-12T23:55:58.214540+00:00"
+    },
+    {
+      "level": "info",
+      "message": "Starting extraction using an accessibility snapshot",
+      "data": {
+        "category": "extraction",
+        "instruction": "We are searching for a ONE-WAY flight for 1 adult from BNE to PER departing Sunday 14 February 2027, paying with money (not Velocity Points). Report the current state of the flight search form, or whether the flight results page is already showing."
+      },
+      "timestamp": "2026-11-12T23:56:01.025649+00:00"
+    },
+    {
+      "level": "info",
+      "message": "Extraction completed successfully",
+      "data": {
+        "category": "extraction",
+        "promptTokens": 3117,
+        "completionTokens": 629,
+        "inferenceTimeMs": 7813
+      },
+      "timestamp": "2026-11-12T23:56:08.838818+00:00"
+    },
+    {
+      "level": "info",
+      "message": "Act inference completed",
+      "data": {
+        "category": "action",
+        "promptTokens": 3497,
+        "completionTokens": 551,
+        "reasoningTokens": 0,
+        "cachedInputTokens": 0,
+        "inferenceTimeMs": 6200
+      },
+      "timestamp": "2026-11-12T23:56:15.622460+00:00"
+    },
+    {
+      "level": "info",
+      "message": "Starting extraction using an accessibility snapshot",
+      "data": {
+        "category": "extraction",
+        "instruction": "We are searching for a ONE-WAY flight for 1 adult from BNE to PER departing Sunday 14 February 2027, paying with money (not Velocity Points). Report the current state of the flight search form, or whether the flight results page is already showing."
+      },
+      "timestamp": "2026-11-12T23:56:18.316072+00:00"
+    },
+    {
+      "level": "info",
+      "message": "Extraction completed successfully",
+      "data": {
+        "category": "extraction",
+        "promptTokens": 3161,
+        "completionTokens": 665,
+        "inferenceTimeMs": 8725
+      },
+      "timestamp": "2026-11-12T23:56:27.041656+00:00"
+    },
+    {
+      "level": "info",
+      "message": "Act inference completed",
+      "data": {
+        "category": "action",
+        "promptTokens": 3535,
+        "completionTokens": 280,
+        "reasoningTokens": 0,
+        "cachedInputTokens": 0,
+        "inferenceTimeMs": 3989
+      },
+      "timestamp": "2026-11-12T23:56:31.613906+00:00"
+    },
+    {
+      "level": "info",
+      "message": "Starting extraction using an accessibility snapshot",
+      "data": {
+        "category": "extraction",
+        "instruction": "We are searching for a ONE-WAY flight for 1 adult from BNE to PER departing Sunday 14 February 2027, paying with money (not Velocity Points). Report the current state of the flight search form, or whether the flight results page is already showing."
+      },
+      "timestamp": "2026-11-12T23:56:34.309541+00:00"
+    },
+    {
+      "level": "info",
+      "message": "Extraction completed successfully",
+      "data": {
+        "category": "extraction",
+        "promptTokens": 3235,
+        "completionTokens": 813,
+        "inferenceTimeMs": 9629
+      },
+      "timestamp": "2026-11-12T23:56:43.939481+00:00"
+    },
+    {
+      "level": "info",
+      "message": "Act inference completed",
+      "data": {
+        "category": "action",
+        "promptTokens": 3594,
+        "completionTokens": 837,
+        "reasoningTokens": 0,
+        "cachedInputTokens": 0,
+        "inferenceTimeMs": 7954
+      },
+      "timestamp": "2026-11-12T23:56:52.486761+00:00"
+    },
+    {
+      "level": "info",
+      "message": "Starting extraction using an accessibility snapshot",
+      "data": {
+        "category": "extraction",
+        "instruction": "We are searching for a ONE-WAY flight for 1 adult from BNE to PER departing Sunday 14 February 2027, paying with money (not Velocity Points). Report the current state of the flight search form, or whether the flight results page is already showing."
+      },
+      "timestamp": "2026-11-12T23:56:55.347596+00:00"
+    },
+    {
+      "level": "info",
+      "message": "Extraction completed successfully",
+      "data": {
+        "category": "extraction",
+        "promptTokens": 7320,
+        "completionTokens": 1189,
+        "inferenceTimeMs": 13727
+      },
+      "timestamp": "2026-11-12T23:57:09.075652+00:00"
+    },
+    {
+      "level": "info",
+      "message": "Act inference completed",
+      "data": {
+        "category": "action",
+        "promptTokens": 7686,
+        "completionTokens": 823,
+        "reasoningTokens": 0,
+        "cachedInputTokens": 0,
+        "inferenceTimeMs": 7597
+      },
+      "timestamp": "2026-11-12T23:57:17.267976+00:00"
+    },
+    {
+      "level": "info",
+      "message": "Starting extraction using an accessibility snapshot",
+      "data": {
+        "category": "extraction",
+        "instruction": "We are searching for a ONE-WAY flight for 1 adult from BNE to PER departing Sunday 14 February 2027, paying with money (not Velocity Points). Report the current state of the flight search form, or whether the flight results page is already showing."
+      },
+      "timestamp": "2026-11-12T23:57:20.053960+00:00"
+    },
+    {
+      "level": "info",
+      "message": "Extraction completed successfully",
+      "data": {
+        "category": "extraction",
+        "promptTokens": 7110,
+        "completionTokens": 607,
+        "inferenceTimeMs": 9711
+      },
+      "timestamp": "2026-11-12T23:57:29.765126+00:00"
+    },
+    {
+      "level": "info",
+      "message": "Act inference completed",
+      "data": {
+        "category": "action",
+        "promptTokens": 7457,
+        "completionTokens": 949,
+        "reasoningTokens": 0,
+        "cachedInputTokens": 0,
+        "inferenceTimeMs": 8410
+      },
+      "timestamp": "2026-11-12T23:57:38.772121+00:00"
+    },
+    {
+      "level": "info",
+      "message": "Starting extraction using an accessibility snapshot",
+      "data": {
+        "category": "extraction",
+        "instruction": "We are searching for a ONE-WAY flight for 1 adult from BNE to PER departing Sunday 14 February 2027, paying with money (not Velocity Points). Report the current state of the flight search form, or whether the flight results page is already showing."
+      },
+      "timestamp": "2026-11-12T23:57:41.596847+00:00"
+    },
+    {
+      "level": "info",
+      "message": "Extraction completed successfully",
+      "data": {
+        "category": "extraction",
+        "promptTokens": 7556,
+        "completionTokens": 802,
+        "inferenceTimeMs": 9462
+      },
+      "timestamp": "2026-11-12T23:57:51.059781+00:00"
+    },
+    {
+      "level": "info",
+      "message": "Act inference completed",
+      "data": {
+        "category": "action",
+        "promptTokens": 7918,
+        "completionTokens": 384,
+        "reasoningTokens": 0,
+        "cachedInputTokens": 0,
+        "inferenceTimeMs": 4728
+      },
+      "timestamp": "2026-11-12T23:57:56.385020+00:00"
+    },
+    {
+      "level": "info",
+      "message": "Starting extraction using an accessibility snapshot",
+      "data": {
+        "category": "extraction",
+        "instruction": "We are searching for a ONE-WAY flight for 1 adult from BNE to PER departing Sunday 14 February 2027, paying with money (not Velocity Points). Report the current state of the flight search form, or whether the flight results page is already showing."
+      },
+      "timestamp": "2026-11-12T23:57:59.087730+00:00"
+    },
+    {
+      "level": "info",
+      "message": "Extraction completed successfully",
+      "data": {
+        "category": "extraction",
+        "promptTokens": 7659,
+        "completionTokens": 703,
+        "inferenceTimeMs": 8355
+      },
+      "timestamp": "2026-11-12T23:58:07.443605+00:00"
+    },
+    {
+      "level": "info",
+      "message": "Act inference completed",
+      "data": {
+        "category": "action",
+        "promptTokens": 8009,
+        "completionTokens": 732,
+        "reasoningTokens": 0,
+        "cachedInputTokens": 0,
+        "inferenceTimeMs": 6553
+      },
+      "timestamp": "2026-11-12T23:58:14.612708+00:00"
+    },
+    {
+      "level": "info",
+      "message": "Starting extraction using an accessibility snapshot",
+      "data": {
+        "category": "extraction",
+        "instruction": "We are searching for a ONE-WAY flight for 1 adult from BNE to PER departing Sunday 14 February 2027, paying with money (not Velocity Points). Report the current state of the flight search form, or whether the flight results page is already showing."
+      },
+      "timestamp": "2026-11-12T23:58:17.372783+00:00"
+    },
+    {
+      "level": "info",
+      "message": "Extraction completed successfully",
+      "data": {
+        "category": "extraction",
+        "promptTokens": 1532,
+        "completionTokens": 679,
+        "inferenceTimeMs": 8093
+      },
+      "timestamp": "2026-11-12T23:58:25.466601+00:00"
+    },
+    {
+      "level": "info",
+      "message": "Act inference completed",
+      "data": {
+        "category": "action",
+        "promptTokens": 1885,
+        "completionTokens": 372,
+        "reasoningTokens": 0,
+        "cachedInputTokens": 0,
+        "inferenceTimeMs": 4741
+      },
+      "timestamp": "2026-11-12T23:58:30.792763+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 765,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "5FE2FDF151F0B064513AEC32BCE7666C"
+      },
+      "timestamp": "2026-11-12T23:58:34.469429+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 766,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "5FE2FDF151F0B064513AEC32BCE7666C"
+      },
+      "timestamp": "2026-11-12T23:58:34.515905+00:00"
+    },
+    {
+      "level": "info",
+      "message": "Starting extraction using an accessibility snapshot",
+      "data": {
+        "category": "extraction",
+        "instruction": "We are searching for a ONE-WAY flight for 1 adult from BNE to PER departing Sunday 14 February 2027, paying with money (not Velocity Points). Report the current state of the flight search form, or whether the flight results page is already showing."
+      },
+      "timestamp": "2026-11-12T23:58:34.516130+00:00"
+    },
+    {
+      "level": "info",
+      "message": "Extraction completed successfully",
+      "data": {
+        "category": "extraction",
+        "promptTokens": 1645,
+        "completionTokens": 685,
+        "inferenceTimeMs": 8972
+      },
+      "timestamp": "2026-11-12T23:58:43.488758+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 794,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "5FE2FDF151F0B064513AEC32BCE7666C"
+      },
+      "timestamp": "2026-11-12T23:58:44.172409+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 809,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "5FE2FDF151F0B064513AEC32BCE7666C"
+      },
+      "timestamp": "2026-11-12T23:58:44.180188+00:00"
+    },
+    {
+      "level": "info",
+      "message": "Act inference completed",
+      "data": {
+        "category": "action",
+        "promptTokens": 40124,
+        "completionTokens": 2066,
+        "reasoningTokens": 0,
+        "cachedInputTokens": 0,
+        "inferenceTimeMs": 17790
+      },
+      "timestamp": "2026-11-12T23:59:01.973540+00:00"
+    },
+    {
+      "level": "info",
+      "message": "No actionable element returned by the LLM",
+      "data": {
+        "category": "action"
+      },
+      "timestamp": "2026-11-12T23:59:01.973578+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 823,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "5FE2FDF151F0B064513AEC32BCE7666C"
+      },
+      "timestamp": "2026-11-12T23:59:04.658833+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 838,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "5FE2FDF151F0B064513AEC32BCE7666C"
+      },
+      "timestamp": "2026-11-12T23:59:04.664173+00:00"
+    },
+    {
+      "level": "info",
+      "message": "Starting extraction using an accessibility snapshot",
+      "data": {
+        "category": "extraction",
+        "instruction": "We are searching for a ONE-WAY flight for 1 adult from BNE to PER departing Sunday 14 February 2027, paying with money (not Velocity Points). Report the current state of the flight search form, or whether the flight results page is already showing."
+      },
+      "timestamp": "2026-11-12T23:59:04.667598+00:00"
+    },
+    {
+      "level": "info",
+      "message": "Extraction completed successfully",
+      "data": {
+        "category": "extraction",
+        "promptTokens": 39757,
+        "completionTokens": 864,
+        "inferenceTimeMs": 11077
+      },
+      "timestamp": "2026-11-12T23:59:15.745157+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 890,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "5FE2FDF151F0B064513AEC32BCE7666C"
+      },
+      "timestamp": "2026-11-12T23:59:36.039125+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 905,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "5FE2FDF151F0B064513AEC32BCE7666C"
+      },
+      "timestamp": "2026-11-12T23:59:36.046000+00:00"
+    },
+    {
+      "level": "info",
+      "message": "Starting extraction using an accessibility snapshot",
+      "data": {
+        "category": "extraction",
+        "instruction": "Extract every flight listed on this results page with its times, flight number, stops, duration, lowest displayed price, availability and per-fare prices where visible. Also report what the prices cover."
+      },
+      "timestamp": "2026-11-12T23:59:36.049531+00:00"
+    },
+    {
+      "level": "info",
+      "message": "Extraction completed successfully",
+      "data": {
+        "category": "extraction",
+        "promptTokens": 46090,
+        "completionTokens": 21453,
+        "inferenceTimeMs": 133400
+      },
+      "timestamp": "2026-11-13T00:01:49.450385+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 948,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "5FE2FDF151F0B064513AEC32BCE7666C"
+      },
+      "timestamp": "2026-11-13T00:01:54.798026+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 963,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "5FE2FDF151F0B064513AEC32BCE7666C"
+      },
+      "timestamp": "2026-11-13T00:01:54.805678+00:00"
+    },
+    {
+      "level": "info",
+      "message": "Act inference completed",
+      "data": {
+        "category": "action",
+        "promptTokens": 40050,
+        "completionTokens": 4618,
+        "reasoningTokens": 0,
+        "cachedInputTokens": 0,
+        "inferenceTimeMs": 37854
+      },
+      "timestamp": "2026-11-13T00:02:32.663359+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 992,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "5FE2FDF151F0B064513AEC32BCE7666C"
+      },
+      "timestamp": "2026-11-13T00:02:37.353089+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 1007,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "5FE2FDF151F0B064513AEC32BCE7666C"
+      },
+      "timestamp": "2026-11-13T00:02:37.358344+00:00"
+    },
+    {
+      "level": "info",
+      "message": "Starting extraction using an accessibility snapshot",
+      "data": {
+        "category": "extraction",
+        "instruction": "We want the flight departing 4:45pm and arriving 8:10pm (VA 470) on its cheapest fare. Is a flight and fare now selected (shown as selected, or in the trip summary / cart)? Report the selected flight, fare brand, fare price and any running total."
+      },
+      "timestamp": "2026-11-13T00:02:37.361330+00:00"
+    },
+    {
+      "level": "info",
+      "message": "Extraction completed successfully",
+      "data": {
+        "category": "extraction",
+        "promptTokens": 10133,
+        "completionTokens": 766,
+        "inferenceTimeMs": 9227
+      },
+      "timestamp": "2026-11-13T00:02:46.588751+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 1023,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "5FE2FDF151F0B064513AEC32BCE7666C"
+      },
+      "timestamp": "2026-11-13T00:02:47.261607+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 1038,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "5FE2FDF151F0B064513AEC32BCE7666C"
+      },
+      "timestamp": "2026-11-13T00:02:47.269239+00:00"
+    },
+    {
+      "level": "info",
+      "message": "Act inference completed",
+      "data": {
+        "category": "action",
+        "promptTokens": 10410,
+        "completionTokens": 402,
+        "reasoningTokens": 0,
+        "cachedInputTokens": 0,
+        "inferenceTimeMs": 4406
+      },
+      "timestamp": "2026-11-13T00:02:51.678469+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 1064,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "5FE2FDF151F0B064513AEC32BCE7666C"
+      },
+      "timestamp": "2026-11-13T00:02:55.230171+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 1079,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "5FE2FDF151F0B064513AEC32BCE7666C"
+      },
+      "timestamp": "2026-11-13T00:02:55.234833+00:00"
+    },
+    {
+      "level": "info",
+      "message": "Starting extraction using an accessibility snapshot",
+      "data": {
+        "category": "extraction",
+        "instruction": "We want the flight departing 4:45pm and arriving 8:10pm (VA 470) on its cheapest fare. Is a flight and fare now selected (shown as selected, or in the trip summary / cart)? Report the selected flight, fare brand, fare price and any running total."
+      },
+      "timestamp": "2026-11-13T00:02:55.238043+00:00"
+    },
+    {
+      "level": "info",
+      "message": "Extraction completed successfully",
+      "data": {
+        "category": "extraction",
+        "promptTokens": 11440,
+        "completionTokens": 9404,
+        "inferenceTimeMs": 81960
+      },
+      "timestamp": "2026-11-13T00:04:17.198612+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 1095,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "5FE2FDF151F0B064513AEC32BCE7666C"
+      },
+      "timestamp": "2026-11-13T00:04:17.895784+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 1110,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "5FE2FDF151F0B064513AEC32BCE7666C"
+      },
+      "timestamp": "2026-11-13T00:04:17.901002+00:00"
+    },
+    {
+      "level": "info",
+      "message": "Act inference completed",
+      "data": {
+        "category": "action",
+        "promptTokens": 11711,
+        "completionTokens": 354,
+        "reasoningTokens": 0,
+        "cachedInputTokens": 0,
+        "inferenceTimeMs": 4300
+      },
+      "timestamp": "2026-11-13T00:04:22.204319+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 1136,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "5FE2FDF151F0B064513AEC32BCE7666C"
+      },
+      "timestamp": "2026-11-13T00:04:26.206866+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 1151,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "5FE2FDF151F0B064513AEC32BCE7666C"
+      },
+      "timestamp": "2026-11-13T00:04:26.211072+00:00"
+    },
+    {
+      "level": "info",
+      "message": "Starting extraction using an accessibility snapshot",
+      "data": {
+        "category": "extraction",
+        "instruction": "We want the flight departing 4:45pm and arriving 8:10pm (VA 470) on its cheapest fare. Is a flight and fare now selected (shown as selected, or in the trip summary / cart)? Report the selected flight, fare brand, fare price and any running total."
+      },
+      "timestamp": "2026-11-13T00:04:26.211931+00:00"
+    },
+    {
+      "level": "info",
+      "message": "Extraction completed successfully",
+      "data": {
+        "category": "extraction",
+        "promptTokens": 3568,
+        "completionTokens": 557,
+        "inferenceTimeMs": 7488
+      },
+      "timestamp": "2026-11-13T00:04:33.699967+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 1183,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "5FE2FDF151F0B064513AEC32BCE7666C"
+      },
+      "timestamp": "2026-11-13T00:04:43.792880+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 1198,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "5FE2FDF151F0B064513AEC32BCE7666C"
+      },
+      "timestamp": "2026-11-13T00:04:43.797585+00:00"
+    },
+    {
+      "level": "info",
+      "message": "Starting extraction using an accessibility snapshot",
+      "data": {
+        "category": "extraction",
+        "instruction": "We are part-way through booking a flight and want to reach the payment page without buying any optional extras. Identify the current booking step, list every optional extra, add-on, upsell, fee or surcharge offered on it with prices (including in any open popup), and report the price summary, running total, validation errors and anything blocking progress."
+      },
+      "timestamp": "2026-11-13T00:04:43.798645+00:00"
+    },
+    {
+      "level": "info",
+      "message": "Extraction completed successfully",
+      "data": {
+        "category": "extraction",
+        "promptTokens": 4627,
+        "completionTokens": 1135,
+        "inferenceTimeMs": 12634
+      },
+      "timestamp": "2026-11-13T00:04:56.433150+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 1268,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "5FE2FDF151F0B064513AEC32BCE7666C"
+      },
+      "timestamp": "2026-11-13T00:05:01.572110+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 1283,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "5FE2FDF151F0B064513AEC32BCE7666C"
+      },
+      "timestamp": "2026-11-13T00:05:01.576935+00:00"
+    },
+    {
+      "level": "info",
+      "message": "Act inference completed",
+      "data": {
+        "category": "action",
+        "promptTokens": 4657,
+        "completionTokens": 309,
+        "reasoningTokens": 0,
+        "cachedInputTokens": 0,
+        "inferenceTimeMs": 4583
+      },
+      "timestamp": "2026-11-13T00:05:06.161138+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 1329,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "5FE2FDF151F0B064513AEC32BCE7666C"
+      },
+      "timestamp": "2026-11-13T00:05:18.830203+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 1344,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "5FE2FDF151F0B064513AEC32BCE7666C"
+      },
+      "timestamp": "2026-11-13T00:05:18.834308+00:00"
+    },
+    {
+      "level": "info",
+      "message": "Starting extraction using an accessibility snapshot",
+      "data": {
+        "category": "extraction",
+        "instruction": "We are part-way through booking a flight and want to reach the payment page without buying any optional extras. Identify the current booking step, list every optional extra, add-on, upsell, fee or surcharge offered on it with prices (including in any open popup), and report the price summary, running total, validation errors and anything blocking progress."
+      },
+      "timestamp": "2026-11-13T00:05:18.835571+00:00"
+    },
+    {
+      "level": "info",
+      "message": "Extraction completed successfully",
+      "data": {
+        "category": "extraction",
+        "promptTokens": 986,
+        "completionTokens": 505,
+        "inferenceTimeMs": 7395
+      },
+      "timestamp": "2026-11-13T00:05:26.231653+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 1387,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "5FE2FDF151F0B064513AEC32BCE7666C"
+      },
+      "timestamp": "2026-11-13T00:05:29.061542+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 1402,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "5FE2FDF151F0B064513AEC32BCE7666C"
+      },
+      "timestamp": "2026-11-13T00:05:29.064970+00:00"
+    },
+    {
+      "level": "info",
+      "message": "Act inference completed",
+      "data": {
+        "category": "action",
+        "promptTokens": 1211,
+        "completionTokens": 286,
+        "reasoningTokens": 0,
+        "cachedInputTokens": 0,
+        "inferenceTimeMs": 3209
+      },
+      "timestamp": "2026-11-13T00:05:32.274908+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 1448,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "5FE2FDF151F0B064513AEC32BCE7666C"
+      },
+      "timestamp": "2026-11-13T00:05:45.186294+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 1463,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "5FE2FDF151F0B064513AEC32BCE7666C"
+      },
+      "timestamp": "2026-11-13T00:05:45.190712+00:00"
+    },
+    {
+      "level": "info",
+      "message": "Starting extraction using an accessibility snapshot",
+      "data": {
+        "category": "extraction",
+        "instruction": "We are part-way through booking a flight and want to reach the payment page without buying any optional extras. Identify the current booking step, list every optional extra, add-on, upsell, fee or surcharge offered on it with prices (including in any open popup), and report the price summary, running total, validation errors and anything blocking progress."
+      },
+      "timestamp": "2026-11-13T00:05:45.191812+00:00"
+    },
+    {
+      "level": "info",
+      "message": "Extraction completed successfully",
+      "data": {
+        "category": "extraction",
+        "promptTokens": 4760,
+        "completionTokens": 717,
+        "inferenceTimeMs": 10230
+      },
+      "timestamp": "2026-11-13T00:05:55.422217+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 1502,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "5FE2FDF151F0B064513AEC32BCE7666C"
+      },
+      "timestamp": "2026-11-13T00:05:57.776003+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 1517,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "5FE2FDF151F0B064513AEC32BCE7666C"
+      },
+      "timestamp": "2026-11-13T00:05:57.779860+00:00"
+    },
+    {
+      "level": "info",
+      "message": "Starting extraction using an accessibility snapshot",
+      "data": {
+        "category": "extraction",
+        "instruction": "Passenger details to use: title Mr; first name Alex; last name Testbooking; gender Male; date of birth 15 June 1988; email alex.testbooking@example.com; mobile phone 0400 000 000 (Australia, +61); country of residence Australia. List the required passenger and contact fields on this page that are still empty or unselected, and for each give the value to enter from those details."
+      },
+      "timestamp": "2026-11-13T00:05:57.781375+00:00"
+    },
+    {
+      "level": "info",
+      "message": "Extraction completed successfully",
+      "data": {
+        "category": "extraction",
+        "promptTokens": 4854,
+        "completionTokens": 1347,
+        "inferenceTimeMs": 12103
+      },
+      "timestamp": "2026-11-13T00:06:09.885129+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 1533,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "5FE2FDF151F0B064513AEC32BCE7666C"
+      },
+      "timestamp": "2026-11-13T00:06:10.432367+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 1548,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "5FE2FDF151F0B064513AEC32BCE7666C"
+      },
+      "timestamp": "2026-11-13T00:06:10.436844+00:00"
+    },
+    {
+      "level": "info",
+      "message": "Act inference completed",
+      "data": {
+        "category": "action",
+        "promptTokens": 4887,
+        "completionTokens": 738,
+        "reasoningTokens": 0,
+        "cachedInputTokens": 0,
+        "inferenceTimeMs": 6483
+      },
+      "timestamp": "2026-11-13T00:06:16.920809+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 1572,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "5FE2FDF151F0B064513AEC32BCE7666C"
+      },
+      "timestamp": "2026-11-13T00:06:17.916190+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 1587,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "5FE2FDF151F0B064513AEC32BCE7666C"
+      },
+      "timestamp": "2026-11-13T00:06:17.920653+00:00"
+    },
+    {
+      "level": "info",
+      "message": "Act inference completed",
+      "data": {
+        "category": "action",
+        "promptTokens": 4888,
+        "completionTokens": 243,
+        "reasoningTokens": 0,
+        "cachedInputTokens": 0,
+        "inferenceTimeMs": 3914
+      },
+      "timestamp": "2026-11-13T00:06:21.836574+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 1632,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "5FE2FDF151F0B064513AEC32BCE7666C"
+      },
+      "timestamp": "2026-11-13T00:06:23.502814+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 1647,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "5FE2FDF151F0B064513AEC32BCE7666C"
+      },
+      "timestamp": "2026-11-13T00:06:23.506607+00:00"
+    },
+    {
+      "level": "info",
+      "message": "Act inference completed",
+      "data": {
+        "category": "action",
+        "promptTokens": 4904,
+        "completionTokens": 437,
+        "reasoningTokens": 0,
+        "cachedInputTokens": 0,
+        "inferenceTimeMs": 5291
+      },
+      "timestamp": "2026-11-13T00:06:28.798903+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 1692,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "5FE2FDF151F0B064513AEC32BCE7666C"
+      },
+      "timestamp": "2026-11-13T00:06:30.466827+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 1707,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "5FE2FDF151F0B064513AEC32BCE7666C"
+      },
+      "timestamp": "2026-11-13T00:06:30.471715+00:00"
+    },
+    {
+      "level": "info",
+      "message": "Act inference completed",
+      "data": {
+        "category": "action",
+        "promptTokens": 4918,
+        "completionTokens": 755,
+        "reasoningTokens": 0,
+        "cachedInputTokens": 0,
+        "inferenceTimeMs": 6411
+      },
+      "timestamp": "2026-11-13T00:06:36.884483+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 1731,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "5FE2FDF151F0B064513AEC32BCE7666C"
+      },
+      "timestamp": "2026-11-13T00:06:37.850001+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 1746,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "5FE2FDF151F0B064513AEC32BCE7666C"
+      },
+      "timestamp": "2026-11-13T00:06:37.854133+00:00"
+    },
+    {
+      "level": "info",
+      "message": "Act inference completed",
+      "data": {
+        "category": "action",
+        "promptTokens": 4930,
+        "completionTokens": 920,
+        "reasoningTokens": 0,
+        "cachedInputTokens": 0,
+        "inferenceTimeMs": 8352
+      },
+      "timestamp": "2026-11-13T00:06:46.207274+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 1791,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "5FE2FDF151F0B064513AEC32BCE7666C"
+      },
+      "timestamp": "2026-11-13T00:06:47.981759+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 1806,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "5FE2FDF151F0B064513AEC32BCE7666C"
+      },
+      "timestamp": "2026-11-13T00:06:47.986545+00:00"
+    },
+    {
+      "level": "info",
+      "message": "Act inference completed",
+      "data": {
+        "category": "action",
+        "promptTokens": 4759,
+        "completionTokens": 300,
+        "reasoningTokens": 0,
+        "cachedInputTokens": 0,
+        "inferenceTimeMs": 3653
+      },
+      "timestamp": "2026-11-13T00:06:51.641062+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 1827,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "5FE2FDF151F0B064513AEC32BCE7666C"
+      },
+      "timestamp": "2026-11-13T00:06:52.117932+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 1842,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "5FE2FDF151F0B064513AEC32BCE7666C"
+      },
+      "timestamp": "2026-11-13T00:06:52.123494+00:00"
+    },
+    {
+      "level": "info",
+      "message": "Starting extraction using an accessibility snapshot",
+      "data": {
+        "category": "extraction",
+        "instruction": "Passenger details to use: title Mr; first name Alex; last name Testbooking; gender Male; date of birth 15 June 1988; email alex.testbooking@example.com; mobile phone 0400 000 000 (Australia, +61); country of residence Australia. List the required passenger and contact fields on this page that are still empty or unselected, and for each give the value to enter from those details."
+      },
+      "timestamp": "2026-11-13T00:06:52.126457+00:00"
+    },
+    {
+      "level": "info",
+      "message": "Extraction completed successfully",
+      "data": {
+        "category": "extraction",
+        "promptTokens": 4534,
+        "completionTokens": 918,
+        "inferenceTimeMs": 11591
+      },
+      "timestamp": "2026-11-13T00:07:03.718457+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 1858,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "5FE2FDF151F0B064513AEC32BCE7666C"
+      },
+      "timestamp": "2026-11-13T00:07:04.263536+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 1873,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "5FE2FDF151F0B064513AEC32BCE7666C"
+      },
+      "timestamp": "2026-11-13T00:07:04.267374+00:00"
+    },
+    {
+      "level": "info",
+      "message": "Act inference completed",
+      "data": {
+        "category": "action",
+        "promptTokens": 4771,
+        "completionTokens": 363,
+        "reasoningTokens": 0,
+        "cachedInputTokens": 0,
+        "inferenceTimeMs": 4267
+      },
+      "timestamp": "2026-11-13T00:07:08.536701+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 1919,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "5FE2FDF151F0B064513AEC32BCE7666C"
+      },
+      "timestamp": "2026-11-13T00:07:21.701724+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 1934,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "5FE2FDF151F0B064513AEC32BCE7666C"
+      },
+      "timestamp": "2026-11-13T00:07:21.707064+00:00"
+    },
+    {
+      "level": "info",
+      "message": "Starting extraction using an accessibility snapshot",
+      "data": {
+        "category": "extraction",
+        "instruction": "We are part-way through booking a flight and want to reach the payment page without buying any optional extras. Identify the current booking step, list every optional extra, add-on, upsell, fee or surcharge offered on it with prices (including in any open popup), and report the price summary, running total, validation errors and anything blocking progress."
+      },
+      "timestamp": "2026-11-13T00:07:21.711437+00:00"
+    },
+    {
+      "level": "info",
+      "message": "Extraction completed successfully",
+      "data": {
+        "category": "extraction",
+        "promptTokens": 33536,
+        "completionTokens": 1106,
+        "inferenceTimeMs": 13443
+      },
+      "timestamp": "2026-11-13T00:07:35.154956+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 1975,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "5FE2FDF151F0B064513AEC32BCE7666C"
+      },
+      "timestamp": "2026-11-13T00:07:38.445428+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 1990,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "5FE2FDF151F0B064513AEC32BCE7666C"
+      },
+      "timestamp": "2026-11-13T00:07:38.451298+00:00"
+    },
+    {
+      "level": "info",
+      "message": "Act inference completed",
+      "data": {
+        "category": "action",
+        "promptTokens": 33502,
+        "completionTokens": 300,
+        "reasoningTokens": 0,
+        "cachedInputTokens": 0,
+        "inferenceTimeMs": 4893
+      },
+      "timestamp": "2026-11-13T00:07:43.347000+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 2036,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "5FE2FDF151F0B064513AEC32BCE7666C"
+      },
+      "timestamp": "2026-11-13T00:07:56.181684+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 2051,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "5FE2FDF151F0B064513AEC32BCE7666C"
+      },
+      "timestamp": "2026-11-13T00:07:56.186053+00:00"
+    },
+    {
+      "level": "info",
+      "message": "Starting extraction using an accessibility snapshot",
+      "data": {
+        "category": "extraction",
+        "instruction": "We are part-way through booking a flight and want to reach the payment page without buying any optional extras. Identify the current booking step, list every optional extra, add-on, upsell, fee or surcharge offered on it with prices (including in any open popup), and report the price summary, running total, validation errors and anything blocking progress."
+      },
+      "timestamp": "2026-11-13T00:07:56.188712+00:00"
+    },
+    {
+      "level": "info",
+      "message": "Extraction completed successfully",
+      "data": {
+        "category": "extraction",
+        "promptTokens": 822,
+        "completionTokens": 712,
+        "inferenceTimeMs": 9276
+      },
+      "timestamp": "2026-11-13T00:08:05.465784+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 2092,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "5FE2FDF151F0B064513AEC32BCE7666C"
+      },
+      "timestamp": "2026-11-13T00:08:08.505573+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 2107,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "5FE2FDF151F0B064513AEC32BCE7666C"
+      },
+      "timestamp": "2026-11-13T00:08:08.513396+00:00"
+    },
+    {
+      "level": "info",
+      "message": "Act inference completed",
+      "data": {
+        "category": "action",
+        "promptTokens": 1022,
+        "completionTokens": 290,
+        "reasoningTokens": 0,
+        "cachedInputTokens": 0,
+        "inferenceTimeMs": 4134
+      },
+      "timestamp": "2026-11-13T00:08:12.649808+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 2153,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "5FE2FDF151F0B064513AEC32BCE7666C"
+      },
+      "timestamp": "2026-11-13T00:08:25.613440+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 2168,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "5FE2FDF151F0B064513AEC32BCE7666C"
+      },
+      "timestamp": "2026-11-13T00:08:25.617901+00:00"
+    },
+    {
+      "level": "info",
+      "message": "Starting extraction using an accessibility snapshot",
+      "data": {
+        "category": "extraction",
+        "instruction": "We are part-way through booking a flight and want to reach the payment page without buying any optional extras. Identify the current booking step, list every optional extra, add-on, upsell, fee or surcharge offered on it with prices (including in any open popup), and report the price summary, running total, validation errors and anything blocking progress."
+      },
+      "timestamp": "2026-11-13T00:08:25.619107+00:00"
+    },
+    {
+      "level": "info",
+      "message": "Extraction completed successfully",
+      "data": {
+        "category": "extraction",
+        "promptTokens": 4704,
+        "completionTokens": 1051,
+        "inferenceTimeMs": 11490
+      },
+      "timestamp": "2026-11-13T00:08:37.110558+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 2211,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "5FE2FDF151F0B064513AEC32BCE7666C"
+      },
+      "timestamp": "2026-11-13T00:08:39.980249+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 2226,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "5FE2FDF151F0B064513AEC32BCE7666C"
+      },
+      "timestamp": "2026-11-13T00:08:39.985781+00:00"
+    },
+    {
+      "level": "info",
+      "message": "Act inference completed",
+      "data": {
+        "category": "action",
+        "promptTokens": 4711,
+        "completionTokens": 300,
+        "reasoningTokens": 0,
+        "cachedInputTokens": 0,
+        "inferenceTimeMs": 4186
+      },
+      "timestamp": "2026-11-13T00:08:44.172868+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 2317,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "5FE2FDF151F0B064513AEC32BCE7666C"
+      },
+      "timestamp": "2026-11-13T00:08:57.642924+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 2344,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "5FE2FDF151F0B064513AEC32BCE7666C"
+      },
+      "timestamp": "2026-11-13T00:08:57.657826+00:00"
+    },
+    {
+      "level": "info",
+      "message": "Starting extraction using an accessibility snapshot",
+      "data": {
+        "category": "extraction",
+        "instruction": "We are part-way through booking a flight and want to reach the payment page without buying any optional extras. Identify the current booking step, list every optional extra, add-on, upsell, fee or surcharge offered on it with prices (including in any open popup), and report the price summary, running total, validation errors and anything blocking progress."
+      },
+      "timestamp": "2026-11-13T00:08:57.660337+00:00"
+    },
+    {
+      "level": "info",
+      "message": "Extraction completed successfully",
+      "data": {
+        "category": "extraction",
+        "promptTokens": 6185,
+        "completionTokens": 952,
+        "inferenceTimeMs": 11909
+      },
+      "timestamp": "2026-11-13T00:09:09.570606+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 2439,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "5FE2FDF151F0B064513AEC32BCE7666C"
+      },
+      "timestamp": "2026-11-13T00:09:14.476997+00:00"
+    },
+    {
+      "level": "error",
+      "message": "CDP response failed",
+      "data": {
+        "requestId": 2466,
+        "method": "DOM.getFrameOwner",
+        "error": "-32000 Frame with the given id was not found.",
+        "targetId": "5FE2FDF151F0B064513AEC32BCE7666C"
+      },
+      "timestamp": "2026-11-13T00:09:14.485729+00:00"
+    },
+    {
+      "level": "info",
+      "message": "Starting extraction using an accessibility snapshot",
+      "data": {
+        "category": "extraction",
+        "instruction": "Extract the booking's price summary from this payment page: flights and fare, fare subtotal, optional extras included, any other fees, taxes, total due and currency. Also list every card or payment-method surcharge/fee advertised (e.g. credit card fee percentages), and report if a login, CAPTCHA or bot check is blocking the page. Do not interact with the page."
+      },
+      "timestamp": "2026-11-13T00:09:14.488447+00:00"
+    },
+    {
+      "level": "info",
+      "message": "Extraction completed successfully",
+      "data": {
+        "category": "extraction",
+        "promptTokens": 6210,
+        "completionTokens": 1078,
+        "inferenceTimeMs": 11054
+      },
+      "timestamp": "2026-11-13T00:09:25.543177+00:00"
+    }
+  ]
+}

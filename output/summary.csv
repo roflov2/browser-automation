@@ -3,3 +3,4 @@ run_at,site,status,message,items_added,expected_subtotal,checkout_subtotal,check
 2026-11-12T23:26:52+00:00,https://onacoffee.com.au,ok,,3,59.0,59.0,59.0,AUD,0.0,not calculated (address required),False,output/onacoffee.com.au/20261113-102310
 2026-11-12T23:29:55+00:00,https://blackboardcoffee.com.au,ok,,3,69.0,69.0,69.0,AUD,0.0,not calculated (address required),False,output/blackboardcoffee.com.au/20261113-102652
 2026-11-12T23:33:28+00:00,https://www.padrecoffee.com.au,ok,,3,67.0,67.0,67.0,AUD,0.0,not calculated (address required),False,output/padrecoffee.com.au/20261113-102955
+2026-11-13T00:09:25+00:00,https://www.virginaustralia.com/au/en/,ok,,1,385.0,385.0,385.0,AUD,0.0,n/a (flight booking),False,output/virginaustralia.com/20261113-105522

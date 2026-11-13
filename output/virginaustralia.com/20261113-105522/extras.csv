@@ -1,0 +1,11 @@
+step,step_type,step_heading,category,label,price_display,price,price_basis,selected_by_default,mandatory
+1,review,Review your flight selection,flexibility,"Cancel For Any Reason (100% of airfare refundable, Get AUD 385 refunded)",+AUD 108 total,108.0,total,False,False
+1,review,Review your flight selection,flexibility,"Cancel For Any Reason (80% of airfare refundable, Get AUD 308 refunded)",+AUD 58 total,58.0,total,False,False
+3,passenger_details,Who will be travelling?,seat_selection,Economy X,,,,False,False
+4,seats,See if your favourite seats are available,seat_selection,Economy X seat,$35.00 - $84.00,35.0,,False,False
+4,seats,See if your favourite seats are available,seat_selection,Preferred seat,$11.00 - $15.00,11.0,,False,False
+4,seats,See if your favourite seats are available,seat_selection,Standard seat,$12.00,12.0,,False,False
+6,extras,Would you like to customise your trip?,checked_baggage,Add checked baggage,,,,False,False
+6,extras,Would you like to customise your trip?,travel_insurance,Protect your trip with Cover-More,$17.50,17.5,Per guest from,False,False
+6,extras,Would you like to customise your trip?,carbon_offset,Help protect the places you love to explore,$11.11,11.11,Per guest from,False,False
+7,payment,Let’s do one final check!,lounge,Amex Velocity Platinum Card (Lounge access),$440,440.0,annual card fee,False,False
