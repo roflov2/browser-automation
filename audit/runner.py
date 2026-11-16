@@ -1,0 +1,198 @@
+"""Runs any workflow: one browser and Stagehand session, then one audited run per target URL."""
+
+import argparse
+import asyncio
+import contextlib
+import json
+import os
+from datetime import datetime, timezone
+from pathlib import Path
+from time import perf_counter
+from urllib.parse import urlparse
+
+try:
+    import psutil
+except ImportError:
+    psutil = None
+
+from browserbase import Browserbase
+from stagehand import (
+    Page,
+    Stagehand,
+    StagehandClientLoggingConfig,
+    browserbase as stagehand_browserbase,
+    local_browser,
+)
+
+from .core import OUTPUT_ROOT, Blocked, SiteResult, update_summary, write_reports
+from .page import install_noise_filter, is_noise, pause_for_login, settle
+from .workflow import Workflow
+
+CHROME_PROFILE_DIR = Path(".chrome-profile")
+
+
+class ResourceMonitor:
+    """Samples this process's memory and CPU once a second (needs psutil; empty without it)."""
+
+    def __init__(self) -> None:
+        self.cpu_usage: list[float] = []
+        self.memory_usage: list[float] = []
+        self._process = psutil.Process(os.getpid()) if psutil else None
+
+    def start(self) -> asyncio.Task[None]:
+        async def sample() -> None:
+            if self._process is None:
+                return
+            self._process.cpu_percent(interval=None)  # prime baseline measurement
+            while True:
+                await asyncio.sleep(1)
+                self.memory_usage.append(self._process.memory_info().rss / (1024 * 1024))
+                self.cpu_usage.append(self._process.cpu_percent(interval=None))
+
+        return asyncio.create_task(sample())
+
+    def summary(self) -> dict[str, float]:
+        if not self.memory_usage:
+            return {"avg_memory_mb": 0.0, "peak_memory_mb": 0.0, "avg_cpu_percent": 0.0, "data_points": 0}
+        return {
+            "avg_memory_mb": round(sum(self.memory_usage) / len(self.memory_usage), 2),
+            "peak_memory_mb": round(max(self.memory_usage), 2),
+            "avg_cpu_percent": round(sum(self.cpu_usage) / len(self.cpu_usage), 2),
+            "data_points": len(self.cpu_usage),
+        }
+
+
+async def launch_browser(workflow: Workflow, local: bool, headless: bool):
+    """Browserbase if its credentials are set (and not `local`), otherwise local Chrome.
+
+    Returns (browser, describe), where describe() gives the Browserbase session details for session.json.
+    """
+    bb_api_key, bb_project_id = os.getenv("BROWSERBASE_API_KEY"), os.getenv("BROWSERBASE_PROJECT_ID")
+    if bb_api_key and bb_project_id and not local:
+        client = Browserbase(api_key=bb_api_key)
+        session_id = client.sessions.create(project_id=bb_project_id).id
+        browser = await stagehand_browserbase.connect(api_key=bb_api_key, session_id=session_id)
+
+        def describe() -> dict:
+            info = client.sessions.retrieve(session_id)
+            return {"browserbase_session": {"id": info.id, "status": info.status, "region": info.region}}
+
+        return browser, describe
+
+    options: dict = {"headless": headless}
+    if workflow.persistent_profile:
+        CHROME_PROFILE_DIR.mkdir(parents=True, exist_ok=True)
+        options["user_data_dir"] = str(CHROME_PROFILE_DIR.resolve())
+    if workflow.viewport:
+        options["viewport_width"], options["viewport_height"] = workflow.viewport
+    return await local_browser.launch(**options), dict
+
+
+async def audit_site(workflow: Workflow, stagehand: Stagehand, page: Page, browser, url: str) -> SiteResult:
+    """One run of the workflow against one URL. Never raises: the outcome is in the result's status."""
+    domain = urlparse(url).netloc.removeprefix("www.")
+    out_dir = OUTPUT_ROOT / workflow.output_folder(url) / datetime.now().strftime("%Y%m%d-%H%M%S")
+    out_dir.mkdir(parents=True, exist_ok=True)
+    result = workflow.result_class(site=url, out_dir=out_dir)
+
+    if workflow.clear_cookies:
+        with contextlib.suppress(Exception):
+            # "domain" clears only the storefront's cookies, so corporate SSO/proxy tokens persist
+            await browser.context.clear_cookies(**({"domain": domain} if workflow.clear_cookies == "domain" else {}))
+
+    try:
+        await workflow.run(stagehand, page, url, result)
+    except Blocked as error:
+        result.status, result.message = "blocked", str(error)
+        print(f"  Blocked: {result.message}")
+    except Exception as error:
+        result.status, result.message = "error", f"{type(error).__name__}: {error}"
+        print(f"  ERROR: {result.message}")
+        with contextlib.suppress(Exception):
+            await page.screenshot(path=str(out_dir / "error.png"))
+
+    write_reports(result, workflow.item_fields)
+    if result.comparison:
+        workflow.summarise(result)
+    return result
+
+
+async def run(workflow: Workflow, args: argparse.Namespace) -> None:
+    api_key = os.getenv("GOOGLE_GENERATIVE_AI_API_KEY")
+    if not api_key:
+        raise SystemExit("GOOGLE_GENERATIVE_AI_API_KEY is not set (copy .env.example to .env and fill it in)")
+    model = "google/" + os.getenv("GEMINI_MODEL", "gemini-3.8-flash").removeprefix("google/")
+    targets = [url if url.startswith("http") else f"https://{url}" for url in workflow.targets()]
+
+    install_noise_filter()
+    history: list[dict] = []
+
+    def record(log) -> None:
+        if is_noise(getattr(log, "message", "") or ""):
+            return
+        entry = log.model_dump(mode="json")
+        entry["timestamp"] = datetime.now(timezone.utc).isoformat()
+        history.append(entry)
+
+    browser, describe_browser = await launch_browser(
+        workflow,
+        local=args.local or args.login,
+        headless=not args.login and os.getenv("HEADLESS") == "true",
+    )
+    monitor = ResourceMonitor()
+    monitor_task = monitor.start()
+    try:
+        stagehand = await Stagehand.create(
+            browser=browser,
+            model=model,
+            model_api_key=api_key,
+            system_prompt=workflow.system_prompt,
+            logging=StagehandClientLoggingConfig(level=workflow.log_level, format="json", on_log=record),
+        )
+        try:
+            page = (await browser.context.pages())[0]
+
+            if args.login:
+                print(f"\n=== Preloading a login for {targets[0]} into {CHROME_PROFILE_DIR.resolve()} ===")
+                await page.goto(targets[0])
+                await settle(page, 2000)
+                if await pause_for_login(page, "Sign in to the site in the open browser window."):
+                    print(f"  Login session saved to {CHROME_PROFILE_DIR.resolve()}")
+                else:
+                    print("  --login needs an interactive terminal and a visible browser (unset HEADLESS).")
+                return
+
+            for url in targets:
+                history.clear()
+                start = perf_counter()
+                before = await stagehand.metrics()
+                result = await audit_site(workflow, stagehand, page, browser, url)
+                after = before
+                with contextlib.suppress(Exception):
+                    after = await stagehand.metrics()
+
+                session = {
+                    "site": url,
+                    "workflow": workflow.name,
+                    "status": result.status,
+                    "message": result.message,
+                    "execution_time_ms": round((perf_counter() - start) * 1000),
+                    "tokens_used": (after.total_prompt_tokens + after.total_completion_tokens)
+                    - (before.total_prompt_tokens + before.total_completion_tokens),
+                    "metrics_cumulative": after.model_dump(mode="json"),
+                    "resource_usage": monitor.summary(),
+                    "history": list(history),
+                    **describe_browser(),
+                }
+                (result.out_dir / "session.json").write_text(json.dumps(session, indent=2), encoding="utf-8")
+                update_summary(result)
+                print(f"  Status: {result.status} {result.message} -> {result.out_dir}")
+        finally:
+            with contextlib.suppress(Exception):
+                await stagehand.close()
+    finally:
+        monitor_task.cancel()
+        with contextlib.suppress(Exception):
+            await browser.close()
+
+    print(f"\nSummary written to {OUTPUT_ROOT / 'summary.csv'}")
