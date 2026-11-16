@@ -8,7 +8,10 @@ import os
 from datetime import datetime, timezone
 from pathlib import Path
 from time import perf_counter
+from typing import Any
 from urllib.parse import urlparse
+
+from pydantic import BaseModel
 
 try:
     import psutil
@@ -62,6 +65,40 @@ class ResourceMonitor:
         }
 
 
+class RecordingStagehand:
+    """A Stagehand stand-in that appends every extract() result to the run's extractions.jsonl.
+
+    The file is the evidence of what the model actually read, and doubles as a test fixture.
+    Everything else is passed straight through to the real client.
+    """
+
+    def __init__(self, stagehand: Stagehand) -> None:
+        self._stagehand = stagehand
+        self._path: Path | None = None
+
+    def record_to(self, path: Path | None) -> None:
+        """Start writing to `path` (one file per run); None stops recording."""
+        self._path = path
+
+    async def extract(self, instruction: str, schema: type[BaseModel], **options: Any) -> Any:
+        result = await self._stagehand.extract(instruction, schema, **options)
+        if self._path is not None:
+            metadata = getattr(result, "metadata", None)
+            entry = {
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "schema": schema.__name__,
+                "instruction": instruction,
+                "data": result.data.model_dump(mode="json"),
+                "metadata": metadata.model_dump(mode="json") if metadata is not None else None,
+            }
+            with self._path.open("a", encoding="utf-8") as f:
+                f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+        return result
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._stagehand, name)
+
+
 async def launch_browser(workflow: Workflow, local: bool, headless: bool):
     """Browserbase if its credentials are set (and not `local`), otherwise local Chrome.
 
@@ -94,6 +131,8 @@ async def audit_site(workflow: Workflow, stagehand: Stagehand, page: Page, brows
     out_dir = OUTPUT_ROOT / workflow.output_folder(url) / datetime.now().strftime("%Y%m%d-%H%M%S")
     out_dir.mkdir(parents=True, exist_ok=True)
     result = workflow.result_class(site=url, out_dir=out_dir)
+    if isinstance(stagehand, RecordingStagehand):
+        stagehand.record_to(out_dir / "extractions.jsonl")
 
     if workflow.clear_cookies:
         with contextlib.suppress(Exception):
@@ -142,12 +181,14 @@ async def run(workflow: Workflow, args: argparse.Namespace) -> None:
     monitor = ResourceMonitor()
     monitor_task = monitor.start()
     try:
-        stagehand = await Stagehand.create(
-            browser=browser,
-            model=model,
-            model_api_key=api_key,
-            system_prompt=workflow.system_prompt,
-            logging=StagehandClientLoggingConfig(level=workflow.log_level, format="json", on_log=record),
+        stagehand = RecordingStagehand(
+            await Stagehand.create(
+                browser=browser,
+                model=model,
+                model_api_key=api_key,
+                system_prompt=workflow.system_prompt,
+                logging=StagehandClientLoggingConfig(level=workflow.log_level, format="json", on_log=record),
+            )
         )
         try:
             page = (await browser.context.pages())[0]
