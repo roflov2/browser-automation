@@ -1,0 +1,37 @@
+{
+  "site": "https://www.ubereats.com/au",
+  "store_name": "Grease Monkey",
+  "status": "ok",
+  "message": "",
+  "execution_time_ms": 255292,
+  "tokens_used": 312205.0,
+  "metrics_cumulative": {
+    "act_prompt_tokens": 75504.0,
+    "act_completion_tokens": 2246.0,
+    "act_reasoning_tokens": 0.0,
+    "act_cached_input_tokens": 0.0,
+    "act_inference_time_ms": 22665.0,
+    "extract_prompt_tokens": 206307.0,
+    "extract_completion_tokens": 28148.0,
+    "extract_reasoning_tokens": 0.0,
+    "extract_cached_input_tokens": 0.0,
+    "extract_inference_time_ms": 175162.0,
+    "observe_prompt_tokens": 0.0,
+    "observe_completion_tokens": 0.0,
+    "observe_reasoning_tokens": 0.0,
+    "observe_cached_input_tokens": 0.0,
+    "observe_inference_time_ms": 0.0,
+    "total_prompt_tokens": 281811.0,
+    "total_completion_tokens": 30394.0,
+    "total_reasoning_tokens": 0.0,
+    "total_cached_input_tokens": 0.0,
+    "total_inference_time_ms": 197827.0
+  },
+  "resource_usage": {
+    "avg_memory_mb": 70.0,
+    "peak_memory_mb": 73.7,
+    "avg_cpu_percent": 0.11,
+    "data_points": 255
+  },
+  "history": []
+}

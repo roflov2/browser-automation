@@ -1,0 +1,10 @@
+step,step_type,step_heading,category,label,price_display,price,price_basis,selected_by_default,mandatory
+1,review,Review your flight selection,flexibility,Cancel For Any Reason - 100% of airfare refundable,+AUD 48,48.0,total,False,False
+1,review,Review your flight selection,flexibility,Cancel For Any Reason - 80% of airfare refundable,+AUD 26,26.0,total,False,False
+4,seats,See if your favourite seats are available,seat_selection,Preferred seat (Rows 3-4),$24,24.0,per passenger per flight,False,False
+4,seats,See if your favourite seats are available,seat_selection,Preferred seat (Row 5),$19,19.0,per passenger per flight,False,False
+4,seats,See if your favourite seats are available,seat_selection,Standard seat,Complimentary,,per passenger per flight,False,False
+6,extras,Would you like to customise your trip?,checked_baggage,Add checked baggage,,,,False,False
+6,extras,Would you like to customise your trip?,travel_insurance,Protect your trip with Cover-More,$17.50,17.5,Per guest from,False,False
+6,extras,Would you like to customise your trip?,carbon_offset,Help protect the places you love to explore,$3.09,3.09,Per guest from,False,False
+7,payment,Let’s do one final check!,other,"Amex Velocity Platinum Card - YES, I'm interested and would like to find out more about the card after checkout.",,,,False,False

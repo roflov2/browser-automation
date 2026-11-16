@@ -1,0 +1,122 @@
+name,category,price,sold_out,is_food_or_drink
+Greasy's,Featured items,$22.49,False,True
+Double Deluxe,Featured items,$27.00,False,True
+Regular Meatlovers,Featured items,$27.00,False,True
+Dirty Bird,Featured items,$23.49,False,True
+Smash Test,Featured items,$28.00,False,True
+Regular Spitfire,Featured items,$26.00,False,True
+Regular Detroiter,Featured items,$25.00,False,True
+Regular Indy 500,Featured items,$26.00,False,True
+Pile Up,Featured items,$23.00,False,True
+Greasy's Loaded Fries,Featured items,$18.49,False,True
+Philly Cheesesteak,Featured items,$27.00,False,True
+Regular Motor City,Featured items,$25.00,False,True
+Greasy Dog,Featured items,$18.99,False,True
+Truffle Mac & Cheese Bites,Featured items,$16.49,False,True
+Jalapeno Poppers,Featured items,$16.49,False,True
+Coke Can,Featured items,$5.49,False,True
+Greasy's,Picked for you,$22.49,False,True
+Double Deluxe,Picked for you,$27.00,False,True
+Dirty Bird,Picked for you,$23.49,False,True
+Truffle Mac & Cheese Bites,Picked for you,$16.49,False,True
+Regular Meatlovers,Picked for you,$27.00,False,True
+Hex Mex,Greasy's Burgers,$28.00,False,True
+Greasy's,Greasy's Burgers,$22.49,False,True
+Dirty Bird,Greasy's Burgers,$23.49,False,True
+Nimbin,Greasy's Burgers,$23.49,False,True
+Double Deluxe,Greasy's Burgers,$27.00,False,True
+Greasy Vegan,Greasy's Burgers,$23.49,False,True
+Full Service,Greasy's Burgers,$28.00,False,True
+The Parmy,Greasy's Burgers,$28.00,False,True
+Smash Test,Greasy's Burgers,$28.00,False,True
+Philly Cheesesteak,Greasy's Burgers,$27.00,False,True
+Pile Up,Greasy's Burgers,$23.00,False,True
+Firebird,Greasy's Burgers,$25.00,False,True
+Cheeseburger,Greasy's Burgers,$20.99,False,True
+Greasy Dog,Greasy's Burgers,$18.99,False,True
+Greasy's Chips,Snacks,$11.99,False,True
+Vegan Chips,Snacks,$11.99,False,True
+Greasy's Loaded Fries,Snacks,$18.49,False,True
+Truffle Mac & Cheese Bites,Snacks,$16.49,False,True
+Jalapeno Poppers,Snacks,$16.49,False,True
+Hot Wings,Snacks,$13.99,False,True
+Sweet Potato Chips,Snacks,$15.49,False,True
+Mash & Gravy,Snacks,$9.99,False,True
+Onion Rings,Snacks,$12.99,False,True
+Cheesy Garlic Bread,Snacks,$15.49,False,True
+Grilled Corn,Snacks,$16.49,False,True
+Marinated Pickles,Snacks,$13.99,False,True
+Cauliflower Bites,Snacks,$16.49,False,True
+Single Hawaii 5-0,HAWAII 5-0,$16.49,False,True
+Regular Hawaii 5-0,HAWAII 5-0,$25.00,False,True
+Family Hawaii 5-0,HAWAII 5-0,$38.49,False,True
+Single Meatlovers,MEATLOVERS,$18.99,False,True
+Regular Meatlovers,MEATLOVERS,$27.00,False,True
+Family Meatlovers,MEATLOVERS,$40.99,False,True
+Single Continental,CONTINENTAL,$16.49,False,True
+Regular Continental,CONTINENTAL,$25.00,False,True
+Family Continental,CONTINENTAL,$38.49,False,True
+Single Detroiter,DETROITER,$16.49,False,True
+Regular Detroiter,DETROITER,$25.00,False,True
+Family Detroiter,DETROITER,$38.49,False,True
+Single Supreme,SUPREME,$17.49,False,True
+Regular Supreme,SUPREME,$26.00,False,True
+Family Supreme,SUPREME,$39.49,False,True
+Single Indy 500,INDY 500,$17.49,False,True
+Regular Indy 500,INDY 500,$26.00,False,True
+Family Indy 500,INDY 500,$39.49,False,True
+Single Garlic Prawn,GARLIC PRAWN,$16.49,False,True
+Regular Garlic Prawn,GARLIC PRAWN,$25.00,False,True
+Family Garlic Prawn,GARLIC PRAWN,$38.49,False,True
+Single Motor City,MOTOR CITY,$16.49,False,True
+Regular Motor City,MOTOR CITY,$25.00,False,True
+Family Motor City,MOTOR CITY,$38.49,False,True
+Single Tesla,TESLA,$18.99,False,True
+Regular Tesla,TESLA,$27.00,False,True
+Family Tesla,TESLA,$40.99,False,True
+Single Cheese,CHEESE,$11.99,False,True
+Regular Cheese,CHEESE,$25.00,False,True
+Family Cheese,CHEESE,$34.99,False,True
+Single Spitfire,SPITFIRE,$17.49,False,True
+Regular Spitfire,SPITFIRE,$26.00,False,True
+Family Spitfire,SPITFIRE,$39.49,False,True
+Sweet Slice,Desserts,$15.49,False,True
+Chocolate Nut Brownie,Desserts,$15.49,False,True
+New York Cheesecake,Desserts,$15.49,False,True
+Greasy's Sauce,Sauces,$3.49,False,True
+GM Relish,Sauces,$3.49,False,True
+Smokey Maple BBQ,Sauces,$3.49,False,True
+Habanero Mayo,Sauces,$3.49,False,True
+Hot Sauce,Sauces,$3.49,False,True
+Gravy,Sauces,$3.49,False,True
+Cheese Sauce,Sauces,$4.99,False,True
+Aioli,Sauces,$3.49,False,True
+Blue Cheese Mayo,Sauces,$3.00,False,True
+Jalapeno Ranch,Sauces,$3.49,False,True
+Greasy's Vegan Sauce,Sauces,$0.00,False,True
+Kids Beef Burger,Little Chimps,$16.49,False,True
+Kids Chicken Burger,Little Chimps,$16.49,False,True
+Kids Nuggets & Chips,Little Chimps,$16.49,False,True
+Kids Ham & Pineapple,Little Chimps,$16.49,False,True
+Kids Cheese Slice,Little Chimps,$16.49,False,True
+Jarritos Lime,Jarritos,$6.99,False,True
+Jarritos Guava,Jarritos,$6.99,False,True
+Jarritos Mexican Cola,Jarritos,$6.99,False,True
+Redbull,Redbull,$8.49,False,True
+Sugar Free Redbull,Redbull,$8.49,False,True
+Tropical Redbull,Redbull,$8.49,False,True
+Strangelove Mineral Water,Strangelove,$5.99,False,True
+Strangelove Mandarin,Strangelove,$5.99,False,True
+Strangelove Cloudy Pear,Strangelove,$5.99,False,True
+Strangelove Lemon Squash,Strangelove,$5.99,False,True
+Coke Can,Soft Drink Cans,$5.49,False,True
+Coke Zero Can,Soft Drink Cans,$5.49,False,True
+Sprite Can,Soft Drink Cans,$5.49,False,True
+Fanta Can,Soft Drink Cans,$5.49,False,True
+Mount Franklin 600ml,Soft Drink Cans,$5.99,False,True
+3 Piece GFC,Fried Chicken,$17.49,False,True
+6 Piece GFC,Fried Chicken,$29.49,False,True
+2 Pieces + Chips,Fried Chicken,$16.49,False,True
+4 Pieces + Chips,Fried Chicken,$30.49,False,True
+Caesar Salad,Bowls,$22.49,False,True
+Super Bowl,Bowls,Priced by add-ons,False,True

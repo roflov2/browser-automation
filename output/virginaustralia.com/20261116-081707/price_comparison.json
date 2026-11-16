@@ -1,0 +1,274 @@
+{
+  "site": "https://www.virginaustralia.com/au/en/",
+  "shop_url": "https://book.virginaustralia.com/dx/VADX/#/flight-selection?ADT=1&class=First&tpid=VAPC_V2_3804e357-ea71-419e-a16c-d21bd90642fb&cabinType=E&fareType=REVENUE&awardBooking=false&op=199&tp=199&journeyType=one-way&businessTravel=false&pos=au-en&origin=CBR&destination=SYD&date=02-14-2027&activeMonth=02-14-2027&va-flow=booking-hub&execution=516e1482-c4d3-41e3-807a-68b8eb095a8d",
+  "checkout_url": "https://book.virginaustralia.com/dx/VADX/#/payment?journeyType=one-way&activeMonth=02-14-2027&awardBooking=false&businessTravel=false&class=First&ADT=1&CHD=0&INF=0&origin=CBR&destination=SYD&date=02-14-2027&flight=-1933887663&direction=1&execution=516e1482-c4d3-41e3-807a-68b8eb095a8d",
+  "status": "ok",
+  "message": "",
+  "search": {
+    "origin": "CBR",
+    "destination": "SYD",
+    "depart_date": "2027-02-14",
+    "passengers": "1 adult",
+    "trip_type": "one_way"
+  },
+  "items": [
+    {
+      "name": "VA 629 7:05am - 8:05am",
+      "shop_price_display": "from $ 199.00",
+      "shop_price": 199.0,
+      "selected_variant": "Choice",
+      "selected_price_display": "$199.00",
+      "selected_price": 199.0,
+      "status": "added",
+      "cart_total_display": "$199.00 AUD",
+      "price_basis": "Price per adult, one-way, in AUD.",
+      "expected_price": 199.0,
+      "selected_vs_shop_diff": 0.0,
+      "checkout_price_display": "$199.00",
+      "checkout_price": 199.0,
+      "checkout_vs_expected_diff": 0.0,
+      "price_increased": false
+    }
+  ],
+  "items_added": 1,
+  "expected_subtotal": 199.0,
+  "cart_subtotal_display": "$199.00 AUD",
+  "checkout_subtotal_display": "$199.00",
+  "checkout_subtotal": 199.0,
+  "subtotal_vs_expected_diff": 0.0,
+  "total_vs_expected_diff": 0.0,
+  "shipping": "n/a (flight booking)",
+  "other_fees": [],
+  "other_fees_total": 0.0,
+  "extras_in_total": [],
+  "payment_surcharges": [],
+  "extras_offered": 9,
+  "extras_offered_by_category": {
+    "flexibility": 2,
+    "seat_selection": 3,
+    "checked_baggage": 1,
+    "travel_insurance": 1,
+    "carbon_offset": 1,
+    "other": 1
+  },
+  "extras_preselected": [],
+  "tax_amount_display": null,
+  "tax_included": true,
+  "checkout_total_display": "$199.00",
+  "checkout_total": 199.0,
+  "currency": "AUD",
+  "drip_detected": false,
+  "drip_reasons": [],
+  "checkout_summary": "One-way flight from Canberra (CBR) to Sydney (SYD) for 1 guest departing Sunday 14 February. Fare subtotal is $199.00 AUD with no added extras or fees, bringing the total booking amount to $199.00 AUD.",
+  "extras": [
+    {
+      "step": 1,
+      "step_type": "review",
+      "step_heading": "Review your flight selection",
+      "category": "flexibility",
+      "label": "Cancel For Any Reason - 100% of airfare refundable",
+      "price_display": "+AUD 48",
+      "price": 48.0,
+      "price_basis": "total",
+      "selected_by_default": false,
+      "mandatory": false
+    },
+    {
+      "step": 1,
+      "step_type": "review",
+      "step_heading": "Review your flight selection",
+      "category": "flexibility",
+      "label": "Cancel For Any Reason - 80% of airfare refundable",
+      "price_display": "+AUD 26",
+      "price": 26.0,
+      "price_basis": "total",
+      "selected_by_default": false,
+      "mandatory": false
+    },
+    {
+      "step": 4,
+      "step_type": "seats",
+      "step_heading": "See if your favourite seats are available",
+      "category": "seat_selection",
+      "label": "Preferred seat (Rows 3-4)",
+      "price_display": "$24",
+      "price": 24.0,
+      "price_basis": "per passenger per flight",
+      "selected_by_default": false,
+      "mandatory": false
+    },
+    {
+      "step": 4,
+      "step_type": "seats",
+      "step_heading": "See if your favourite seats are available",
+      "category": "seat_selection",
+      "label": "Preferred seat (Row 5)",
+      "price_display": "$19",
+      "price": 19.0,
+      "price_basis": "per passenger per flight",
+      "selected_by_default": false,
+      "mandatory": false
+    },
+    {
+      "step": 4,
+      "step_type": "seats",
+      "step_heading": "See if your favourite seats are available",
+      "category": "seat_selection",
+      "label": "Standard seat",
+      "price_display": "Complimentary",
+      "price": null,
+      "price_basis": "per passenger per flight",
+      "selected_by_default": false,
+      "mandatory": false
+    },
+    {
+      "step": 6,
+      "step_type": "extras",
+      "step_heading": "Would you like to customise your trip?",
+      "category": "checked_baggage",
+      "label": "Add checked baggage",
+      "price_display": null,
+      "price": null,
+      "price_basis": null,
+      "selected_by_default": false,
+      "mandatory": false
+    },
+    {
+      "step": 6,
+      "step_type": "extras",
+      "step_heading": "Would you like to customise your trip?",
+      "category": "travel_insurance",
+      "label": "Protect your trip with Cover-More",
+      "price_display": "$17.50",
+      "price": 17.5,
+      "price_basis": "Per guest from",
+      "selected_by_default": false,
+      "mandatory": false
+    },
+    {
+      "step": 6,
+      "step_type": "extras",
+      "step_heading": "Would you like to customise your trip?",
+      "category": "carbon_offset",
+      "label": "Help protect the places you love to explore",
+      "price_display": "$3.09",
+      "price": 3.09,
+      "price_basis": "Per guest from",
+      "selected_by_default": false,
+      "mandatory": false
+    },
+    {
+      "step": 7,
+      "step_type": "payment",
+      "step_heading": "Let\u2019s do one final check!",
+      "category": "other",
+      "label": "Amex Velocity Platinum Card - YES, I'm interested and would like to find out more about the card after checkout.",
+      "price_display": null,
+      "price": null,
+      "price_basis": null,
+      "selected_by_default": false,
+      "mandatory": false
+    }
+  ],
+  "steps": [
+    {
+      "step": 1,
+      "step_type": "review",
+      "heading": "Review your flight selection",
+      "url": "https://book.virginaustralia.com/dx/VADX/#/flight-selection?journeyType=one-way&activeMonth=02-14-2027&awardBooking=false&businessTravel=false&class=First&ADT=1&CHD=0&INF=0&origin=CBR&destination=SYD&date=02-14-2027&flight=-1933887663&direction=1&execution=516e1482-c4d3-41e3-807a-68b8eb095a8d",
+      "total_display": "$199.00 AUD",
+      "total": 199.0,
+      "price_lines": [
+        {
+          "label": "Choice",
+          "amount": "$199.00"
+        }
+      ],
+      "offers": 2,
+      "validation_errors": [],
+      "summary": "Currently on the 'Review your flight selection' step with a total of $199.00 AUD. Virgin Australia offers optional 'Cancel For Any Reason' coverage (+AUD 48 for 100% refund or +AUD 26 for 80% refund), with 'No, thank you' selected by default."
+    },
+    {
+      "step": 2,
+      "step_type": "login_prompt",
+      "heading": "Log in now to pre-fill your details",
+      "url": "https://book.virginaustralia.com/dx/VADX/#/flight-selection?journeyType=one-way&activeMonth=02-14-2027&awardBooking=false&businessTravel=false&class=First&ADT=1&CHD=0&INF=0&origin=CBR&destination=SYD&date=02-14-2027&flight=-1933887663&direction=1&execution=516e1482-c4d3-41e3-807a-68b8eb095a8d",
+      "total_display": null,
+      "total": null,
+      "price_lines": [],
+      "offers": 0,
+      "validation_errors": [],
+      "summary": "Login prompt modal displayed offering to log in with Velocity details to pre-fill information, or skip to continue."
+    },
+    {
+      "step": 3,
+      "step_type": "passenger_details",
+      "heading": "Who will be travelling?",
+      "url": "https://book.virginaustralia.com/dx/VADX/#/passengers?journeyType=one-way&activeMonth=02-14-2027&awardBooking=false&businessTravel=false&class=First&ADT=1&CHD=0&INF=0&origin=CBR&destination=SYD&date=02-14-2027&flight=-1933887663&direction=1&execution=516e1482-c4d3-41e3-807a-68b8eb095a8d",
+      "total_display": "$199.00 AUD",
+      "total": 199.0,
+      "price_lines": [],
+      "offers": 0,
+      "validation_errors": [],
+      "summary": "Currently on the guest details step ('Who will be travelling?'). The running total is $199.00 AUD. Form fields are presented for Adult 1 personal and contact details, with promotional callouts for newsletter subscription, Velocity Frequent Flyer, and an Economy X teaser without selectable pricing."
+    },
+    {
+      "step": 4,
+      "step_type": "seats",
+      "heading": "See if your favourite seats are available",
+      "url": "https://book.virginaustralia.com/dx/VADX/#/seat-selection?journeyType=one-way&activeMonth=02-14-2027&awardBooking=false&businessTravel=false&class=First&ADT=1&CHD=0&INF=0&origin=CBR&destination=SYD&date=02-14-2027&flight=-1933887663&direction=1&execution=516e1482-c4d3-41e3-807a-68b8eb095a8d",
+      "total_display": "$199.00 AUD",
+      "total": 199.0,
+      "price_lines": [
+        {
+          "label": "Booking total",
+          "amount": "$199.00 AUD"
+        }
+      ],
+      "offers": 3,
+      "validation_errors": [],
+      "summary": "Currently on the seat selection step for CBR to SYD on a Saab 340B aircraft. Standard seats are complimentary, while preferred seats are available for $19 or $24. The current running total is $199.00 AUD."
+    },
+    {
+      "step": 5,
+      "step_type": "upsell_modal",
+      "heading": "Unassigned seating",
+      "url": "https://book.virginaustralia.com/dx/VADX/#/seat-selection?journeyType=one-way&activeMonth=02-14-2027&awardBooking=false&businessTravel=false&class=First&ADT=1&CHD=0&INF=0&origin=CBR&destination=SYD&date=02-14-2027&flight=-1933887663&direction=1&execution=516e1482-c4d3-41e3-807a-68b8eb095a8d",
+      "total_display": null,
+      "total": null,
+      "price_lines": [],
+      "offers": 0,
+      "validation_errors": [],
+      "summary": "An 'Unassigned seating' prompt is displayed asking 'Not all seats have been assigned. Are you sure you want to continue with unassigned seating?' with options to 'Choose seats' or 'Continue anyway'."
+    },
+    {
+      "step": 6,
+      "step_type": "extras",
+      "heading": "Would you like to customise your trip?",
+      "url": "https://book.virginaustralia.com/dx/VADX/#/ancillaries?journeyType=one-way&activeMonth=02-14-2027&awardBooking=false&businessTravel=false&class=First&ADT=1&CHD=0&INF=0&origin=CBR&destination=SYD&date=02-14-2027&flight=-1933887663&direction=1&execution=516e1482-c4d3-41e3-807a-68b8eb095a8d",
+      "total_display": "$199.00 AUD",
+      "total": 199.0,
+      "price_lines": [],
+      "offers": 3,
+      "validation_errors": [],
+      "summary": "Currently on the Extras step offering optional additional checked baggage, Cover-More travel insurance from $17.50, and carbon offset from $3.09. Total remains $199.00 AUD."
+    },
+    {
+      "step": 7,
+      "step_type": "payment",
+      "heading": "Let\u2019s do one final check!",
+      "url": "https://book.virginaustralia.com/dx/VADX/#/payment?journeyType=one-way&activeMonth=02-14-2027&awardBooking=false&businessTravel=false&class=First&ADT=1&CHD=0&INF=0&origin=CBR&destination=SYD&date=02-14-2027&flight=-1933887663&direction=1&execution=516e1482-c4d3-41e3-807a-68b8eb095a8d",
+      "total_display": "$199.00 AUD",
+      "total": 199.0,
+      "price_lines": [
+        {
+          "label": "Fares",
+          "amount": "$199.00"
+        }
+      ],
+      "offers": 1,
+      "validation_errors": [],
+      "summary": "Reached the final payment step ('Let\u2019s do one final check!') with a total booking price of $199.00 AUD for the flight fare with no optional seats or extras selected. Payment methods available include Apple Pay, Google Pay, Card, PayPal, PayID, Zip, Points, and Travel Bank."
+    }
+  ]
+}
