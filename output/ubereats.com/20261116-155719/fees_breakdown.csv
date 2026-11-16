@@ -1,0 +1,5 @@
+fee_type,label,advertised_display,checkout_display,amount,diff_vs_advertised,pct_of_subtotal,mandatory
+delivery_fee,Standard Delivery Fee,$4.99 Delivery Fee^,$4.99,4.99,0.0,10.5,True
+service_fee,Service Fee,+ Service Fee,$5.69,5.69,5.69,12.0,True
+small_order_fee,Small Order Fee,not disclosed upfront,$0.00,0.0,,0.0,True
+priority_delivery,Priority Delivery Upgrade (Optional),n/a,+$5.99,5.99,,,False

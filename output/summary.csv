@@ -4,4 +4,4 @@ run_at,site,status,message,items_added,expected_subtotal,checkout_subtotal,check
 2026-11-12T23:29:55+00:00,https://blackboardcoffee.com.au,ok,,3,69.0,69.0,69.0,AUD,0.0,not calculated (address required),False,output/blackboardcoffee.com.au/20261113-102652
 2026-11-12T23:33:28+00:00,https://www.padrecoffee.com.au,ok,,3,67.0,67.0,67.0,AUD,0.0,not calculated (address required),False,output/padrecoffee.com.au/20261113-102955
 2026-11-15T21:26:07+00:00,https://www.virginaustralia.com/au/en/,ok,,1,199.0,199.0,199.0,AUD,0.0,n/a (flight booking),False,output/virginaustralia.com/20261116-081707
-2026-11-16T01:50:39+00:00,https://www.ubereats.com/au,ok,,2,49.49,49.49,56.42,AUD,5.94,$0.99,True,output/ubereats.com/20261116-124624
+2026-11-16T05:03:32+00:00,https://www.ubereats.com/au,ok,,2,47.4,47.4,46.23,AUD,5.69,$4.99,True,output/ubereats.com/20261116-155719

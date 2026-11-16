@@ -1,0 +1,157 @@
+name,category,price,sold_out,is_food_or_drink
+Pepperoni Burst,Featured items,$25.00,False,True
+Super Supreme,Featured items,$22.40,False,True
+Margarita,Featured items,$20.00,False,True
+All Day Combo,Featured items,$26.00,False,True
+Lebo Fries,Featured items,$10.80,False,True
+Meats Deluxe,Featured items,$29.00,False,True
+Garlic Goddess,Featured items,$20.00,False,True
+OOSH Chilli,Featured items,$23.20,False,True
+Nutella Nutella,Featured items,$16.50,False,True
+Hawaiian,Featured items,$25.00,False,True
+Halal Pepperoni Burst,Featured items,$20.00,False,True
+Crispy Chicken,Featured items,$17.50,False,True
+OOSH BBQ,Featured items,$23.20,False,True
+Flaming Peri Peri,Featured items,$20.00,False,True
+Smokey Ribs & Chips (Half Rack),Featured items,$33.00,False,True
+Burger Kebab,Featured items,$20.00,False,True
+Rustic Garlic Bread - Garlic Butter,Featured items,$8.50,False,True
+Spicy Prawns & Chorizo,Featured items,$24.00,False,True
+OOSH Fries Large,Featured items,$9.50,False,True
+Fully Tabouli,Featured items,$20.00,False,True
+Pepperoni Burst,Offers,$25.00,False,True
+Margarita,Offers,$20.00,False,True
+Halal Pepperoni Burst,Offers,$20.00,False,True
+OOSH BBQ,Offers,$23.20,False,True
+Premium Pistachio Gelato - 1L,Offers,$12.00,False,True
+Lebo Fries,Offers,$10.80,False,True
+Premium Chocolate Gelato - 1L,Offers,$12.00,False,True
+Spicy Prawns & Chorizo,Offers,$24.00,False,True
+Premium Vanilla Gelato - 1L,Offers,$12.00,False,True
+OOSH Garlic,Offers,$23.20,False,True
+OOSH Chilli,Offers,$23.20,False,True
+Kids Cheese Pizza,Offers,$10.00,False,True
+Super Supreme,Offers,$22.40,False,True
+Haloumi Pie (One Pack),Offers,$12.80,False,True
+Premium Lemon Gelato - 1L,Offers,$12.00,False,True
+Pepperoni Burst,Picked for you,$25.00,False,True
+Super Supreme,Picked for you,$22.40,False,True
+Lebo Fries,Picked for you,$10.80,False,True
+Rustic Garlic Bread - Garlic Butter,Picked for you,$8.50,False,True
+OOSH Fries Large,Picked for you,$9.50,False,True
+Chicken Lemongrass Pizza,Limited Time Offers,$24.00,False,True
+Manoosh Combo,Deals,$21.00,False,True
+All Day Combo,Deals,$26.00,False,True
+1 Large Pizza Deal,Deals,$40.00,False,True
+2 Large Pizza Deal,Deals,$64.00,False,True
+3 Large Pizza Deal,Deals,$88.00,False,True
+No Meats Deal,Deals,$59.00,False,True
+Two Salad Deal,Deals,$16.00,False,True
+Chicken Lemongrass Pizza,Pizzas,$24.00,False,True
+Margarita,Pizzas,$20.00,False,True
+Pepperoni Burst,Pizzas,$25.00,False,True
+Halal Pepperoni Burst,Pizzas,$20.00,False,True
+Hawaiian,Pizzas,$25.00,False,True
+Super Supreme,Pizzas,$22.40,False,True
+OOSHMAN's Vegetarian,Pizzas,$27.00,False,True
+Vegans Paradise,Pizzas,$28.00,False,True
+Vegelicious,Pizzas,$27.00,False,True
+Meats Deluxe,Pizzas,$29.00,False,True
+Hot Mexicana,Pizzas,$28.00,False,True
+Spicy Prawns & Chorizo,Pizzas,$24.00,False,True
+OOSH Garlic,Pizzas,$23.20,False,True
+OOSH Chilli,Pizzas,$23.20,False,True
+OOSH BBQ,Pizzas,$23.20,False,True
+Garlic Goddess,Wraps,$20.00,False,True
+Flaming Peri Peri,Wraps,$20.00,False,True
+Fully Tabouli,Wraps,$20.00,False,True
+Hommus Cracker,Wraps,$20.00,False,True
+Habibi Yiros,Wraps,$20.00,False,True
+Burger Kebab,Wraps,$20.00,False,True
+Zaatar (One Pack),Manoosh,$7.00,False,True
+Lahembajin (One Pack),Manoosh,$15.00,False,True
+Triple Cheese (One Pack),Manoosh,$17.50,False,True
+Sujuk & Cheese Melt,Manoosh,$16.00,False,True
+Lahembajin With Cheese,Manoosh,$18.00,False,True
+Spinach & Cheese Pie (One Pack),Manoosh,$16.00,False,True
+Haloumi Pie (One Pack),Manoosh,$12.80,False,True
+Zaatar & Vegies,Manoosh,$13.50,False,True
+Zaatar Beirut Style,Manoosh,$15.00,False,True
+Zaatar & Cheese,Manoosh,$12.50,False,True
+Chicken & Mushroom Boat,Manoosh,$17.50,False,True
+Sujuk & Egg Boat,Manoosh,$17.50,False,True
+All Day Brekkie Fold,All Day Breakfast,$16.00,False,True
+Kids Cheese Pizza,Kiddies,$10.00,False,True
+Kids Ham & Pineapple Pizza,Kiddies,$12.50,False,True
+Kids Pepperoni Pizza,Kiddies,$12.50,False,True
+Kids Chicken Pizza,Kiddies,$12.50,False,True
+Chicken Nuggets & Chips,Kiddies,$12.50,False,True
+OOSH Fries Regular,Fries,$7.00,False,True
+OOSH Fries Large,Fries,$9.50,False,True
+OOSH Fries Family,Fries,$17.50,False,True
+Lebo Fries,Fries,$10.80,False,True
+Mozzarella Sticks (5 pack),Teasers,$16.00,False,True
+Mozzarella Sticks (10 pack),Teasers,$25.00,False,True
+Rustic Garlic Bread - Garlic Butter,Teasers,$8.50,False,True
+Deluxe Garlic Bread,Teasers,$11.00,False,True
+Garlic Dip Platter,Teasers,$12.00,False,True
+Hommus Dip Platter,Teasers,$12.00,False,True
+Labne Dip Platter,Teasers,$12.00,False,True
+Crunchy Zaatar Chips,Teasers,$7.00,False,True
+Southern Fried Chicken Tenders (Three Pack),Teasers,$14.00,False,True
+Southern Fried Chicken Tenders (Five Pack),Teasers,$21.00,False,True
+Crispy Chicken,Teasers,$17.50,False,True
+Chicken Nuggets (Ten Pack),Teasers,$16.00,False,True
+Chicken Nuggets (Twenty Pack),Teasers,$27.00,False,True
+Lamb Kebbeh (Five Pack),Teasers,$17.50,False,True
+Lamb Kebbeh (Ten Pack),Teasers,$26.00,False,True
+Lamb Kafta (Five Pack),Teasers,$17.50,False,True
+Lamb Kafta (Ten Pack),Teasers,$26.00,False,True
+Falafel (Five Pack),Teasers,$15.00,False,True
+Falafel (Ten Pack),Teasers,$24.00,False,True
+Chicken & Chips Box,Teasers,$16.00,False,True
+Smokey Ribs & Chips (Half Rack),Teasers,$33.00,False,True
+Smokey Ribs & Chips (Full Rack),Teasers,$52.00,False,True
+Local Salad,Salads,$9.50,False,True
+Fatt-oosh,Salads,$9.50,False,True
+Tabouli,Salads,$9.50,False,True
+Two Salad Deal,Salads,$16.00,False,True
+Nutella Nutella,Dessert,$16.50,False,True
+Pistachio Delight,Dessert,$16.50,False,True
+Biscoff Biscoff,Dessert,$16.50,False,True
+Rice Pudding,Dessert,$7.00,False,True
+Creaming Mud Cake,Dessert,$13.50,False,True
+OOSH Milk Cake,Dessert,$13.50,False,True
+Premium Chocolate Gelato - 1L,Dessert,$12.00,False,True
+Premium Vanilla Gelato - 1L,Dessert,$12.00,False,True
+Premium Pistachio Gelato - 1L,Dessert,$12.00,False,True
+Premium Lemon Gelato - 1L,Dessert,$12.00,False,True
+Mini Dip (Garlic Mini Dip),Mini Dips,$1.30,False,True
+Mini Dip (Mayonnaise Mini Dip),Mini Dips,$1.30,False,True
+Mini Dip (Burger Sauce Mini Dip),Mini Dips,$1.30,False,True
+Mini Dip (Tomato Mini Dip),Mini Dips,$1.30,False,True
+Mini Dip (Peri Peri Mini Dip),Mini Dips,$1.30,False,True
+Mini Dip (Smokey Bbq Mini Dip),Mini Dips,$1.30,False,True
+Mini Dip (Hommus Mini Dip),Mini Dips,$1.50,False,True
+Mini Dip (Chopped Chilli Oil Mini Dip),Mini Dips,$1.30,False,True
+Mini Dip (Chilli - Mayo Mini Dip),Mini Dips,$1.30,False,True
+Mini Dip (Sweet N Sour Mini Dip),Mini Dips,$1.30,False,True
+Mini Dip (Hot Honey Mini Dip),Mini Dips,$1.30,False,True
+Water 600ml,Drinks,$5.00,False,True
+Sparkling Water 500ml,Drinks,$6.00,False,True
+Pepsi 600ml,Drinks,$6.00,False,True
+Pepsi Max 600ml,Drinks,$6.00,False,True
+Solo 600ml,Drinks,$6.00,False,True
+Mountain Dew 600ml,Drinks,$6.00,False,True
+Lemonade 600ml,Drinks,$6.00,False,True
+Sunkist Zero Sugar 600ml,Drinks,$6.00,False,True
+Passiona 600ml,Drinks,$6.00,False,True
+Schweppes Raspberry 600ml,Drinks,$6.00,False,True
+Pop Tops Apple,Drinks,$4.00,False,True
+Pop Tops Apple & Blackcurrant,Drinks,$4.00,False,True
+Lipton Ice Tea Peach,Drinks,$6.00,False,True
+Gatorade Blue Bolt,Drinks,$6.00,False,True
+Spring Valley Orange Glass,Drinks,$5.50,False,True
+Red Bull,Drinks,$5.50,False,True
+Red Bull - Watermelon,Drinks,$5.50,False,True
+Solo Energy Zero Sugar 250ml,Drinks,$5.50,False,True
