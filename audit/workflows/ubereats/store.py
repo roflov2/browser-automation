@@ -12,6 +12,7 @@ from stagehand import Page, Stagehand
 from ... import page as page_helpers
 from ...core import Blocked, new_item, parse_price, record_offers, slug
 from ...page import is_sso_redirect, pause_for_login, settle, shot
+from ...safety import Mode, current_guard, safe_act
 from .models import (
     AddressAndFeedState,
     CartAndCheckoutState,
@@ -123,7 +124,7 @@ JS_SET_ADDRESS = r"""({ target, tokens }) => {
                        '[data-testid*="address" i] li', '[role="dialog"] ul li']) {
         for (const el of document.querySelectorAll(sel)) {
             if (vis(el, 80, 20) && hasTokens(txt(el))) {
-                el.click();
+                safeClick(el);
                 return 'Clicked autocomplete suggestion: ' + txt(el).split('\n')[0];
             }
         }
@@ -135,13 +136,10 @@ JS_SET_ADDRESS = r"""({ target, tokens }) => {
         if (!vis(inp, 100, 20)) continue;
         if (inp.value && !hasTokens(inp.value)) {
             const box = inp.closest('[role="dialog"], [aria-modal="true"]') || inp.parentElement?.parentElement;
-            box?.querySelector('button[aria-label*="clear" i], button[aria-label*="reset" i]')?.click();
+            const clear = box?.querySelector('button[aria-label*="clear" i], button[aria-label*="reset" i]');
+            if (clear) safeClick(clear);
         }
-        inp.focus();
-        const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set;
-        if (setter) setter.call(inp, target); else inp.value = target;
-        inp.dispatchEvent(new Event('input', { bubbles: true }));
-        inp.dispatchEvent(new Event('change', { bubbles: true }));
+        safeFill(inp, target);
         return 'Typed target address into input: ' + target;
     }
 
@@ -150,7 +148,7 @@ JS_SET_ADDRESS = r"""({ target, tokens }) => {
         'header button, header a, [data-testid*="location" i], [data-testid*="address" i], button[aria-label*="deliver" i]')) {
         const label = (txt(btn) + ' ' + (btn.getAttribute('aria-label') || '')).trim();
         if (vis(btn, 50, 20) && /deliver|address|now|•|\d+\s+[a-z]/i.test(label) && !/cart|bag|sign\s*in|log\s*in|search/i.test(label)) {
-            btn.click();
+            safeClick(btn);
             return 'Clicked header address button: ' + txt(btn).split('\n')[0];
         }
     }
@@ -171,8 +169,7 @@ JS_OPEN_CART = r"""() => {
     const btn = cartButtons().find(el => vis(el, 20, 20))
         || Array.from(document.querySelectorAll('header button')).find(
             b => /\d+\s*item/i.test(txt(b) + ' ' + (b.getAttribute('aria-label') || '')));
-    if (btn) btn.click();
-    return !!btn;
+    return !!btn && safeClick(btn);
 }"""
 
 JS_CLEAR_CART_STEP = r"""() => {
@@ -184,19 +181,18 @@ JS_CLEAR_CART_STEP = r"""() => {
     const aria = b => (b.getAttribute('aria-label') || '').trim();
 
     const clear = buttons.find(b => /^(Clear cart|Empty cart|Remove all|Clear)/i.test(txt(b)) || /^clear cart$/i.test(aria(b)));
-    if (clear) { clear.click(); return 'clear_button'; }
+    if (clear) { safeClick(clear); return 'clear_button'; }
 
     for (const sel of drawer.querySelectorAll('select')) {
         const zero = Array.from(sel.options).find(o => o.value === '0' || /^remove$/i.test((o.text || '').trim()));
         if (zero) {
-            sel.value = zero.value;
-            sel.dispatchEvent(new Event('change', { bubbles: true }));
+            safeSelect(sel, zero.value);
             return 'select_zero';
         }
     }
 
     const remove = buttons.find(b => /^(Remove item|Delete item|Decrease quantity)/i.test(aria(b)));
-    if (remove) { remove.click(); return 'remove_item_btn'; }
+    if (remove) { safeClick(remove); return 'remove_item_btn'; }
     return null;
 }"""
 
@@ -225,7 +221,7 @@ JS_SELECT_REQUIRED = r"""() => {
         }
         const target = best.closest('label') || best;
         target.scrollIntoView({ block: 'center', behavior: 'instant' });
-        target.click();
+        safeClick(target);
         if (bestLabel) chosen.push(bestLabel);
     }
     return chosen;
@@ -235,23 +231,23 @@ JS_CLICK_ADD = r"""() => {
     const btn = addButton();
     if (!btn) return { clicked: false, price: null };
     const m = txt(btn).match(/(A?\$[\d.,]+)/);
-    btn.click();
-    return { clicked: true, price: m ? m[1] : null };
+    return { clicked: safeClick(btn), price: m ? m[1] : null };
 }"""
 
 JS_CLICK_CHECKOUT = r"""() => {
+    // Exact labels only: 'Checkout · Pay $54.20' or 'Checkout with PayPal' must never match
     const el = Array.from(document.querySelectorAll('a[href*="/checkout"], button')).find(
-        e => /^(Go to checkout|Checkout|Continue to checkout)/i.test(txt(e)));
-    if (el) el.click();
-    return !!el;
+        e => /^(Go to checkout|Checkout|Continue to checkout)$/i.test(clean(txt(e))) && guardAllows(e));
+    return !!el && safeClick(el);
 }"""
 
 JS_DECLINE_UPSELL = r"""() => {
     // Only buttons inside an open dialog, and only ones that decline / move on (never add, never place the order)
     const DECLINE = /^(skip|no,? thanks?|not now|maybe later|continue( to checkout)?|go to checkout|next|done)$/i;
     for (const d of dialogs().filter(d => vis(d, 200, 150)).reverse()) {
-        const btn = Array.from(d.querySelectorAll('button, a')).find(b => vis(b, 30, 20) && DECLINE.test(clean(txt(b))));
-        if (btn) { btn.click(); return clean(txt(btn)); }
+        const btn = Array.from(d.querySelectorAll('button, a')).find(
+            b => vis(b, 30, 20) && DECLINE.test(clean(txt(b))) && guardAllows(b));
+        if (btn) { safeClick(btn); return clean(txt(btn)); }
     }
     return null;
 }"""
@@ -294,7 +290,7 @@ async def close_item_modal(stagehand: Stagehand, page: Page) -> None:
     await page.wait_for_timeout(1000)
     if await is_item_modal_open(page):
         with contextlib.suppress(Exception):
-            await stagehand.act("Click the 'X' close button in the top-left corner of the open item modal.")
+            await safe_act(stagehand, page, "Click the 'X' close button in the top-left corner of the open item modal.")
             await page.wait_for_timeout(1000)
 
 
@@ -317,7 +313,8 @@ async def clear_existing_cart(stagehand: Stagehand, page: Page) -> None:
             if llm_clears > 3:
                 break
             with contextlib.suppress(Exception):
-                await stagehand.act(
+                await safe_act(
+                    stagehand, page,
                     "Inside the open cart drawer, click 'Clear cart' (or remove one item from the cart, confirming "
                     "any 'Remove' prompt). Do NOT click 'Go to checkout'."
                 )
@@ -390,8 +387,8 @@ async def ensure_address_and_open_store(
                             f"Click the current delivery address button ('{state.displayed_address or 'Enter delivery address'}') "
                             f"in the top header so we can change the delivery address to '{address}'."
                         )
-                    act_res = await stagehand.act(instruction)
-                    print(f"  Address step {step_idx + 1}: {act_res.data.action_description}")
+                    act_res = await safe_act(stagehand, page, instruction)
+                    print(f"  Address step {step_idx + 1}: {act_res.description}")
                 await settle(page, 2200)
                 continue
 
@@ -443,7 +440,8 @@ async def ensure_address_and_open_store(
             await page.goto(target_url)
             await settle(page, 2800)
         else:
-            await stagehand.act(
+            await safe_act(
+                stagehand, page,
                 f"Click on the restaurant card '{chosen.name}' to open its menu page."
                 if chosen
                 else "Scroll down and click on the first open restaurant card (not a grocery store)."
@@ -484,10 +482,11 @@ async def add_menu_item_to_cart(
     before_cart_count = await get_cart_count(page)
 
     try:
-        step = await stagehand.act(
+        step = await safe_act(
+            stagehand, page,
             f"Click on the menu item '{menu_item.name}' (priced around {menu_item.price}) to open its customization modal."
         )
-        print(f"    Open item: {step.data.action_description}")
+        print(f"    Open item: {step.description}")
         await settle(page, 1800)
 
         if not await is_item_modal_open(page):
@@ -495,10 +494,11 @@ async def add_menu_item_to_cart(
                 set_price(menu_item.price)
                 item["status"] = "added"
                 return item
-            retry = await stagehand.act(
+            retry = await safe_act(
+                stagehand, page,
                 f"Scroll to and click directly on the menu item title '{menu_item.name}' to open its popup."
             )
-            print(f"    Retry open item: {retry.data.action_description}")
+            print(f"    Retry open item: {retry.description}")
             await settle(page, 1800)
             if not await is_item_modal_open(page):
                 print(f"    Modal did not open for '{menu_item.name}', skipping.")
@@ -530,11 +530,12 @@ async def add_menu_item_to_cart(
 
             if modal_state.has_unmet_required_choices and modal_state.next_required_group:
                 cheapest = modal_state.cheapest_option_in_required_group
-                act_mod = await stagehand.act(
+                act_mod = await safe_act(
+                    stagehand, page,
                     f"In the required section '{modal_state.next_required_group}', "
                     f"select '{cheapest or 'the first $0 / cheapest option'}'."
                 )
-                print(f"    Modifier ({modal_state.next_required_group}): {act_mod.data.action_description}")
+                print(f"    Modifier ({modal_state.next_required_group}): {act_mod.description}")
                 if cheapest:
                     selected_modifiers.append(cheapest)
                 await page.wait_for_timeout(900)
@@ -546,10 +547,11 @@ async def add_menu_item_to_cart(
             if add["clicked"]:
                 print(f"    Clicked Add to order button ({item['selected_price_display'] or menu_item.price})")
             else:
-                add_act = await stagehand.act(
+                add_act = await safe_act(
+                    stagehand, page,
                     "Click the black 'Add 1 to order' / 'Add to order' button at the bottom of the item modal."
                 )
-                print(f"    Click Add: {add_act.data.action_description}")
+                print(f"    Click Add: {add_act.description}")
             await settle(page, 1800)
 
             if not await is_item_modal_open(page) or await get_cart_count(page) > before_cart_count:
@@ -574,6 +576,7 @@ async def walk_to_checkout(
 ) -> tuple[CartAndCheckoutState | None, CartAndCheckoutState | None]:
     """Open the cart drawer, decline interstitial upsells, and proceed to the checkout screen."""
     out = result.out_dir
+    guard = current_guard()
     cart_snapshot: CartAndCheckoutState | None = None
     upsell_declines = 0
 
@@ -645,6 +648,7 @@ async def walk_to_checkout(
         upsell = state.is_upsell_modal or state.step_type == "upsell_modal"
         has_fees = state.delivery_fee is not None or state.service_fee is not None
         if (state.is_checkout_page or "/checkout" in curr_url) and (has_fees or not upsell):
+            await guard.freeze(page)  # hard stop: the page with 'Place order' is only read from here on
             await shot(page, out / "checkout.png")
             return cart_snapshot, state
 
@@ -657,13 +661,14 @@ async def walk_to_checkout(
             clicked = await js(page, JS_DECLINE_UPSELL)
             if clicked:
                 print(f"    Declining upsell: clicked '{clicked}'")
-            elif upsell_declines <= 2:
-                act_res = await stagehand.act(
+            elif upsell_declines <= 2 and guard.mode_for(await page.url()) is Mode.NORMAL:
+                act_res = await safe_act(
+                    stagehand, page,
                     "An upsell popup ('Complete your meal', 'Add more items', 'Try Uber One') is blocking checkout. "
                     "Dismiss it WITHOUT adding anything: click 'Skip', 'No thanks', 'Not now', 'Next' or "
                     "'Continue to checkout', or its X close button. Never start an Uber One trial or place the order."
                 )
-                print(f"    Declining upsell: {act_res.data.action_description}")
+                print(f"    Declining upsell: {act_res.description}")
             else:  # last resort: close whatever dialog is open
                 await js(page, "() => { closeDialog() || pressEsc(); }")
                 print("    Declining upsell: closed the dialog")
@@ -677,20 +682,22 @@ async def walk_to_checkout(
             if await open_cart_drawer(page):
                 print("    Opening cart via DOM click on header cart button")
             else:
-                act_res = await stagehand.act(
+                act_res = await safe_act(
+                    stagehand, page,
                     "Click the green cart button in the top-right header (or 'View cart') to open the cart drawer."
                 )
-                print(f"    Opening cart: {act_res.data.action_description}")
+                print(f"    Opening cart: {act_res.description}")
             await settle(page, 2200)
             continue
 
         if await js(page, JS_CLICK_CHECKOUT, default=False):
             print("    Clicked 'Go to checkout' button")
         else:
-            act_res = await stagehand.act(
+            act_res = await safe_act(
+                stagehand, page,
                 "Click the 'Go to checkout' / 'Checkout' button in the cart drawer. Never click 'Place order' or 'Pay'."
             )
-            print(f"    Proceeding to checkout: {act_res.data.action_description}")
+            print(f"    Proceeding to checkout: {act_res.description}")
         await settle(page, 3000)
 
     return cart_snapshot, None

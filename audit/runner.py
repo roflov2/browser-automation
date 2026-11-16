@@ -27,7 +27,8 @@ from stagehand import (
     local_browser,
 )
 
-from .core import OUTPUT_ROOT, Blocked, SiteResult, update_summary, write_reports
+from . import safety
+from .core import OUTPUT_ROOT, AuditError, SiteResult, UnsafeActionRefused, update_summary, write_reports
 from .page import install_noise_filter, is_noise, pause_for_login, settle
 from .workflow import Workflow
 
@@ -140,10 +141,17 @@ async def audit_site(workflow: Workflow, stagehand: Stagehand, page: Page, brows
             await browser.context.clear_cookies(**({"domain": domain} if workflow.clear_cookies == "domain" else {}))
 
     try:
-        await workflow.run(stagehand, page, url, result)
-    except Blocked as error:
-        result.status, result.message = "blocked", str(error)
-        print(f"  Blocked: {result.message}")
+        with safety.active_guard():
+            await workflow.run(stagehand, page, url, result)
+    except UnsafeActionRefused as error:
+        # The purchase guard stopped the run. Record it and move on to the next site.
+        result.status, result.failure_reason, result.message = error.status, error.reason, f"Guard refused: {error}"
+        print(f"  UNSAFE ACTION REFUSED: {error}")
+        with contextlib.suppress(Exception):
+            await page.screenshot(path=str(out_dir / "error.png"))
+    except AuditError as error:
+        result.status, result.failure_reason, result.message = error.status, error.reason, str(error)
+        print(f"  {error.status.capitalize()}: {result.message}")
     except Exception as error:
         result.status, result.message = "error", f"{type(error).__name__}: {error}"
         print(f"  ERROR: {result.message}")
@@ -203,6 +211,8 @@ async def run(workflow: Workflow, args: argparse.Namespace) -> None:
                     print("  --login needs an interactive terminal and a visible browser (unset HEADLESS).")
                 return
 
+            # The in-page purchase blocker, on every page from here on (not for --login, where a person signs in).
+            await safety.install(browser.context, page)
             for url in targets:
                 history.clear()
                 start = perf_counter()
@@ -217,6 +227,7 @@ async def run(workflow: Workflow, args: argparse.Namespace) -> None:
                     "workflow": workflow.name,
                     "status": result.status,
                     "message": result.message,
+                    "failure_reason": result.failure_reason,
                     "execution_time_ms": round((perf_counter() - start) * 1000),
                     "tokens_used": (after.total_prompt_tokens + after.total_completion_tokens)
                     - (before.total_prompt_tokens + before.total_completion_tokens),

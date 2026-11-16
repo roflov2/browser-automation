@@ -7,6 +7,7 @@ from collections import Counter
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from enum import StrEnum
 from pathlib import Path
 
 from pydantic import BaseModel, Field
@@ -134,8 +135,41 @@ def best_match(
 # ---------------------------------------------------------------------------
 # Results
 # ---------------------------------------------------------------------------
-class Blocked(RuntimeError):
+class FailureReason(StrEnum):
+    """Why a run did not finish; written next to `status` as `failure_reason`."""
+
+    BLOCKED = "blocked"
+    OUT_OF_STOCK = "out_of_stock"
+    FLOW_CHANGED = "flow_changed"
+    ELEMENT_NOT_FOUND = "element_not_found"
+    EXTRACT_FAILED = "extract_failed"
+    TIMEOUT = "timeout"
+    UNSAFE_ACTION_REFUSED = "unsafe_action_refused"
+
+
+class AuditError(RuntimeError):
+    """A run ended for a known reason. The runner records `reason` and `status`."""
+
+    reason: FailureReason = FailureReason.FLOW_CHANGED
+    status: str = "error"
+
+
+class Blocked(AuditError):
     """The site put a mandatory login wall, CAPTCHA or bot check in the way."""
+
+    reason = FailureReason.BLOCKED
+    status = "blocked"
+
+
+class UnsafeActionRefused(BaseException):
+    """The purchase guard refused an action. Nothing further is done on that site.
+
+    Deliberately not an `Exception`: no `except Exception` or `suppress(Exception)` anywhere in a
+    workflow, present or future, can swallow a refusal and carry on. Only the runner catches it.
+    """
+
+    reason = FailureReason.UNSAFE_ACTION_REFUSED
+    status = "error"
 
 
 @dataclass
@@ -146,6 +180,7 @@ class SiteResult:
     out_dir: Path
     status: str = "error"
     message: str = ""
+    failure_reason: FailureReason | None = None
     shop_url: str | None = None
     checkout_url: str | None = None
     search: dict | None = None  # what was searched for, if the workflow searches
@@ -254,6 +289,7 @@ def write_reports(result: SiteResult, item_fields: list[str] = ITEM_FIELDS) -> N
         "checkout_url": result.checkout_url,
         "status": result.status,
         "message": result.message,
+        "failure_reason": result.failure_reason,
         **({"search": result.search} if result.search else {}),
         "items": result.items,
         **result.comparison,

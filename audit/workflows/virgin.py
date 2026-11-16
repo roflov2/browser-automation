@@ -34,6 +34,7 @@ from ..core import (
     write_csv,
 )
 from ..page import dismiss_popups, settle, shot, wait_for_render
+from ..safety import current_guard, safe_act
 from ..workflow import Workflow
 
 SITE_URL = "https://www.virginaustralia.com/au/en/"
@@ -255,7 +256,8 @@ async def search_flights(stagehand: Stagehand, page: Page, trip: Trip) -> None:
             raise Blocked(state.blocked_reason)
         if state.on_results_page:
             return
-        step = await stagehand.act(
+        step = await safe_act(
+            stagehand, page,
             f"Take the single next action needed to search for {goal} using the flight search form. "
             f"Current form state: trip type={state.trip_type}, from={state.origin}, to={state.destination}, "
             f"date={state.depart_date}, guests={state.guests}, using points={state.using_points}. "
@@ -266,7 +268,7 @@ async def search_flights(stagehand: Stagehand, page: Page, trip: Trip) -> None:
         )
         await settle(page, SETTLE_MS)
         state = (await stagehand.extract(question, SearchState)).data
-        print(f"  {step.data.action_description} -> {state.reason}")
+        print(f"  {step.description} -> {state.reason}")
     if state.on_results_page:
         return
 
@@ -300,13 +302,14 @@ async def select_flight(stagehand: Stagehand, page: Page, flight: Flight) -> dic
     )
     selected = None
     for _ in range(4):
-        step = await stagehand.act(
+        step = await safe_act(
+            stagehand, page,
             f"Take the single next action to select {described} with its CHEAPEST fare (usually the first/lowest fare "
             "brand such as 'Lite' in Economy). If the fare options for that flight are not visible yet, click the "
             "flight's lowest price to reveal them; otherwise click the select button of the cheapest fare. "
             "If a popup offers a more expensive fare, decline it and keep the cheapest fare."
         )
-        print(f"    Flight selection: {step.data.action_description}")
+        print(f"    Flight selection: {step.description}")
         await settle(page, SETTLE_MS)
         selected = (await stagehand.extract(question, SelectedFare)).data
         if selected.flight_selected:
@@ -336,8 +339,8 @@ async def fill_passenger_details(stagehand: Stagehand, page: Page, passenger: Pa
             verb = "Select" if entry.kind in ("dropdown", "radio", "checkbox") else "Type"
             where = "for" if verb == "Select" else "into"
             with contextlib.suppress(Exception):
-                step = await stagehand.act(f"{verb} '{entry.value}' {where} the '{entry.label}' field of the passenger details form.")
-                print(f"    Guest details: {step.data.action_description}")
+                step = await safe_act(stagehand, page, f"{verb} '{entry.value}' {where} the '{entry.label}' field of the passenger details form.")
+                print(f"    Guest details: {step.description}")
             await page.wait_for_timeout(400)
 
 
@@ -388,6 +391,7 @@ async def walk_to_payment(stagehand: Stagehand, page: Page, passenger: Passenger
         if state.blocked_reason:
             raise Blocked(state.blocked_reason)
         if state.is_payment_page or step_type == "payment":
+            await current_guard().freeze(page)  # hard stop: the payment page is only read from here on
             return True
         if step_type == "confirmation":
             raise RuntimeError("Reached a confirmation page unexpectedly; stopping")
@@ -407,8 +411,8 @@ async def walk_to_payment(stagehand: Stagehand, page: Page, passenger: Passenger
                 f"The page shows these errors: {'; '.join(state.validation_errors[:3])}. Fix the first one if it is a "
                 f"missing choice or field (never by adding a paid extra). Otherwise: {instruction}"
             )
-        step = await stagehand.act(instruction)
-        print(f"    {step.data.action_description}")
+        step = await safe_act(stagehand, page, instruction)
+        print(f"    {step.description}")
         await settle(page, SETTLE_MS)
 
     result.message = f"Payment page not reached within {MAX_BOOKING_STEPS} steps"
@@ -530,7 +534,7 @@ class VirginWorkflow(Workflow):
         try:
             await page.goto(url)
             await settle(page, SETTLE_MS)
-            await dismiss_popups(stagehand, "cookie banner, promotional/newsletter popup, app-install banner or region selector modal")
+            await dismiss_popups(stagehand, page, "cookie banner, promotional/newsletter popup, app-install banner or region selector modal")
 
             await search_flights(stagehand, page, trip)
             await wait_for_render(page)

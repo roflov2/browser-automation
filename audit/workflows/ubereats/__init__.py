@@ -18,7 +18,7 @@ from urllib.parse import urlparse
 
 from stagehand import Page, Stagehand
 
-from ...core import ITEM_FIELDS, parse_price, slug, write_csv
+from ...core import ITEM_FIELDS, UnsafeActionRefused, parse_price, slug, write_csv
 from ...page import settle, shot
 from ...workflow import Workflow
 from .direct_site import audit_direct_restaurant_site
@@ -86,6 +86,7 @@ class UberEatsWorkflow(Workflow):
         result.search = {"address": args.address, "query": args.query}
         cart_state: CartAndCheckoutState | None = None
         checkout_state: CartAndCheckoutState | None = None
+        refused = False
 
         print(f"\n=== {url} | Address: {args.address} | Query: {args.query or 'any'} ===")
         try:
@@ -145,12 +146,15 @@ class UberEatsWorkflow(Workflow):
                 result.status, result.message = "no_checkout", "Cart reached, but final checkout screen was not reached"
             else:
                 result.status, result.message = "no_checkout", "Checkout screen not reached"
+        except UnsafeActionRefused:
+            refused = True  # the guard stopped the run: touch nothing else, on this site or the restaurant's
+            raise
         finally:
             # However the Uber Eats side ended (even blocked by a login wall), the items that made it
             # into the cart can still be compared with the restaurant's own prices.
             with contextlib.suppress(Exception):
                 result.checkout_url = await page.url()
-            if not args.skip_direct_site and result.added:
+            if not args.skip_direct_site and result.added and not refused:
                 try:
                     await audit_direct_restaurant_site(stagehand, page, result, args.address, args.restaurant_url)
                 except Exception as error:

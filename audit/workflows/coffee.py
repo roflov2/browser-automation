@@ -28,11 +28,17 @@ from ..core import (
     write_csv,
 )
 from ..page import dismiss_popups, is_sso_redirect, js, maybe_dismiss_popups, settle, shot, wait_for_render
+from ..safety import current_guard, safe_act
 from ..workflow import Workflow
 
 SETTLE_MS = 1500  # fixed wait after navigation/clicks; increase for slow sites
 MAX_SHOP_STEPS = 4
 POPUPS = "cookie banner, newsletter/discount popup, region or currency selector modal, or age-verification modal"
+SAFETY_PROMPT = (
+    "You are auditing an online store for price transparency. Never click a button that pays for or places an "
+    "order (e.g. 'Pay now', 'Complete order', 'Shop Pay', 'PayPal', 'G Pay', 'Buy it now'). Never enter card, "
+    "gift-card or discount-code details, and never choose a subscription. Never log in or create an account."
+)
 COFFEE_AFFIX = re.compile(r"(?i)^coffee\s+|\s+coffee$")  # 'Coffee X' / 'X Coffee' -> 'X'
 
 
@@ -137,13 +143,14 @@ async def find_shop_page(stagehand: Stagehand, page: Page) -> str:
         if "ERR_" in check.data.reason or "failed to load" in check.data.reason.lower():
             raise RuntimeError(check.data.reason)
 
-        step = await stagehand.act(
+        step = await safe_act(
+            stagehand, page,
             "Take the next step to get to this store's shop page where its coffee is listed for sale "
             "(e.g. a 'Shop', 'Coffee' or 'Shop Coffee' link). If navigation links are hidden behind a menu button, open the menu first."
         )
         await settle(page, SETTLE_MS)
         await maybe_dismiss_popups(stagehand, page, POPUPS)
-        print(f"  {step.data.action_description} -> {check.data.reason}")
+        print(f"  {step.description} -> {check.data.reason}")
     raise RuntimeError("Couldn't find the shop page")
 
 
@@ -204,7 +211,7 @@ async def add_product_to_cart(stagehand: Stagehand, page: Page, product: Product
     if target_url:
         await page.goto(target_url)
     else:
-        await stagehand.act(f"Click on the product '{product.name}' to open its product page.")
+        await safe_act(stagehand, page, f"Click on the product '{product.name}' to open its product page.")
     await settle(page, 1000)
     await maybe_dismiss_popups(stagehand, page, POPUPS)
 
@@ -225,7 +232,7 @@ async def add_product_to_cart(stagehand: Stagehand, page: Page, product: Product
         if not state.is_product_page:
             if attempt == 0 and not target_url:
                 # If the initial click didn't open the product page, try once more
-                await stagehand.act(f"Click on the product link or title for '{product.name}' to open its product page.")
+                await safe_act(stagehand, page, f"Click on the product link or title for '{product.name}' to open its product page.")
                 await settle(page, 1000)
                 continue
             print(f"    Not on a valid product page for '{product.name}' ({state.reason}), skipping.")
@@ -233,18 +240,19 @@ async def add_product_to_cart(stagehand: Stagehand, page: Page, product: Product
 
         acted = False
         if state.has_purchase_options and not state.one_time_selected:
-            step = await stagehand.act("Select the one-time purchase option instead of subscription.")
-            print(f"    Purchase option: {step.data.action_description}")
+            step = await safe_act(stagehand, page, "Select the one-time purchase option instead of subscription.")
+            print(f"    Purchase option: {step.description}")
             await page.wait_for_timeout(800)
             acted = True
 
         print(f"    Size: selected={state.selected_size}, lowest={state.lowest_available_size}, price={state.current_price}")
         if state.has_size_options and not state.lowest_size_selected:
             target = state.lowest_available_size or "the smallest/cheapest option"
-            step = await stagehand.act(
+            step = await safe_act(
+                stagehand, page,
                 f"Change the package size or weight selector (currently '{state.selected_size}') to {target}."
             )
-            print(f"    Size selection: {step.data.action_description}")
+            print(f"    Size selection: {step.description}")
             await page.wait_for_timeout(800)
             acted = True
 
@@ -256,12 +264,12 @@ async def add_product_to_cart(stagehand: Stagehand, page: Page, product: Product
         item["selected_price_display"] = state.current_price or product.price
         item["selected_price"] = parse_price(state.current_price) or item["shop_price"]
 
-    add = await stagehand.act("Click the 'Add to cart', 'ADD TO BAG', 'Add to bag' or 'Buy' button for this product.")
-    print(f"    Added: {add.data.action_description}")
+    add = await safe_act(stagehand, page, "Click the 'Add to cart', 'ADD TO BAG', 'Add to bag' or 'Buy' button for this product.")
+    print(f"    Added: {add.description}")
     with contextlib.suppress(Exception):
         await page.wait_for_load_state("networkidle", timeout=3000)
     await page.wait_for_timeout(1200)
-    item["status"] = "added" if add.data.success else "add_failed"
+    item["status"] = "added" if add.success else "add_failed"
     return item
 
 
@@ -275,8 +283,8 @@ async def open_cart(stagehand: Stagehand, page: Page) -> CartLines:
         ).data
         if cart.is_cart_visible and cart.items:
             return cart
-        step = await stagehand.act("Open the shopping cart (click the cart/bag icon or link in the header, or 'View cart').")
-        print(f"  Cart navigation: {step.data.action_description}")
+        step = await safe_act(stagehand, page, "Open the shopping cart (click the cart/bag icon or link in the header, or 'View cart').")
+        print(f"  Cart navigation: {step.description}")
         await settle(page, SETTLE_MS)
     raise RuntimeError("Couldn't open the shopping cart")
 
@@ -324,8 +332,8 @@ def compare_prices(added: list[dict], cart: CartLines, checkout: CheckoutDetails
 
 
 async def go_to_checkout(stagehand: Stagehand, page: Page, result: SiteResult) -> CheckoutDetails:
-    step = await stagehand.act("Click the 'Check out' / 'CHECKOUT' / 'Checkout' button to proceed to the checkout page.")
-    print(f"  Checkout: {step.data.action_description}")
+    step = await safe_act(stagehand, page, "Click the 'Check out' / 'CHECKOUT' / 'Checkout' button to proceed to the checkout page.")
+    print(f"  Checkout: {step.description}")
     await page.wait_for_timeout(3000)
 
     # If the page hasn't left /cart (e.g. the button was a decoy link or needed a form submit), navigating
@@ -336,6 +344,7 @@ async def go_to_checkout(stagehand: Stagehand, page: Page, result: SiteResult) -
         await page.goto(urljoin(result.shop_url, "/checkout"))
         await page.wait_for_timeout(3000)
 
+    await current_guard().freeze(page)  # hard stop: the checkout page is only read from here on
     print("  Waiting for checkout page to render...")
     await wait_for_render(page, 15)
     await page.wait_for_timeout(2000)
@@ -355,6 +364,7 @@ async def go_to_checkout(stagehand: Stagehand, page: Page, result: SiteResult) -
 class CoffeeWorkflow(Workflow):
     name = "coffee"
     help = "Coffee stores: add 1-5 coffees to the cart and compare shop prices with checkout"
+    system_prompt = SAFETY_PROMPT
     clear_cookies = "domain"
 
     @classmethod
@@ -371,7 +381,7 @@ class CoffeeWorkflow(Workflow):
         print(f"\n=== {url} ===")
         await page.goto(url)
         await settle(page, SETTLE_MS)
-        await dismiss_popups(stagehand, POPUPS)
+        await dismiss_popups(stagehand, page, POPUPS)
 
         shop_url = result.shop_url = await find_shop_page(stagehand, page)
         print(f"  Shop page: {shop_url}")

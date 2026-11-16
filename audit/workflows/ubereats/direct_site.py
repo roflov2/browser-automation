@@ -8,6 +8,7 @@ from stagehand import Page, Stagehand
 
 from ...core import best_match, diff, norm_name, parse_price, pct_diff
 from ...page import js, maybe_dismiss_popups, settle, shot
+from ...safety import safe_act
 from .models import DirectMenuMatch, DirectSiteExtraction, UberResult, extract_suburb_hint
 from .store import STREET_TYPES
 
@@ -125,7 +126,7 @@ JS_DIRECT_SCAN = r"""({ tokens }) => {
         const out = [];
         for (const el of root.querySelectorAll(
             'a[href], button, [role="button"], [role="tab"], [role="link"], [role="option"], [role="menuitem"], input[type="submit"], input[type="button"]')) {
-            if (!vis(el)) continue;
+            if (!vis(el) || !guardAllows(el)) continue;  // never offer a control the purchase guard would refuse
             const text = label(el).slice(0, 80);
             const href = el.tagName === 'A' ? el.href : '';
             const kind = classify(text, href);
@@ -186,12 +187,9 @@ JS_DIRECT_CLICK = r"""({ id, value }) => {
     if (!el) return false;
     el.scrollIntoView({ block: 'center', behavior: 'instant' });
     if (value !== null && el.tagName === 'SELECT') {
-        el.value = value;
-        el.dispatchEvent(new Event('change', { bubbles: true }));
-    } else {
-        el.click();
+        return safeSelect(el, value);
     }
-    return true;
+    return safeClick(el);
 }"""
 
 
@@ -328,12 +326,13 @@ async def walk_direct_site(
             if page_state == "menu_with_prices" and category_hops < MAX_CATEGORY_HOPS:
                 category_hops += 1
                 target = pending[0]
-                act_res = await stagehand.act(
+                act_res = await safe_act(
+                    stagehand, page,
                     f"On this menu, click the category tab or section link most likely to contain '{target['name']}'"
                     + (f" (it is under '{target['category']}' on Uber Eats)" if target.get("category") else "")
                     + ". Do not add anything to the cart."
                 )
-                print(f"    Category hop: {act_res.data.action_description}")
+                print(f"    Category hop: {act_res.description}")
                 force_extract = True
                 await settle(page, 1800)
                 continue
@@ -343,7 +342,8 @@ async def walk_direct_site(
             if llm_navs >= MAX_DIRECT_LLM_NAV:
                 return
             llm_navs += 1
-            act_res = await stagehand.act(
+            act_res = await safe_act(
+                stagehand, page,
                 "We need this restaurant's food menu WITH PRICES. Do the single next step towards it, in this order "
                 "of preference: (1) open the food 'Menu'; (2) otherwise click 'Order online' / 'Order now'; "
                 "(3) choose 'Pickup' / 'Takeaway' rather than delivery; "
@@ -352,7 +352,7 @@ async def walk_direct_site(
                 "Never open Uber Eats, DoorDash, Menulog or Deliveroo links, never sign in, never add items or pay."
                 + (" A store must be selected first." if scan["needsStore"] else "")
             )
-            action = f"LLM -> {act_res.data.action_description}"
+            action = f"LLM -> {act_res.description}"
         print(f"    Direct navigation: {action}")
         await settle(page, 2500)
 

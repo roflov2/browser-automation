@@ -40,7 +40,9 @@ target-version = "py311"
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "B", "UP", "SIM", "BLE", "C90", "RUF", "PTH", "DTZ", "T20", "ANN", "PLC", "PLE", "PLW"]
 # E501: the long lines are LLM prompts and in-page JavaScript, which read worse when wrapped.
-ignore = ["E501"]
+# ANN401: `Any` is the honest type at the Stagehand and page.evaluate boundaries.
+# RUF001: the close button "×" is matched on purpose.
+ignore = ["E501", "ANN401", "RUF001"]
 
 [tool.ruff.lint.mccabe]
 max-complexity = 12

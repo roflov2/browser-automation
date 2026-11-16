@@ -10,6 +10,8 @@ from pathlib import Path
 
 from stagehand import Page, Stagehand
 
+from . import safety
+
 # ---------------------------------------------------------------------------
 # Harmless transient CDP frame/context race errors that Stagehand logs loudly
 # ---------------------------------------------------------------------------
@@ -66,7 +68,7 @@ const pressEsc = () => {
 const closeDialog = () => {
     for (const d of dialogs()) {
         const b = d.querySelector('button[aria-label*="close" i]');
-        if (b) { b.click(); return true; }
+        if (b && guardAllows(b)) return safeClick(b);
     }
     return false;
 };
@@ -74,12 +76,18 @@ const closeDialog = () => {
 
 
 async def js(page: Page, fn: str, arg=None, default=None, lib: str = ""):
-    """Run the JS arrow function `fn(arg)` in the page with JS_LIB (+ `lib`) in scope; `default` on failure or null."""
+    """Run the JS arrow function `fn(arg)` in the page with JS_LIB (+ `lib`) in scope; `default` on failure or null.
+
+    Snippets may click and type only through safeClick/safeSelect/safeFill (see audit.safety). If the
+    guard refused anything, in the snippet or in the page since the last call, UnsafeActionRefused is raised.
+    """
+    script = safety.wrap_snippet(safety.current_guard(), JS_LIB + lib, f"({fn})({json.dumps(arg)})")
     try:
-        res = await page.evaluate(f"(() => {{ {JS_LIB}{lib}\nreturn ({fn})({json.dumps(arg)}); }})()")
+        out = await page.evaluate(script)
     except Exception:
         return default
-    return default if res is None else res
+    safety.raise_if_refused(out["refused"])
+    return default if out["error"] or out["value"] is None else out["value"]
 
 
 # ---------------------------------------------------------------------------
@@ -132,16 +140,17 @@ JS_HAS_OVERLAY = r"""selectors => {
 }"""
 
 
-async def dismiss_popups(stagehand: Stagehand, targets: str, caution: str = "") -> None:
+async def dismiss_popups(stagehand: Stagehand, page: Page, targets: str, caution: str = "") -> None:
     """Ask the LLM to close whichever of `targets` (e.g. 'cookie banner or newsletter popup') is visible."""
-    with contextlib.suppress(Exception):
+    with contextlib.suppress(Exception):  # a popup that cannot be dismissed is not fatal; a guard refusal still is
         found = await stagehand.observe(
             "Find the close, accept, dismiss, 'No thanks', 'Maybe later' or 'Skip' button of any visible "
-            f"{targets}. {caution}Return nothing if there is none."
+            f"{targets}. {caution}Return nothing if there is none.",
+            timeout=safety.LLM_TIMEOUT_MS,
         )
         for action in found.data[:2]:
             print(f"  Dismissing popup: {action.description}")
-            await stagehand.act(action)
+            await safety.act_on(stagehand, page, action)
 
 
 async def maybe_dismiss_popups(
@@ -149,7 +158,7 @@ async def maybe_dismiss_popups(
 ) -> None:
     """dismiss_popups, but the LLM is only invoked if a cheap DOM check finds a visible overlay."""
     if await js(page, JS_HAS_OVERLAY, selectors, default=False):
-        await dismiss_popups(stagehand, targets, caution)
+        await dismiss_popups(stagehand, page, targets, caution)
 
 
 def is_sso_redirect(url: str) -> bool:
