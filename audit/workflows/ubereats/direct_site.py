@@ -1,35 +1,84 @@
 """The restaurant's own website: find it, walk Menu -> Order online -> Pickup -> Store, and read its prices."""
 
 import contextlib
+import logging
 import re
-from urllib.parse import quote_plus
+from urllib.parse import quote_plus, urlparse
 
 from stagehand import Page, Stagehand
 
-from ...core import best_match, diff, norm_name, parse_price, pct_diff
-from ...page import js, maybe_dismiss_popups, settle, shot
+from ...core import BROWSER_ERRORS, best_match, diff, norm_name, parse_price, pct_diff
+from ...page import js, maybe_dismiss_popups, settle, shot, try_goto
+from ...safety import safe_act
 from .models import DirectMenuMatch, DirectSiteExtraction, UberResult, extract_suburb_hint
 from .store import STREET_TYPES
 
-MAX_DIRECT_SITES = 2          # search results to try before giving up
-MAX_DIRECT_SITE_STEPS = 8     # navigation steps per site
-MAX_DIRECT_LLM_NAV = 3        # LLM-driven clicks per site once DOM navigation runs dry
-MAX_CATEGORY_HOPS = 2         # "open the category containing X" attempts per site
-MIN_PRICE_SIGNALS = 4         # price-looking strings on a page before it is worth an LLM extract
+log = logging.getLogger(__name__)
+
+MAX_DIRECT_SITES = 2  # search results to try before giving up
+MAX_DIRECT_SITE_STEPS = 8  # navigation steps per site
+MAX_DIRECT_LLM_NAV = 3  # LLM-driven clicks per site once DOM navigation runs dry
+MAX_CATEGORY_HOPS = 2  # "open the category containing X" attempts per site
+MIN_PRICE_SIGNALS = 4  # price-looking strings on a page before it is worth an LLM extract
 DIRECT_KIND_ORDER = ("menu", "order", "pickup", "store", "frame")
 DIRECT_KIND_BUDGET = {"menu": 2, "order": 2, "pickup": 2, "store": 2, "frame": 1}
 
 # Never treated as "the restaurant's own site": delivery platforms, search engines, social, review/listing sites.
 EXCLUDED_SEARCH_DOMAINS = (
-    "ubereats.com", "uber.com", "doordash.com", "menulog.com", "deliveroo.", "hungrypanda.", "easi.",
-    "google.", "bing.com", "duckduckgo.com", "yahoo.com", "facebook.com", "instagram.com", "tiktok.com",
-    "x.com", "twitter.com", "pinterest.", "youtube.com", "linkedin.com", "reddit.com", "wikipedia.org",
-    "apple.com", "tripadvisor.", "yelp.", "zomato.com", "restaurantguru.", "foursquare.com",
-    "opentable.", "thefork.", "quandoo.", "agfg.com.au", "broadsheet.com.au", "timeout.com",
-    "yellowpages.", "whitepages.", "truelocal.", "localsearch.", "eatability.",
+    "ubereats.com",
+    "uber.com",
+    "doordash.com",
+    "menulog.com",
+    "deliveroo.",
+    "hungrypanda.",
+    "easi.",
+    "google.",
+    "bing.com",
+    "duckduckgo.com",
+    "yahoo.com",
+    "facebook.com",
+    "instagram.com",
+    "tiktok.com",
+    "x.com",
+    "twitter.com",
+    "pinterest.",
+    "youtube.com",
+    "linkedin.com",
+    "reddit.com",
+    "wikipedia.org",
+    "apple.com",
+    "tripadvisor.",
+    "yelp.",
+    "zomato.com",
+    "restaurantguru.",
+    "foursquare.com",
+    "opentable.",
+    "thefork.",
+    "quandoo.",
+    "agfg.com.au",
+    "broadsheet.com.au",
+    "timeout.com",
+    "yellowpages.",
+    "whitepages.",
+    "truelocal.",
+    "localsearch.",
+    "eatability.",
 )
 NON_SUBURB_WORDS = STREET_TYPES | {
-    "act", "nsw", "vic", "qld", "sa", "wa", "tas", "nt", "australia", "shop", "unit", "level", "the", "and",
+    "act",
+    "nsw",
+    "vic",
+    "qld",
+    "sa",
+    "wa",
+    "tas",
+    "nt",
+    "australia",
+    "shop",
+    "unit",
+    "level",
+    "the",
+    "and",
 }
 
 
@@ -125,7 +174,7 @@ JS_DIRECT_SCAN = r"""({ tokens }) => {
         const out = [];
         for (const el of root.querySelectorAll(
             'a[href], button, [role="button"], [role="tab"], [role="link"], [role="option"], [role="menuitem"], input[type="submit"], input[type="button"]')) {
-            if (!vis(el)) continue;
+            if (!vis(el) || !guardAllows(el)) continue;  // never offer a control the purchase guard would refuse
             const text = label(el).slice(0, 80);
             const href = el.tagName === 'A' ? el.href : '';
             const kind = classify(text, href);
@@ -186,12 +235,9 @@ JS_DIRECT_CLICK = r"""({ id, value }) => {
     if (!el) return false;
     el.scrollIntoView({ block: 'center', behavior: 'instant' });
     if (value !== null && el.tagName === 'SELECT') {
-        el.value = value;
-        el.dispatchEvent(new Event('change', { bubbles: true }));
-    } else {
-        el.click();
+        return safeSelect(el, value);
     }
-    return true;
+    return safeClick(el);
 }"""
 
 
@@ -203,7 +249,9 @@ async def find_direct_restaurant_urls(page: Page, store_name: str, loc_tokens: l
     query = quote_plus(f"{name} {loc_tokens[0] if loc_tokens else ''} menu order online".replace("  ", " "))
 
     def score(c: dict) -> int:
-        host = re.sub(r"[^a-z0-9]", "", c["host"].rsplit(".", 2)[0] if c["host"].count(".") >= 2 else c["host"].split(".")[0])
+        host = re.sub(
+            r"[^a-z0-9]", "", c["host"].rsplit(".", 2)[0] if c["host"].count(".") >= 2 else c["host"].split(".")[0]
+        )
         title = norm_name(c["text"])
         return (
             (4 if joined and (joined in host or (len(host) >= 5 and host in joined)) else 0)
@@ -211,15 +259,19 @@ async def find_direct_restaurant_urls(page: Page, store_name: str, loc_tokens: l
             + (2 if name_tokens and all(t in title for t in name_tokens) else 0)
         )
 
-    for engine_url in (f"https://html.duckduckgo.com/html/?q={query}", f"https://www.google.com/search?q={query}&hl=en"):
-        with contextlib.suppress(Exception):
-            await page.goto(engine_url)
+    for engine_url in (
+        f"https://html.duckduckgo.com/html/?q={query}",
+        f"https://www.google.com/search?q={query}&hl=en",
+    ):
+        if await try_goto(page, engine_url):
             await settle(page, 2000)
         candidates = await js(page, JS_SEARCH_RESULTS, {"excluded": list(EXCLUDED_SEARCH_DOMAINS)}, default=[])
         if candidates:
             ranked = sorted(candidates, key=score, reverse=True)  # stable: search order breaks ties
             named = [c for c in ranked if score(c) > 0]
             return [c["href"] for c in (named or ranked[:1])][:MAX_DIRECT_SITES]
+        # No results usually means the search engine showed a bot check. That is never worked around.
+        log.info(f"    No usable search results from {urlparse(engine_url).netloc}")
     return []
 
 
@@ -228,17 +280,17 @@ def apply_direct_matches(pending: list[dict], matches: list[DirectMenuMatch]) ->
     for m in matches:
         price = parse_price(m.direct_price_display)
         idx = best_match(m.uber_item_name, [i["name"] for i in pending])
-        if idx is None or not m.direct_item_name or not price:
+        if idx is None or not m.direct_item_name or price is None:
             continue
         item = pending.pop(idx)
-        uber_price = item.get("shop_price") or item.get("selected_price")
+        uber_price = item["shop_price"] if item.get("shop_price") is not None else item.get("selected_price")
         item["direct_item_name"] = m.direct_item_name
         item["direct_price_display"] = f"${price:.2f}"
         item["direct_price"] = price
         item["uber_vs_direct_diff"] = diff(uber_price, price)
         item["uber_vs_direct_markup_pct"] = pct_diff(uber_price, price)
         if uber_price is not None:
-            print(
+            log.info(
                 f"    Direct match: '{item['name']}' -> Uber Eats ${uber_price:.2f} vs "
                 f"direct '{m.direct_item_name}' ${price:.2f} "
                 f"({item['uber_vs_direct_diff']:+.2f} / {item['uber_vs_direct_markup_pct']:+}%)"
@@ -248,7 +300,9 @@ def apply_direct_matches(pending: list[dict], matches: list[DirectMenuMatch]) ->
 async def extract_direct_prices(stagehand: Stagehand, store_name: str, pending: list[dict]) -> str:
     """One LLM extract for the still-unmatched items; returns the page_state."""
     wanted = "; ".join(
-        f"'{i['name']}'" + (f" [{i['category']}]" if i.get("category") else "") + f" (Uber Eats {i['shop_price_display']})"
+        f"'{i['name']}'"
+        + (f" [{i['category']}]" if i.get("category") else "")
+        + f" (Uber Eats {i['shop_price_display']})"
         for i in pending
     )
     data = (
@@ -263,7 +317,7 @@ async def extract_direct_prices(stagehand: Stagehand, store_name: str, pending: 
         )
     ).data
     apply_direct_matches(pending, data.matches)
-    print(f"    Direct page: {data.page_state} | still missing {len(pending)} item(s) | {data.summary[:100]}")
+    log.info(f"    Direct page: {data.page_state} | still missing {len(pending)} item(s) | {data.summary[:100]}")
     return data.page_state
 
 
@@ -278,8 +332,7 @@ async def take_direct_step(page: Page, scan: dict, tried: set[str], used: dict[s
                 continue
             tried.add(key)
             if href.startswith("http") and href != here:
-                with contextlib.suppress(Exception):  # slow sites can time out yet still render
-                    await page.goto(a["href"])
+                await try_goto(page, a["href"])
             elif not await js(page, JS_DIRECT_CLICK, {"id": a["id"], "value": a["value"]}, default=False):
                 continue
             used[kind] = used.get(kind, 0) + 1
@@ -305,16 +358,22 @@ async def walk_direct_site(
     for step in range(1, MAX_DIRECT_SITE_STEPS + 1):
         for frac in (0.4, 0.8, 1.0, 0):  # trigger lazy-loaded menu sections, then return to the top
             await js(page, "f => window.scrollTo(0, document.documentElement.scrollHeight * f)", frac)
-            await page.wait_for_timeout(350)
+            await settle(page, 350)
 
-        scan = await js(page, JS_DIRECT_SCAN, {"tokens": loc_tokens},
-                        default={"url": await page.url(), "prices": 0, "needsStore": False, "actions": []})
+        scan = await js(
+            page,
+            JS_DIRECT_SCAN,
+            {"tokens": loc_tokens},
+            default={"url": await page.url(), "prices": 0, "needsStore": False, "actions": []},
+        )
         can_navigate = any(
             f"{a['kind']}|{a['text'].lower()}|{a['href'].split('#')[0]}" not in tried
             and used.get(a["kind"], 0) < DIRECT_KIND_BUDGET[a["kind"]]
             for a in scan["actions"]
         )
-        print(f"    Direct step {step}: {scan['url']} | price signals={scan['prices']} | nav options={len(scan['actions'])}")
+        log.info(
+            f"    Direct step {step}: {scan['url']} | price signals={scan['prices']} | nav options={len(scan['actions'])}"
+        )
 
         # Only spend an LLM extract where prices are actually on screen (or there is nowhere left to click)
         page_key = (scan["url"], scan["prices"] // 5)
@@ -328,12 +387,14 @@ async def walk_direct_site(
             if page_state == "menu_with_prices" and category_hops < MAX_CATEGORY_HOPS:
                 category_hops += 1
                 target = pending[0]
-                act_res = await stagehand.act(
+                act_res = await safe_act(
+                    stagehand,
+                    page,
                     f"On this menu, click the category tab or section link most likely to contain '{target['name']}'"
                     + (f" (it is under '{target['category']}' on Uber Eats)" if target.get("category") else "")
-                    + ". Do not add anything to the cart."
+                    + ". Do not add anything to the cart.",
                 )
-                print(f"    Category hop: {act_res.data.action_description}")
+                log.info(f"    Category hop: {act_res.description}")
                 force_extract = True
                 await settle(page, 1800)
                 continue
@@ -343,17 +404,19 @@ async def walk_direct_site(
             if llm_navs >= MAX_DIRECT_LLM_NAV:
                 return
             llm_navs += 1
-            act_res = await stagehand.act(
+            act_res = await safe_act(
+                stagehand,
+                page,
                 "We need this restaurant's food menu WITH PRICES. Do the single next step towards it, in this order "
                 "of preference: (1) open the food 'Menu'; (2) otherwise click 'Order online' / 'Order now'; "
                 "(3) choose 'Pickup' / 'Takeaway' rather than delivery; "
                 f"(4) if asked to choose a store or location, choose the one in or nearest to {where} "
                 "(type the suburb into the store search if needed), and choose ASAP / the earliest time if asked. "
                 "Never open Uber Eats, DoorDash, Menulog or Deliveroo links, never sign in, never add items or pay."
-                + (" A store must be selected first." if scan["needsStore"] else "")
+                + (" A store must be selected first." if scan["needsStore"] else ""),
             )
-            action = f"LLM -> {act_res.data.action_description}"
-        print(f"    Direct navigation: {action}")
+            action = f"LLM -> {act_res.description}"
+        log.info(f"    Direct navigation: {action}")
         await settle(page, 2500)
 
 
@@ -369,31 +432,35 @@ async def audit_direct_restaurant_site(
     if not added or not result.store_name:
         return
 
-    print(f"\n  --- Auditing Direct Restaurant Website for '{result.store_name}' ---")
+    log.info(f"\n  --- Auditing Direct Restaurant Website for '{result.store_name}' ---")
     loc_tokens = location_tokens(result.store_name, result.store_location, address)
-    urls = [explicit_restaurant_url] if explicit_restaurant_url else await find_direct_restaurant_urls(
-        page, result.store_name, loc_tokens
+    urls = (
+        [explicit_restaurant_url]
+        if explicit_restaurant_url
+        else await find_direct_restaurant_urls(page, result.store_name, loc_tokens)
     )
     if not urls:
-        print(f"  Could not locate an independent website for '{result.store_name}'.")
+        log.info(f"  Could not locate an independent website for '{result.store_name}'.")
         return
 
     pending = list(added)
     for n, url in enumerate(urls, start=1):
-        print(f"  Direct restaurant URL ({n}/{len(urls)}): {url} | branch hints: {loc_tokens}")
+        log.info(f"  Direct restaurant URL ({n}/{len(urls)}): {url} | branch hints: {loc_tokens}")
         try:
             await page.goto(url)
             await settle(page, 2500)
             await maybe_dismiss_popups(
-                stagehand, page, "cookie banner, promotional/newsletter popup or app-install banner",
+                stagehand,
+                page,
+                "cookie banner, promotional/newsletter popup or app-install banner",
                 caution="Do NOT sign in or start an order. ",
             )
             await walk_direct_site(stagehand, page, result.store_name, pending, loc_tokens)
-        except Exception as error:
-            print(f"  Direct website check failed on {url}: {error}")
+        except BROWSER_ERRORS as error:  # try the next candidate site
+            log.warning(f"  Direct website check failed on {url}: {type(error).__name__}: {error}")
         await shot(page, result.out_dir / f"restaurant_direct_{n}.png")
         if result.direct_website_url is None or len(pending) < len(added):
-            with contextlib.suppress(Exception):
+            with contextlib.suppress(*BROWSER_ERRORS):  # the browser may be gone; the URL is a nicety
                 result.direct_website_url = await page.url()
         if len(pending) < len(added):  # this site yielded prices; keep its page text as evidence
             text = await js(page, "() => document.body.innerText", default="")
@@ -401,4 +468,4 @@ async def audit_direct_restaurant_site(
             break
 
     for item in pending:
-        print(f"    Direct match: '{item['name']}' -> not found with a price on the restaurant's site")
+        log.info(f"    Direct match: '{item['name']}' -> not found with a price on the restaurant's site")

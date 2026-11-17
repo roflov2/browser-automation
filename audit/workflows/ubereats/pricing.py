@@ -1,109 +1,205 @@
 """Uber Eats price & fee comparison: menu vs checkout, advertised vs charged fees, Uber vs restaurant direct."""
 
+from __future__ import annotations
+
+import logging
+from dataclasses import dataclass
+from typing import Any
+
 from ...core import (
+    Fee,
+    Item,
+    LineItem,
+    Report,
     compare_item_prices,
     diff,
+    drip_outcome,
     drip_verdict,
+    final_price_was_read,
     money_sum,
     parse_amount,
     parse_price,
     pct_diff,
     pct_of,
     pop_best_line,
+    positive,
     summarise_extras,
 )
 from .models import CartAndCheckoutState, UberResult
 
+log = logging.getLogger(__name__)
+
 FEE_BREAKDOWN_FIELDS = [
     "fee_type", "label", "advertised_display", "checkout_display",
     "amount", "diff_vs_advertised", "pct_of_subtotal", "mandatory",
-]
+]  # fmt: skip
+UNDISCLOSED = "not disclosed upfront"
+ASSUMED_CURRENCY = "AUD"  # ubereats.com/au; reported separately from a currency the page actually showed
 
 
-def compare_prices(
-    result: UberResult,
-    cart: CartAndCheckoutState | None,
-    checkout: CartAndCheckoutState | None,
-) -> dict:
-    final = checkout or cart
-    added = result.added
+@dataclass(frozen=True)
+class Charges:
+    """The amounts on the last screen that was read. None means "not shown", never zero."""
 
-    def shown(attr: str):
+    subtotal: float | None = None
+    delivery: float | None = None
+    service: float | None = None
+    small_order: float | None = None
+    priority: float | None = None
+    total: float | None = None
+    other: tuple[tuple[Fee, float | None], ...] = ()
+
+    @classmethod
+    def read(cls, screen: CartAndCheckoutState | None) -> Charges:
+        if screen is None:
+            return cls()
+        return cls(
+            subtotal=parse_price(screen.subtotal),
+            delivery=parse_price(screen.delivery_fee),
+            service=parse_price(screen.service_fee),
+            small_order=parse_price(screen.small_order_fee),
+            priority=parse_price(screen.priority_delivery_fee),
+            total=parse_price(screen.total),
+            other=tuple((fee, parse_amount(fee.amount)) for fee in screen.other_fees),
+        )
+
+    @property
+    def fees(self) -> list[dict[str, Any]]:
+        """Every fee that was shown other than delivery, including a fee shown as $0.00."""
+        named = (("Service Fee", self.service), ("Small Order Fee", self.small_order))
+        shown = [{"label": label, "amount": amount} for label, amount in named if amount is not None]
+        return shown + [{"label": fee.label, "amount": amount} for fee, amount in self.other]
+
+
+def checkout_lines(
+    cart: CartAndCheckoutState | None, checkout: CartAndCheckoutState | None
+) -> tuple[list[LineItem], str | None]:
+    """The line items to compare menu prices with, and where they came from.
+
+    The checkout page collapses the cart ('Cart summary (2 items)'), so its item list is often
+    empty; the cart drawer read just before it is the fallback.
+    """
+    for source, screen in (("checkout", checkout), ("cart", cart)):
+        if screen and screen.items:
+            return list(screen.items), source
+    return [], None
+
+
+def fee_row(
+    fee_type: str, label: str, advertised: str, shown: str, amount: float | None,
+    diff_vs_advertised: float | None, pct: float | None, mandatory: bool = True,
+) -> dict[str, Any]:  # fmt: skip
+    return {
+        "fee_type": fee_type, "label": label, "advertised_display": advertised, "checkout_display": shown,
+        "amount": amount, "diff_vs_advertised": diff_vs_advertised, "pct_of_subtotal": pct, "mandatory": mandatory,
+    }  # fmt: skip
+
+
+def fee_breakdown(
+    result: UberResult, final: CartAndCheckoutState | None, c: Charges, base: float | None
+) -> list[dict[str, Any]]:
+    """One row per fee: what was advertised up front against what the last screen charged."""
+
+    def shown(attr: str) -> str | None:
         return getattr(final, attr) if final else None
 
-    expected_subtotal = compare_item_prices(added, pop_best_line(final.items if final else []))
-    subtotal = parse_price(shown("subtotal"))
-    delivery = parse_price(shown("delivery_fee"))
-    service = parse_price(shown("service_fee"))
-    small_order = parse_price(shown("small_order_fee"))
-    base = subtotal or expected_subtotal
-    service_pct = pct_of(service, base)
-    delivery_diff = diff(delivery, result.advertised_delivery_fee)
-    other = [(f, parse_amount(f.amount)) for f in (final.other_fees if final else [])]
-
-    fees = [{"label": label, "amount": amt} for label, amt in (("Service Fee", service), ("Small Order Fee", small_order)) if amt]
-    fees += [{"label": f.label, "amount": amt} for f, amt in other]
-    fees_total = money_sum([f["amount"] for f in fees]) or 0.0
-
-    def fee_row(fee_type, label, advertised, checkout_display, amount, diff_adv, pct, mandatory=True) -> dict:
-        return {
-            "fee_type": fee_type, "label": label, "advertised_display": advertised,
-            "checkout_display": checkout_display, "amount": amount, "diff_vs_advertised": diff_adv,
-            "pct_of_subtotal": pct, "mandatory": mandatory,
-        }
-
-    undisclosed = "not disclosed upfront"
-    fee_breakdown = [
+    return [
         fee_row("delivery_fee", "Standard Delivery Fee", result.advertised_delivery_fee_display or "not shown",
-                shown("delivery_fee") or "not shown", delivery, delivery_diff,
-                round((delivery / base) * 100.0, 1) if delivery is not None and base else None),
-        fee_row("service_fee", "Service Fee", result.advertised_service_fee_display or undisclosed,
-                shown("service_fee") or "$0.00 / not shown", service, service, service_pct),
-        fee_row("small_order_fee", "Small Order Fee", undisclosed,
-                shown("small_order_fee") or "$0.00", small_order or 0.0, small_order, pct_of(small_order, base) or 0.0),
+                shown("delivery_fee") or "not shown", c.delivery, diff(c.delivery, result.advertised_delivery_fee),
+                pct_of(c.delivery, base)),
+        fee_row("service_fee", "Service Fee", result.advertised_service_fee_display or UNDISCLOSED,
+                shown("service_fee") or "$0.00 / not shown", c.service, c.service, pct_of(c.service, base)),
+        fee_row("small_order_fee", "Small Order Fee", UNDISCLOSED, shown("small_order_fee") or "not shown",
+                c.small_order, c.small_order, pct_of(c.small_order, base)),
         fee_row("priority_delivery", "Priority Delivery Upgrade (Optional)", "n/a",
-                shown("priority_delivery_fee") or "not offered", parse_price(shown("priority_delivery_fee")),
-                None, None, mandatory=False),
-        *(fee_row("other_fee", f.label, undisclosed, f.amount, amt, amt, pct_of(amt, base)) for f, amt in other),
-    ]
+                shown("priority_delivery_fee") or "not offered", c.priority, None, None, mandatory=False),
+        *(fee_row("other_fee", fee.label, UNDISCLOSED, fee.amount, amount, amount, pct_of(amount, base))
+          for fee, amount in c.other),
+    ]  # fmt: skip
 
-    for category, label, amount, attr in (
-        ("service_fee", f"Service Fee ({service_pct}% of subtotal)" if service_pct else "Service Fee", service, "service_fee"),
-        ("small_order_fee", "Small Order Fee", small_order, "small_order_fee"),
+
+def record_checkout_fees(
+    result: UberResult, final: CartAndCheckoutState | None, c: Charges, service_pct: float | None
+) -> None:
+    """Add the mandatory fees of the fee breakdown to the run's extras, so extras.csv lists them too."""
+    service_label = f"Service Fee ({service_pct}% of subtotal)" if service_pct is not None else "Service Fee"
+    for category, label, amount, display in (
+        ("service_fee", service_label, c.service, final.service_fee if final else None),
+        ("small_order_fee", "Small Order Fee", c.small_order, final.small_order_fee if final else None),
     ):
         if amount is not None:
             result.extras.append({
                 "step": len(result.steps), "step_type": "checkout", "step_heading": "Checkout Breakdown",
-                "category": category, "label": label, "price_display": shown(attr), "price": amount,
+                "category": category, "label": label, "price_display": display, "price": amount,
                 "price_basis": "per order", "selected_by_default": True, "mandatory": True,
-            })
+            })  # fmt: skip
 
-    matched_direct = [i for i in added if i.get("direct_price") is not None and i.get("shop_price") is not None]
-    direct_subtotal = money_sum([i["direct_price"] for i in matched_direct])
-    uber_matched_subtotal = money_sum([i["shop_price"] for i in matched_direct])
-    markup_dollars = diff(uber_matched_subtotal, direct_subtotal)
-    markup_pct = pct_diff(uber_matched_subtotal, direct_subtotal)
+
+def direct_markup(added: list[Item]) -> dict[str, Any]:
+    """Uber Eats menu prices against the restaurant's own, over the items found on both."""
+    matched = [i for i in added if i.get("direct_price") is not None and i.get("shop_price") is not None]
+    direct = money_sum(i["direct_price"] for i in matched)
+    uber = money_sum(i["shop_price"] for i in matched)
+    return {
+        "direct_items_matched": len(matched),
+        "direct_matched_subtotal": direct,
+        "uber_matched_subtotal": uber,
+        "uber_vs_direct_subtotal_diff": diff(uber, direct),
+        "uber_vs_direct_markup_pct": pct_diff(uber, direct),
+    }
+
+
+def drip_reasons(
+    result: UberResult, final: CartAndCheckoutState | None, c: Charges, added: list[Item],
+    expected_subtotal: float | None, service_pct: float | None, markup: dict[str, Any], preselected: list[str],
+) -> list[str]:  # fmt: skip
+    service_display, small_display, delivery_display = (
+        (final.service_fee, final.small_order_fee, final.delivery_fee) if final else (None, None, None)
+    )
+    service_note = f", {service_pct}% of subtotal)" if service_pct else ")"
+    other_total = money_sum(amount for _, amount in c.other)
+    checks = (
+        ("menu item price increased at checkout", any(i["price_increased"] for i in added)),
+        ("checkout item subtotal higher than menu prices", positive(diff(c.subtotal, expected_subtotal))),
+        (f"service fee added at checkout ({service_display}{service_note}", positive(c.service)),
+        (f"small order fee added ({small_display})", positive(c.small_order)),
+        (f"delivery fee higher than advertised ({result.advertised_delivery_fee_display} -> {delivery_display})",
+         positive(diff(c.delivery, result.advertised_delivery_fee))),
+        ("other non-tax fees added", positive(other_total)),
+        (f"Uber Eats menu prices marked up +{markup['uber_vs_direct_markup_pct']}% "
+         f"(+${markup['uber_vs_direct_subtotal_diff'] or 0:.2f}) vs restaurant direct website",
+         positive(markup["uber_vs_direct_subtotal_diff"])),
+        ("optional extras pre-selected: " + ", ".join(preselected), bool(preselected)),
+    )  # fmt: skip
+    return [reason for reason, hit in checks if hit]
+
+
+def compare_prices(
+    result: UberResult, cart: CartAndCheckoutState | None, checkout: CartAndCheckoutState | None
+) -> Report:
+    """Menu prices and advertised fees against the last screen read (checkout if reached, else the cart)."""
+    final = checkout or cart
+    added = result.added
+    c = Charges.read(final)
+    lines, lines_source = checkout_lines(cart, checkout)
+    expected_subtotal = compare_item_prices(added, pop_best_line(lines))
+    base = c.subtotal if c.subtotal is not None else expected_subtotal
+    service_pct = pct_of(c.service, base)
+    fees = c.fees
+    fees_total = money_sum(f["amount"] for f in fees) or 0.0
+    components = money_sum([c.subtotal, c.delivery, fees_total]) if c.subtotal is not None else None
+
+    breakdown = fee_breakdown(result, final, c, base)
+    record_checkout_fees(result, final, c, service_pct)
+    markup = direct_markup(added)
     extras = summarise_extras(result.extras)
-    preselected = extras["extras_preselected"]
+    reasons = drip_reasons(
+        result, final, c, added, expected_subtotal, service_pct, markup, extras["extras_preselected"]
+    )
 
-    reasons = [
-        reason for reason, hit in (
-            ("menu item price increased at checkout", any(i["price_increased"] for i in added)),
-            ("checkout item subtotal higher than menu prices", (diff(subtotal, expected_subtotal) or 0) > 0),
-            (f"service fee added at checkout ({shown('service_fee')}"
-             + (f", {service_pct}% of subtotal)" if service_pct else ")"), (service or 0) > 0),
-            (f"small order fee added ({shown('small_order_fee')})", (small_order or 0) > 0),
-            (f"delivery fee higher than advertised ({result.advertised_delivery_fee_display} -> {shown('delivery_fee')})",
-             (delivery_diff or 0) > 0),
-            ("other non-tax fees added", fees_total > (service or 0) + (small_order or 0)),
-            (f"Uber Eats menu prices marked up +{markup_pct}% (+${markup_dollars or 0:.2f}) vs restaurant direct website",
-             (markup_dollars or 0) > 0),
-            ("optional extras pre-selected: " + ", ".join(preselected), bool(preselected)),
-        )
-        if hit
-    ]
+    def shown(attr: str) -> Any:
+        return getattr(final, attr) if final else None
 
-    total = parse_price(shown("total"))
     return {
         "store_name": result.store_name,
         "direct_website_url": result.direct_website_url,
@@ -111,63 +207,65 @@ def compare_prices(
         "expected_subtotal": expected_subtotal,
         "cart_subtotal_display": cart.subtotal if cart else None,
         "checkout_subtotal_display": shown("subtotal"),
-        "checkout_subtotal": subtotal,
-        "subtotal_vs_expected_diff": diff(subtotal, expected_subtotal),
+        "checkout_subtotal": c.subtotal,
+        "subtotal_vs_expected_diff": diff(c.subtotal, expected_subtotal),
+        "item_prices_source": lines_source,
         "advertised_delivery_fee_display": result.advertised_delivery_fee_display,
         "advertised_delivery_fee": result.advertised_delivery_fee,
-        "shipping": shown("delivery_fee") or result.advertised_delivery_fee_display
+        "shipping": shown("delivery_fee")
+        or result.advertised_delivery_fee_display
         or "not calculated (login/checkout required)",
-        "checkout_delivery_fee": delivery,
-        "delivery_fee_diff": delivery_diff,
+        "checkout_delivery_fee": c.delivery,
+        "delivery_fee_diff": diff(c.delivery, result.advertised_delivery_fee),
         "priority_delivery_fee_display": shown("priority_delivery_fee"),
         "service_fee_display": shown("service_fee"),
-        "service_fee": service,
+        "service_fee": c.service,
         "service_fee_pct_of_subtotal": service_pct,
         "small_order_fee_display": shown("small_order_fee"),
-        "small_order_fee": small_order,
+        "small_order_fee": c.small_order,
         "other_fees": fees,
         "other_fees_total": fees_total,
-        "direct_items_matched": len(matched_direct),
-        "direct_matched_subtotal": direct_subtotal,
-        "uber_matched_subtotal": uber_matched_subtotal,
-        "uber_vs_direct_subtotal_diff": markup_dollars,
-        "uber_vs_direct_markup_pct": markup_pct,
-        "fee_breakdown": fee_breakdown,
+        **markup,
+        "fee_breakdown": breakdown,
         **extras,
         "tax_amount_display": shown("tax_amount"),
         "tax_included": shown("tax_included"),
         "checkout_total_display": shown("total"),
-        "checkout_total": total,
-        "total_vs_expected_diff": diff(total, expected_subtotal),
-        "currency": shown("currency") or "AUD",
-        "drip_detected": bool(reasons),
-        "drip_reasons": reasons,
+        "checkout_total": c.total,
+        "total_vs_expected_diff": diff(c.total, expected_subtotal),
+        # Subtotal + delivery + fees, and how far the total is from it. A negative gap is a discount or
+        # promotion: it can make the total look lower than the menu prices while fees were still added.
+        "fees_and_delivery_total": money_sum([c.delivery, fees_total]),
+        "total_vs_components_diff": diff(c.total, components),
+        "currency": shown("currency"),
+        "currency_assumed": None if shown("currency") else ASSUMED_CURRENCY,
+        **drip_outcome(reasons, final_price_was_read(checkout, c.total)),
         "checkout_summary": shown("summary"),
     }
 
 
 def print_audit_tables(result: UberResult) -> None:
+    """Log the fee breakdown and the Uber-vs-direct price table of a finished run."""
     c = result.comparison
-    print("\n  --- Extra Fees Breakdown (Uber Eats) ---")
+    log.info("\n  --- Extra Fees Breakdown (Uber Eats) ---")
     for row in c["fee_breakdown"]:
         pct_str = f" ({row['pct_of_subtotal']}% of subtotal)" if row.get("pct_of_subtotal") else ""
-        print(
-            f"    {row['label']:<34} | Adv: {str(row['advertised_display']):<24} "
-            f"| Checkout: {row['checkout_display']}{pct_str}"
+        log.info(
+            f"    {row['label']:<34} | Adv: {row['advertised_display']!s:<24} | Checkout: {row['checkout_display']}{pct_str}"
         )
 
-    print("\n  --- Menu Item Unit Price Comparison (Uber Eats vs Restaurant Direct) ---")
+    log.info("\n  --- Menu Item Unit Price Comparison (Uber Eats vs Restaurant Direct) ---")
     for item in result.added:
         uber_p = item.get("shop_price_display") or item.get("selected_price_display")
         delta, pct = item.get("uber_vs_direct_diff"), item.get("uber_vs_direct_markup_pct")
         markup = f"{delta:+.2f} ({pct:+}%)" if delta is not None else "n/a"
-        print(
-            f"    {item['name']:<34} | Uber Eats: {str(uber_p):<10} "
+        log.info(
+            f"    {item['name']:<34} | Uber Eats: {uber_p!s:<10} "
             f"| Direct: {item.get('direct_price_display') or 'not found':<10} | Diff: {markup}"
         )
 
-    print(
+    log.info(
         f"\n  Summary: Uber Subtotal={c['expected_subtotal']} | Checkout Subtotal={c['checkout_subtotal_display']} "
         f"| Delivery={c['shipping']} | Service/Other Fees={c['other_fees_total']} | Total={c['checkout_total_display']}"
     )
-    print(f"  Drip / Markup Detected: {drip_verdict(c)}")
+    log.info(f"  Drip / Markup Detected: {drip_verdict(c)}")

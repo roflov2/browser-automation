@@ -13,12 +13,13 @@ The run always stops on the checkout screen: nothing is ordered or paid for.
 
 import argparse
 import contextlib
-import os
+import logging
 from urllib.parse import urlparse
 
 from stagehand import Page, Stagehand
 
-from ...core import ITEM_FIELDS, parse_price, slug, write_csv
+from ...config import Settings
+from ...core import BROWSER_ERRORS, ITEM_FIELDS, SiteResult, Status, UnsafeActionRefused, parse_price, slug, write_csv
 from ...page import settle, shot
 from ...workflow import Workflow
 from .direct_site import audit_direct_restaurant_site
@@ -35,7 +36,8 @@ from .store import (
     walk_to_checkout,
 )
 
-DEFAULT_ADDRESS = os.getenv("UBEREATS_ADDRESS", "260 City Walk, Canberra ACT 2601")
+log = logging.getLogger(__name__)
+
 SETTLE_MS = 2000
 
 SAFETY_PROMPT = (
@@ -51,26 +53,53 @@ class UberEatsWorkflow(Workflow):
     system_prompt = SAFETY_PROMPT
     viewport = (1440, 1000)
     result_class = UberResult
-    item_fields = [
+    item_fields = (
         *ITEM_FIELDS[:-1],
-        "direct_item_name", "direct_price_display", "uber_vs_direct_diff", "uber_vs_direct_markup_pct",
+        "direct_item_name",
+        "direct_price_display",
+        "uber_vs_direct_diff",
+        "uber_vs_direct_markup_pct",
         ITEM_FIELDS[-1],
-    ]
+    )
 
     @classmethod
-    def add_arguments(cls, parser: argparse.ArgumentParser) -> None:
-        parser.add_argument("urls", nargs="*", default=[SITE_URL],
-                            help=f"Uber Eats homepage or direct `/store/...` URL(s) (default: {SITE_URL})")
-        parser.add_argument("--address", default=DEFAULT_ADDRESS,
-                            help=f"Delivery address to enter (default: '{DEFAULT_ADDRESS}')")
-        parser.add_argument("--query", default=None,
-                            help="Optional search term when starting from the homepage (e.g. 'burgers', 'thai')")
-        parser.add_argument("--items", "--products", dest="items", type=int, default=2, choices=range(1, 6), metavar="N",
-                            help="Number of menu items to add to the order (1-5, default 2)")
-        parser.add_argument("--restaurant-url", default=None,
-                            help="Optional direct URL to the restaurant's own website/ordering page for unit-price comparison")
-        parser.add_argument("--skip-direct-site", action="store_true",
-                            help="Skip visiting the restaurant's own website at the end of the Uber Eats run")
+    def add_arguments(cls, parser: argparse.ArgumentParser, settings: Settings) -> None:
+        parser.add_argument(
+            "urls",
+            nargs="*",
+            default=[SITE_URL],
+            help=f"Uber Eats homepage or direct `/store/...` URL(s) (default: {SITE_URL})",
+        )
+        parser.add_argument(
+            "--address",
+            default=settings.ubereats_address,
+            help=f"Delivery address to enter (default: '{settings.ubereats_address}')",
+        )
+        parser.add_argument(
+            "--query",
+            default=None,
+            help="Optional search term when starting from the homepage (e.g. 'burgers', 'thai')",
+        )
+        parser.add_argument(
+            "--items",
+            "--products",
+            dest="items",
+            type=int,
+            default=2,
+            choices=range(1, 6),
+            metavar="N",
+            help="Number of menu items to add to the order (1-5, default 2)",
+        )
+        parser.add_argument(
+            "--restaurant-url",
+            default=None,
+            help="Optional direct URL to the restaurant's own website/ordering page for unit-price comparison",
+        )
+        parser.add_argument(
+            "--skip-direct-site",
+            action="store_true",
+            help="Skip visiting the restaurant's own website at the end of the Uber Eats run",
+        )
 
     def targets(self) -> list[str]:
         return self.args.urls
@@ -81,20 +110,24 @@ class UberEatsWorkflow(Workflow):
         path = urlparse(url).path
         return f"{folder}-{slug(path.split('/store/')[-1].split('/')[0])}" if "/store/" in path else folder
 
-    async def run(self, stagehand: Stagehand, page: Page, url: str, result: UberResult) -> None:
+    async def run(self, stagehand: Stagehand, page: Page, url: str, result: SiteResult) -> None:
+        assert isinstance(result, UberResult)
         args, out = self.args, result.out_dir
         result.search = {"address": args.address, "query": args.query}
         cart_state: CartAndCheckoutState | None = None
         checkout_state: CartAndCheckoutState | None = None
+        refused = False
 
-        print(f"\n=== {url} | Address: {args.address} | Query: {args.query or 'any'} ===")
+        log.info(f"\n=== {url} | Address: {args.address} | Query: {args.query or 'any'} ===")
         try:
             await page.goto(url)
             await settle(page, SETTLE_MS)
             await dismiss_uber_popups(stagehand, page)
 
-            result.shop_url = await ensure_address_and_open_store(stagehand, page, args.address, args.query, result)
-            print(f"  Store page: {result.shop_url}")
+            result.shop_url = await ensure_address_and_open_store(
+                stagehand, page, args.address, args.query, result, interactive=not self.settings.headless
+            )
+            log.info(f"  Store page: {result.shop_url}")
             await clear_existing_cart(stagehand, page)
             await shot(page, out / "store.png")
 
@@ -112,51 +145,68 @@ class UberEatsWorkflow(Workflow):
             if header.advertised_delivery_fee and not result.advertised_delivery_fee_display:
                 result.advertised_delivery_fee_display = header.advertised_delivery_fee
                 result.advertised_delivery_fee = parse_price(header.advertised_delivery_fee)
-            result.advertised_service_fee_display = result.advertised_service_fee_display or header.advertised_service_fee
+            result.advertised_service_fee_display = (
+                result.advertised_service_fee_display or header.advertised_service_fee
+            )
 
             write_csv(out / "products.csv", list(MenuItem.model_fields), [m.model_dump() for m in menu.items])
-            print(
+            log.info(
                 f"  Store: {result.store_name} | Extracted {len(menu.items)} menu items "
                 f"| Advertised delivery: {result.advertised_delivery_fee_display or 'n/a'}"
             )
 
             chosen = choose_menu_items(menu.items, args.items)
             if not chosen:
-                result.status, result.message = "no_items_found", "No available food/drink items found on the store menu"
+                result.fail(Status.NO_ITEMS_FOUND, "No available food/drink items found on the store menu")
                 return
 
             for idx, menu_item in enumerate(chosen, start=1):
-                print(f"  Adding ({idx}/{len(chosen)}): {menu_item.name} ({menu_item.price})")
+                log.info(f"  Adding ({idx}/{len(chosen)}): {menu_item.name} ({menu_item.price})")
                 try:
                     item = await add_menu_item_to_cart(stagehand, page, menu_item, result, idx)
-                except Exception as error:
+                except BROWSER_ERRORS as error:  # keep going with the remaining items
                     item = order_item(menu_item, error=str(error))
-                    print(f"    Skipped: {error}")
+                    log.warning(f"    Skipped: {type(error).__name__}: {error}")
                 result.items.append(item)
 
             if not result.added:
-                result.status, result.message = "add_to_cart_failed", "No menu items could be added to the order"
+                result.fail(Status.ADD_TO_CART_FAILED, "No menu items could be added to the order")
                 return
 
-            cart_state, checkout_state = await walk_to_checkout(stagehand, page, result)
-            if checkout_state and (checkout_state.is_checkout_page or checkout_state.delivery_fee or checkout_state.service_fee):
-                result.status = "ok"
+            cart_state, checkout_state = await walk_to_checkout(
+                stagehand, page, result, interactive=not self.settings.headless
+            )
+            if checkout_state and (
+                checkout_state.is_checkout_page or checkout_state.delivery_fee or checkout_state.service_fee
+            ):
+                result.status = Status.OK
             elif cart_state or checkout_state:
-                result.status, result.message = "no_checkout", "Cart reached, but final checkout screen was not reached"
+                result.fail(Status.NO_CHECKOUT, "Cart reached, but final checkout screen was not reached")
             else:
-                result.status, result.message = "no_checkout", "Checkout screen not reached"
+                result.fail(Status.NO_CHECKOUT, "Checkout screen not reached")
+        except UnsafeActionRefused:
+            refused = True  # the guard stopped the run: touch nothing else, on this site or the restaurant's
+            raise
         finally:
-            # However the Uber Eats side ended (even blocked by a login wall), the items that made it
-            # into the cart can still be compared with the restaurant's own prices.
-            with contextlib.suppress(Exception):
+            with contextlib.suppress(*BROWSER_ERRORS):  # the browser may be gone; the URL is a nicety
                 result.checkout_url = await page.url()
-            if not args.skip_direct_site and result.added:
+            # However the Uber Eats side ended (even blocked by a login wall), the items that made it into
+            # the cart can still be compared with the restaurant's own prices. Not after a guard refusal.
+            if not args.skip_direct_site and result.added and not refused:
                 try:
                     await audit_direct_restaurant_site(stagehand, page, result, args.address, args.restaurant_url)
-                except Exception as error:
-                    print(f"  Direct website check skipped/failed: {error}")
-            result.comparison = compare_prices(result, cart_state, checkout_state)
-            write_csv(out / "fees_breakdown.csv", FEE_BREAKDOWN_FIELDS, result.comparison["fee_breakdown"])
+                except BROWSER_ERRORS as error:  # the direct-site comparison is an extra; the audit stands without it
+                    log.warning(f"  Direct website check skipped/failed: {type(error).__name__}: {error}")
+            self.conclude(result, lambda: compare_prices(result, cart_state, checkout_state))
+            write_csv(out / "fees_breakdown.csv", FEE_BREAKDOWN_FIELDS, result.comparison.get("fee_breakdown", []))
 
-    def summarise(self, result: UberResult) -> None:
+    def target_key(self, url: str, result: SiteResult) -> str:
+        """The store that was audited (`/store/<slug>/<id>`), so different restaurants keep separate summary rows."""
+        path = urlparse(result.shop_url or "").path
+        if "/store/" in path:
+            return "/store/" + "/".join(path.split("/store/")[-1].split("/")[:2])
+        return getattr(result, "store_name", None) or url
+
+    def summarise(self, result: SiteResult) -> None:
+        assert isinstance(result, UberResult)
         print_audit_tables(result)

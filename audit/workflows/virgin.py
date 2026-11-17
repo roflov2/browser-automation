@@ -10,31 +10,42 @@ The run always stops on the payment page: no payment details are entered and not
 
 import argparse
 import contextlib
-import os
+import logging
 from dataclasses import dataclass
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 
 from pydantic import BaseModel, Field
 from stagehand import Page, Stagehand
 
+from ..config import Settings
 from ..core import (
+    BROWSER_ERRORS,
     Blocked,
     Fee,
+    FlowChanged,
+    Report,
     SiteResult,
+    Status,
     compare_item_prices,
     diff,
+    drip_outcome,
     drip_verdict,
+    final_price_was_read,
     money_sum,
     new_item,
     parse_amount,
     parse_price,
+    positive,
     record_offers,
     slug,
     summarise_extras,
     write_csv,
 )
-from ..page import dismiss_popups, settle, shot, wait_for_render
+from ..page import dismiss_popups, fingerprint, settle, shot, wait_for_render
+from ..safety import current_guard, safe_act
 from ..workflow import Workflow
+
+log = logging.getLogger(__name__)
 
 SITE_URL = "https://www.virginaustralia.com/au/en/"
 SETTLE_MS = 2500  # fixed wait after navigation/clicks; the booking app is a slow single-page app
@@ -104,7 +115,9 @@ class Flights(BaseModel):
 
 
 class SelectedFare(BaseModel):
-    flight_selected: bool = Field(description="True if a specific flight and fare is now selected or in the trip summary/cart")
+    flight_selected: bool = Field(
+        description="True if a specific flight and fare is now selected or in the trip summary/cart"
+    )
     flight: str | None = Field(description="Selected flight, e.g. 'VA 815 06:00 SYD - 07:35 MEL'")
     fare_name: str | None = Field(description="Selected fare brand, e.g. 'Lite'")
     fare_price: str | None = Field(description="Price shown for the selected fare, e.g. '$129'")
@@ -115,7 +128,9 @@ class SelectedFare(BaseModel):
 class Offer(BaseModel):
     category: str = Field(description=f"One of: {EXTRA_CATEGORIES}")
     label: str = Field(description="Name of the extra or fee as displayed, e.g. '23kg checked bag', 'Economy X seat'")
-    price: str | None = Field(description="Price as displayed, e.g. '$45', 'From $9', 'Included', '1.3%'; null if not shown")
+    price: str | None = Field(
+        description="Price as displayed, e.g. '$45', 'From $9', 'Included', '1.3%'; null if not shown"
+    )
     price_basis: str | None = Field(description="e.g. 'per passenger per flight', 'per booking', if stated")
     selected: bool = Field(
         description="True if this extra is currently added/ticked/selected and so included in the running total"
@@ -125,7 +140,9 @@ class Offer(BaseModel):
 
 class StepState(BaseModel):
     step_type: str = Field(description=f"Which booking step this is. One of: {STEP_TYPES}")
-    heading: str | None = Field(description="Main heading or step name shown, e.g. 'Guest details', 'Choose your seats'")
+    heading: str | None = Field(
+        description="Main heading or step name shown, e.g. 'Guest details', 'Choose your seats'"
+    )
     is_payment_page: bool = Field(
         description="True only on the final payment step where a payment method / card details are requested to complete the booking"
     )
@@ -137,16 +154,25 @@ class StepState(BaseModel):
         description="Every optional extra, upsell, add-on, fee or surcharge shown on this step (in the page or an open modal), "
         "with its price. Summarise seat maps as one offer per seat type/price band. Empty if none."
     )
-    price_lines: list[Fee] = Field(description="Lines of the price summary / trip total panel currently displayed, if any")
+    price_lines: list[Fee] = Field(
+        description="Lines of the price summary / trip total panel currently displayed, if any"
+    )
     total: str | None = Field(description="Running trip total currently displayed, e.g. '$129.00'")
     validation_errors: list[str] = Field(description="Any form validation or error messages currently displayed")
     summary: str
 
 
+PASSENGER_DETAILS = ("title", "first_name", "last_name", "gender", "date_of_birth", "email", "phone", "country")
+# Chosen from a list, so the model has to be told the value. None of these identifies a person.
+CHOSEN_DETAILS = ("title", "gender", "country")
+
+
 class FieldToFill(BaseModel):
     label: str = Field(description="Label of the form field exactly as displayed")
     kind: str = Field(description="One of: text, dropdown, radio, checkbox, date")
-    value: str = Field(description="The value to enter or the option to choose, taken from the supplied passenger details")
+    detail: str = Field(
+        description=f"Which passenger detail belongs in this field. One of: {', '.join(PASSENGER_DETAILS)}, other"
+    )
 
 
 class PassengerForm(BaseModel):
@@ -170,13 +196,17 @@ class Surcharge(BaseModel):
 
 
 class CheckoutDetails(BaseModel):
-    is_checkout_page: bool = Field(description="True if on the payment / review-and-pay page showing the booking's price summary")
+    is_checkout_page: bool = Field(
+        description="True if on the payment / review-and-pay page showing the booking's price summary"
+    )
     blocked_reason: str | None = Field(
         description="If progress is blocked by a required login, CAPTCHA, 'verify you are human' or bot check, describe it; otherwise null"
     )
     items: list[LineItem]
     subtotal: str | None = Field(description="Flight/fare total before optional extras and payment fees, as displayed")
-    extras: list[Fee] = Field(description="Optional extras currently included in the total (bags, seats, insurance, carbon offset, ...)")
+    extras: list[Fee] = Field(
+        description="Optional extras currently included in the total (bags, seats, insurance, carbon offset, ...)"
+    )
     other_fees: list[Fee] = Field(
         description="Any compulsory charge added on top of the fare that is NOT a government tax and NOT an optional extra, "
         "e.g. booking fee, service fee, card payment fee already applied"
@@ -224,16 +254,13 @@ class Passenger:
     country: str = "Australia"
 
     @classmethod
-    def from_env(cls) -> "Passenger":
-        defaults = cls()
-        return cls(**{name: os.getenv(f"PAX_{name.upper()}", getattr(defaults, name)) for name in cls.__dataclass_fields__})
+    def from_settings(cls, settings: Settings) -> "Passenger":
+        return cls(**{name: getattr(settings, f"pax_{name}") for name in cls.__dataclass_fields__})
 
-    def describe(self) -> str:
-        return (
-            f"title {self.title}; first name {self.first_name}; last name {self.last_name}; gender {self.gender}; "
-            f"date of birth {self.date_of_birth}; email {self.email}; mobile phone {self.phone} ({self.country}, +61); "
-            f"country of residence {self.country}"
-        )
+    def typed_details(self) -> dict[str, str]:
+        """The details that are typed into the form. They reach the page as Stagehand variables and
+        are never part of a prompt, a log or a saved file."""
+        return {name: getattr(self, name) for name in PASSENGER_DETAILS if name not in CHOSEN_DETAILS}
 
 
 # ---------------------------------------------------------------------------
@@ -255,22 +282,24 @@ async def search_flights(stagehand: Stagehand, page: Page, trip: Trip) -> None:
             raise Blocked(state.blocked_reason)
         if state.on_results_page:
             return
-        step = await stagehand.act(
+        step = await safe_act(
+            stagehand,
+            page,
             f"Take the single next action needed to search for {goal} using the flight search form. "
             f"Current form state: trip type={state.trip_type}, from={state.origin}, to={state.destination}, "
             f"date={state.depart_date}, guests={state.guests}, using points={state.using_points}. "
             "Order: open the flight booking form if it is hidden; set 'Fly from'; set 'Fly to' (pick the airport from "
             "the list); switch the trip type to one way; pick the departure date in the calendar (move to the right "
             "month first if needed) and confirm it; confirm 1 adult guest; then click the search button "
-            "(e.g. 'Find flights' / 'Search flights' / 'Let's fly')."
+            "(e.g. 'Find flights' / 'Search flights' / 'Let's fly').",
         )
         await settle(page, SETTLE_MS)
         state = (await stagehand.extract(question, SearchState)).data
-        print(f"  {step.data.action_description} -> {state.reason}")
+        log.info(f"  {step.description} -> {state.reason}")
     if state.on_results_page:
         return
 
-    print("  Search form did not reach the results page; opening the booking engine's search link directly...")
+    log.info("  Search form did not reach the results page; opening the booking engine's search link directly...")
     await page.goto(trip.deep_link)
     await settle(page, SETTLE_MS)
     await wait_for_render(page)
@@ -278,14 +307,14 @@ async def search_flights(stagehand: Stagehand, page: Page, trip: Trip) -> None:
     if state.blocked_reason:
         raise Blocked(state.blocked_reason)
     if not state.on_results_page:
-        raise RuntimeError(f"Couldn't reach the flight results page: {state.reason}")
+        raise FlowChanged(f"Couldn't reach the flight results page: {state.reason}")
 
 
 def choose_flight(flights: list[Flight]) -> Flight | None:
     """Cheapest available flight, preferring direct services."""
     available = [f for f in flights if not f.sold_out and parse_price(f.price) is not None]
     direct = [f for f in available if f.stops == 0]
-    return min(direct or available, key=lambda f: parse_price(f.price), default=None)
+    return min(direct or available, key=lambda f: parse_price(f.price) or 0.0, default=None)
 
 
 async def select_flight(stagehand: Stagehand, page: Page, flight: Flight) -> dict:
@@ -300,13 +329,15 @@ async def select_flight(stagehand: Stagehand, page: Page, flight: Flight) -> dic
     )
     selected = None
     for _ in range(4):
-        step = await stagehand.act(
+        step = await safe_act(
+            stagehand,
+            page,
             f"Take the single next action to select {described} with its CHEAPEST fare (usually the first/lowest fare "
             "brand such as 'Lite' in Economy). If the fare options for that flight are not visible yet, click the "
             "flight's lowest price to reveal them; otherwise click the select button of the cheapest fare. "
-            "If a popup offers a more expensive fare, decline it and keep the cheapest fare."
+            "If a popup offers a more expensive fare, decline it and keep the cheapest fare.",
         )
-        print(f"    Flight selection: {step.data.action_description}")
+        log.info(f"    Flight selection: {step.description}")
         await settle(page, SETTLE_MS)
         selected = (await stagehand.extract(question, SelectedFare)).data
         if selected.flight_selected:
@@ -320,25 +351,52 @@ async def select_flight(stagehand: Stagehand, page: Page, flight: Flight) -> dic
     return item
 
 
+def passenger_field_instruction(entry: FieldToFill, passenger: Passenger) -> tuple[str, dict[str, str]] | None:
+    """The instruction and Stagehand variables for one form field; None if we have nothing for it.
+
+    Typed details go in as `%name%` variables, which Stagehand substitutes after the model has
+    answered, so names, date of birth, email and phone never appear in a prompt. A value picked
+    from a list (title, gender, country) has to be named for the model to find the option.
+    """
+    if entry.detail not in PASSENGER_DETAILS:
+        return None
+    field = f"the '{entry.label}' field of the passenger details form"
+    if entry.detail in CHOSEN_DETAILS or entry.kind in ("dropdown", "radio", "checkbox"):
+        return f"Select '{getattr(passenger, entry.detail)}' for {field}.", {}
+    return f"Type %{entry.detail}% into {field}.", {entry.detail: getattr(passenger, entry.detail)}
+
+
 async def fill_passenger_details(stagehand: Stagehand, page: Page, passenger: Passenger) -> None:
-    details = passenger.describe()
+    """Fill the required guest fields, two passes at most (a first pass can reveal more fields)."""
     for _ in range(2):
         form = (
             await stagehand.extract(
-                f"Passenger details to use: {details}. List the required passenger and contact fields on this page that "
-                "are still empty or unselected, and for each give the value to enter from those details.",
+                "List the required passenger and contact fields on this page that are still empty or unselected. "
+                "For each, give its label, its kind, and which passenger detail belongs in it "
+                f"({', '.join(PASSENGER_DETAILS)}). Do not suggest values.",
                 PassengerForm,
             )
         ).data
         if form.complete or not form.fields:
             return
         for entry in form.fields[:20]:
-            verb = "Select" if entry.kind in ("dropdown", "radio", "checkbox") else "Type"
-            where = "for" if verb == "Select" else "into"
-            with contextlib.suppress(Exception):
-                step = await stagehand.act(f"{verb} '{entry.value}' {where} the '{entry.label}' field of the passenger details form.")
-                print(f"    Guest details: {step.data.action_description}")
-            await page.wait_for_timeout(400)
+            planned = passenger_field_instruction(entry, passenger)
+            if planned is None:
+                log.debug("No passenger detail for field %r (%s)", entry.label, entry.detail)
+                continue
+            instruction, variables = planned
+            try:
+                step = await safe_act(
+                    stagehand,
+                    page,
+                    instruction,
+                    follow_up=not variables,  # a custom dropdown needs opening before the option can be picked
+                    **({"variables": variables} if variables else {}),
+                )
+                log.info(f"    Guest details: {step.description}")
+            except BROWSER_ERRORS as error:  # one field failing must not stop the rest; the step check reports it
+                log.warning(f"    Guest details: could not fill '{entry.label}' ({type(error).__name__}: {error})")
+            await settle(page, 400)
 
 
 NEXT_ACTIONS = {
@@ -357,12 +415,49 @@ DEFAULT_NEXT_ACTION = (
 )
 
 
+async def next_booking_action(
+    stagehand: Stagehand, page: Page, passenger: Passenger, state: StepState, step_type: str
+) -> None:
+    """Take the one action that moves the booking on from `step_type`, declining every extra."""
+    if step_type == "passenger_details":
+        await fill_passenger_details(stagehand, page, passenger)
+    instruction = NEXT_ACTIONS.get(step_type, DEFAULT_NEXT_ACTION)
+    if state.validation_errors:
+        instruction = (
+            f"The page shows these errors: {'; '.join(state.validation_errors[:3])}. Fix the first one if it is a "
+            f"missing choice or field (never by adding a paid extra). Otherwise: {instruction}"
+        )
+    step = await safe_act(stagehand, page, instruction)
+    log.info(f"    {step.description}")
+    await settle(page, SETTLE_MS)
+
+
 async def walk_to_payment(stagehand: Stagehand, page: Page, passenger: Passenger, result: SiteResult) -> bool:
     """Step through the booking flow, recording every extra offered, until the payment page. True if reached."""
     out = result.out_dir
     last_signature, repeats = None, 0
+    last_state: StepState | None = None
+    last_seen: str | None = None
     for index in range(1, MAX_BOOKING_STEPS + 1):
         await wait_for_render(page, 10)
+        seen = await fingerprint(page)
+        if last_state is not None and seen is not None and seen == last_seen:
+            # The last action changed nothing on screen: the step is the same, so is what an extraction
+            # would report. Count it as a repeat without paying for another extraction.
+            repeats += 1
+            log.info(f"  Step {index}: unchanged after the last action (repeat {repeats})")
+            if repeats >= MAX_STUCK_REPEATS:
+                errors = "; ".join(last_state.validation_errors) or last_state.summary
+                result.message = f"Stuck on '{last_state.heading or last_state.step_type}': {errors}"
+                return False
+            await next_booking_action(
+                stagehand,
+                page,
+                passenger,
+                last_state,
+                "payment" if last_state.is_payment_page else last_state.step_type,
+            )
+            continue
         state = (
             await stagehand.extract(
                 "We are part-way through booking a flight and want to reach the payment page without buying any "
@@ -373,61 +468,67 @@ async def walk_to_payment(stagehand: Stagehand, page: Page, passenger: Passenger
             )
         ).data
         step_type = "payment" if state.is_payment_page else state.step_type
-        print(f"  Step {index}: {step_type} ({state.heading}) | total {state.total} | {len(state.offers)} offer(s)")
+        log.info(f"  Step {index}: {step_type} ({state.heading}) | total {state.total} | {len(state.offers)} offer(s)")
         await shot(page, out / f"step-{index:02d}-{slug(step_type)}.png")
         record_offers(result, index, state.step_type, state.heading, state.offers)
-        result.steps.append({
-            "step": index, "step_type": step_type, "heading": state.heading, "url": await page.url(),
-            "total_display": state.total, "total": parse_price(state.total),
-            "price_lines": [line.model_dump() for line in state.price_lines],
-            "offers": len(state.offers), "validation_errors": state.validation_errors, "summary": state.summary,
-        })
+        result.steps.append(
+            {
+                "step": index,
+                "step_type": step_type,
+                "heading": state.heading,
+                "url": await page.url(),
+                "total_display": state.total,
+                "total": parse_price(state.total),
+                "price_lines": [line.model_dump() for line in state.price_lines],
+                "offers": len(state.offers),
+                "validation_errors": state.validation_errors,
+                "summary": state.summary,
+            }
+        )
         if index == 1:
             await shot(page, out / "cart.png")  # first view of the selected trip and its running total
 
         if state.blocked_reason:
             raise Blocked(state.blocked_reason)
         if state.is_payment_page or step_type == "payment":
+            await current_guard().freeze(page)  # hard stop: the payment page is only read from here on
             return True
         if step_type == "confirmation":
-            raise RuntimeError("Reached a confirmation page unexpectedly; stopping")
+            raise FlowChanged("Reached a confirmation page unexpectedly; stopping")
 
         signature = (step_type, state.heading, await page.url())
         repeats = repeats + 1 if signature == last_signature else 0
         last_signature = signature
         if repeats >= MAX_STUCK_REPEATS:
-            result.message = f"Stuck on '{state.heading or step_type}': {'; '.join(state.validation_errors) or state.summary}"
+            result.message = (
+                f"Stuck on '{state.heading or step_type}': {'; '.join(state.validation_errors) or state.summary}"
+            )
             return False
 
-        if step_type == "passenger_details":
-            await fill_passenger_details(stagehand, page, passenger)
-        instruction = NEXT_ACTIONS.get(step_type, DEFAULT_NEXT_ACTION)
-        if state.validation_errors:
-            instruction = (
-                f"The page shows these errors: {'; '.join(state.validation_errors[:3])}. Fix the first one if it is a "
-                f"missing choice or field (never by adding a paid extra). Otherwise: {instruction}"
-            )
-        step = await stagehand.act(instruction)
-        print(f"    {step.data.action_description}")
-        await settle(page, SETTLE_MS)
+        # Remember what the screen looked like when it was read; if the action leaves it exactly so,
+        # the next turn knows without asking the model.
+        last_state, last_seen = state, seen
+        await next_booking_action(stagehand, page, passenger, state, step_type)
 
     result.message = f"Payment page not reached within {MAX_BOOKING_STEPS} steps"
     return False
 
 
-def compare_prices(result: SiteResult, checkout: CheckoutDetails | None) -> dict:
+def compare_prices(result: SiteResult, checkout: CheckoutDetails | None) -> Report:
+    """Advertised fare against the payment page. `checkout` is None if the payment page was never read."""
     added = result.added
     fare_line = checkout.items[0] if checkout and checkout.items else None
     expected_total = compare_item_prices(added, lambda _item: fare_line)
     subtotal = parse_price(checkout.subtotal) if checkout else None
     total = parse_price(checkout.total) if checkout else None
+    final_read = final_price_was_read(checkout, total)
     if total is None:  # payment page not reached: fall back to the last running total seen
         total = next((s["total"] for s in reversed(result.steps) if s["total"] is not None), None)
     fees = [{"label": f.label, "amount": parse_amount(f.amount)} for f in (checkout.other_fees if checkout else [])]
-    fees_total = money_sum([f["amount"] for f in fees]) or 0.0
+    fees_total = money_sum(parse_amount(f.amount) for f in (checkout.other_fees if checkout else [])) or 0.0
     included = [{"label": f.label, "amount": parse_amount(f.amount)} for f in (checkout.extras if checkout else [])]
     surcharges = [s.model_dump() for s in (checkout.payment_surcharges if checkout else [])]
-    chargeable = [s for s in surcharges if (parse_price(s["fee"]) or 0) > 0]
+    chargeable = [s for s in surcharges if positive(parse_price(s["fee"]))]
     extras = summarise_extras(result.extras)
     preselected = extras["extras_preselected"]
 
@@ -435,11 +536,17 @@ def compare_prices(result: SiteResult, checkout: CheckoutDetails | None) -> dict
         reason
         for reason, hit in (
             ("fare increased at checkout", any(i["price_increased"] for i in added)),
-            ("checkout fare subtotal higher than selected fare", (diff(subtotal, expected_total) or 0) > 0),
-            ("total at checkout higher than advertised fare with no extras chosen", (diff(total, expected_total) or 0) > 0),
+            ("checkout fare subtotal higher than selected fare", positive(diff(subtotal, expected_total))),
+            (
+                "total at checkout higher than advertised fare with no extras chosen",
+                positive(diff(total, expected_total)),
+            ),
             ("non-tax fees added", fees_total > 0),
             ("optional extras pre-selected: " + ", ".join(preselected), bool(preselected)),
-            ("payment surcharge applies: " + ", ".join(f"{s['payment_method']} {s['fee']}" for s in chargeable), bool(chargeable)),
+            (
+                "payment surcharge applies: " + ", ".join(f"{s['payment_method']} {s['fee']}" for s in chargeable),
+                bool(chargeable),
+            ),
         )
         if hit
     ]
@@ -462,8 +569,7 @@ def compare_prices(result: SiteResult, checkout: CheckoutDetails | None) -> dict
         "checkout_total_display": checkout.total if checkout else None,
         "checkout_total": total,
         "currency": checkout.currency if checkout else None,
-        "drip_detected": bool(reasons),
-        "drip_reasons": reasons,
+        **drip_outcome(reasons, final_read),
         "checkout_summary": checkout.summary if checkout else None,
     }
 
@@ -480,22 +586,38 @@ async def read_payment_page(stagehand: Stagehand, page: Page, result: SiteResult
         )
     ).data
     if checkout.payment_surcharges:  # replace the payment step's own offers with the per-method list
-        result.extras = [e for e in result.extras
-                         if not (e["step_type"] == "payment" and e["category"] == "payment_surcharge")]
+        result.extras = [
+            e for e in result.extras if not (e["step_type"] == "payment" and e["category"] == "payment_surcharge")
+        ]
     for s in checkout.payment_surcharges:
-        result.extras.append({"step": len(result.steps), "step_type": "payment", "step_heading": "Payment",
-                              "category": "payment_surcharge", "label": s.payment_method, "price_display": s.fee,
-                              "price": parse_amount(s.fee), "price_basis": "per booking",
-                              "selected_by_default": False, "mandatory": False})
+        result.extras.append(
+            {
+                "step": len(result.steps),
+                "step_type": "payment",
+                "step_heading": "Payment",
+                "category": "payment_surcharge",
+                "label": s.payment_method,
+                "price_display": s.fee,
+                "price": parse_amount(s.fee),
+                "price_basis": "per booking",
+                "selected_by_default": False,
+                "mandatory": False,
+            }
+        )
     return checkout
 
 
 # ---------------------------------------------------------------------------
 # Workflow
 # ---------------------------------------------------------------------------
+def today() -> date:
+    """Today in the local timezone, where the airline's calendar and the user both are."""
+    return datetime.now().astimezone().date()
+
+
 def future_date(value: str) -> date:
     day = date.fromisoformat(value)
-    if day <= date.today():
+    if day <= today():
         raise argparse.ArgumentTypeError("must be in the future")
     return day
 
@@ -510,11 +632,15 @@ class VirginWorkflow(Workflow):
     clear_cookies = "all"
 
     @classmethod
-    def add_arguments(cls, parser: argparse.ArgumentParser) -> None:
+    def add_arguments(cls, parser: argparse.ArgumentParser, settings: Settings) -> None:
         parser.add_argument("--origin", default="SYD", help="Departure airport code (default SYD)")
         parser.add_argument("--destination", default="MEL", help="Arrival airport code (default MEL)")
-        parser.add_argument("--date", type=future_date, default=date.today() + timedelta(days=30),
-                            help="Departure date as YYYY-MM-DD (default: 30 days from today)")
+        parser.add_argument(
+            "--date",
+            type=future_date,
+            default=today() + timedelta(days=30),
+            help="Departure date as YYYY-MM-DD (default: 30 days from today)",
+        )
         parser.add_argument("--url", default=SITE_URL, help=f"Start page (default {SITE_URL})")
 
     def targets(self) -> list[str]:
@@ -523,19 +649,28 @@ class VirginWorkflow(Workflow):
     async def run(self, stagehand: Stagehand, page: Page, url: str, result: SiteResult) -> None:
         out = result.out_dir
         trip = Trip(self.args.origin.upper(), self.args.destination.upper(), self.args.date)
-        result.search = {"origin": trip.origin, "destination": trip.destination,
-                         "depart_date": trip.depart.isoformat(), "passengers": "1 adult", "trip_type": "one_way"}
+        result.search = {
+            "origin": trip.origin,
+            "destination": trip.destination,
+            "depart_date": trip.depart.isoformat(),
+            "passengers": "1 adult",
+            "trip_type": "one_way",
+        }
         checkout: CheckoutDetails | None = None
-        print(f"\n=== {url} | {trip.origin} -> {trip.destination} on {trip.depart_text} ===")
+        log.info(f"\n=== {url} | {trip.origin} -> {trip.destination} on {trip.depart_text} ===")
         try:
             await page.goto(url)
             await settle(page, SETTLE_MS)
-            await dismiss_popups(stagehand, "cookie banner, promotional/newsletter popup, app-install banner or region selector modal")
+            await dismiss_popups(
+                stagehand,
+                page,
+                "cookie banner, promotional/newsletter popup, app-install banner or region selector modal",
+            )
 
             await search_flights(stagehand, page, trip)
             await wait_for_render(page)
             result.shop_url = await page.url()
-            print(f"  Results page: {result.shop_url}")
+            log.info(f"  Results page: {result.shop_url}")
 
             listing = (
                 await stagehand.extract(
@@ -544,42 +679,54 @@ class VirginWorkflow(Workflow):
                     Flights,
                 )
             ).data
-            rows = [{**f.model_dump(exclude={"fares"}), "fares": "; ".join(f"{o.fare_name} {o.price}" for o in f.fares)}
-                    for f in listing.flights]
+            rows = [
+                {**f.model_dump(exclude={"fares"}), "fares": "; ".join(f"{o.fare_name} {o.price}" for o in f.fares)}
+                for f in listing.flights
+            ]
             write_csv(out / "products.csv", list(Flight.model_fields), rows)
             await shot(page, out / "flights.png")
-            print(f"  Extracted {len(listing.flights)} flights ({listing.price_basis or 'price basis not stated'})")
+            log.info(f"  Extracted {len(listing.flights)} flights ({listing.price_basis or 'price basis not stated'})")
 
             flight = choose_flight(listing.flights)
             if flight is None:
-                result.status, result.message = "no_flights_found", "No available flights with a price on the results page"
+                result.fail(Status.NO_FLIGHTS_FOUND, "No available flights with a price on the results page")
                 return
 
-            print(f"  Selecting: {flight.flight_number or ''} {flight.departs}-{flight.arrives} ({flight.price})")
+            log.info(f"  Selecting: {flight.flight_number or ''} {flight.departs}-{flight.arrives} ({flight.price})")
             item = await select_flight(stagehand, page, flight)
             item["price_basis"] = listing.price_basis
             result.items.append(item)
             if item["status"] != "added":
-                result.status, result.message = "add_to_cart_failed", "The flight and fare could not be selected"
+                result.fail(Status.ADD_TO_CART_FAILED, "The flight and fare could not be selected")
                 return
 
-            if not await walk_to_payment(stagehand, page, Passenger.from_env(), result):
-                result.status = "no_checkout"
+            if not await walk_to_payment(stagehand, page, Passenger.from_settings(self.settings), result):
+                result.fail(Status.NO_CHECKOUT, result.message)
                 return
             checkout = await read_payment_page(stagehand, page, result)
             if checkout.blocked_reason:
-                result.status, result.message = "blocked", checkout.blocked_reason
+                result.fail(Status.BLOCKED, checkout.blocked_reason)
             elif not checkout.is_checkout_page:
-                result.status, result.message = "no_checkout", "Payment page not reached"
+                result.fail(Status.NO_CHECKOUT, "Payment page not reached")
             else:
-                result.status = "ok"
+                result.status = Status.OK
         finally:  # keep whatever extras were seen, however the run ended
-            result.comparison = compare_prices(result, checkout)
-            with contextlib.suppress(Exception):
+            self.conclude(result, lambda: compare_prices(result, checkout))
+            with contextlib.suppress(*BROWSER_ERRORS):  # the browser may be gone; the URL is a nicety
                 result.checkout_url = await page.url()
+
+    def target_key(self, url: str, result: SiteResult) -> str:
+        """Start page plus route, so that audits of different routes do not replace each other in summary.csv."""
+        search = result.search or {}
+        return f"{url} {search.get('origin', '?')}-{search.get('destination', '?')}"
+
+    def sensitive_values(self) -> dict[str, str]:
+        return Passenger.from_settings(self.settings).typed_details()
 
     def summarise(self, result: SiteResult) -> None:
         c = result.comparison
-        print(f"  Advertised fare: {c['expected_subtotal']} | Checkout fare: {c['checkout_subtotal_display']} "
-              f"| Total: {c['checkout_total_display']} | Fees: {c['other_fees_total']} | Extras offered: {c['extras_offered']}")
-        print(f"  Drip pricing detected: {drip_verdict(c)}")
+        log.info(
+            f"  Advertised fare: {c['expected_subtotal']} | Checkout fare: {c['checkout_subtotal_display']} "
+            f"| Total: {c['checkout_total_display']} | Fees: {c['other_fees_total']} | Extras offered: {c['extras_offered']}"
+        )
+        log.info(f"  Drip pricing detected: {drip_verdict(c)}")
