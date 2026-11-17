@@ -1,18 +1,18 @@
 """The Uber Eats side of the audit: delivery address, store, menu items, cart and checkout."""
 
 import base64
-import contextlib
 import functools
 import json
+import logging
 import re
 from urllib.parse import parse_qs, quote_plus, unquote, urljoin, urlparse
 
 from stagehand import Page, Stagehand
 
 from ... import page as page_helpers
-from ...core import Blocked, new_item, parse_price, record_offers, slug
-from ...page import is_sso_redirect, pause_for_login, settle, shot
-from ...safety import Mode, current_guard, safe_act
+from ...core import Blocked, ElementNotFound, Item, new_item, parse_price, record_offers, select_price, slug
+from ...page import is_sso_redirect, pause_for_login, settle, shot, wait_out_sso
+from ...safety import Mode, current_guard, safe_act, try_act
 from .models import (
     AddressAndFeedState,
     CartAndCheckoutState,
@@ -23,6 +23,8 @@ from .models import (
     UberResult,
     extract_suburb_hint,
 )
+
+log = logging.getLogger(__name__)
 
 SITE_URL = "https://www.ubereats.com/au"
 CHECKOUT_URL = f"{SITE_URL}/checkout"
@@ -91,7 +93,7 @@ STREET_TYPES = {
 # Pure helpers
 # ---------------------------------------------------------------------------
 def is_valid_restaurant_name(name: str | None) -> bool:
-    return bool(name) and not any(bad in name.lower().strip() for bad in NON_RESTAURANT_NAMES)
+    return bool(name) and not any(bad in (name or "").lower().strip() for bad in NON_RESTAURANT_NAMES)
 
 
 def is_login_url(url: str) -> bool:
@@ -119,17 +121,19 @@ def addresses_match(displayed: str | None, target: str) -> bool:
 
 def extract_pl_address_from_url(url: str) -> str | None:
     """Decode the `pl=` base64/URL-encoded JSON parameter on Uber Eats URLs to check the active address."""
-    with contextlib.suppress(Exception):
-        pl_val = parse_qs(urlparse(url).query).get("pl", [None])[0]
-        if not pl_val:
-            return None
+    pl_val = parse_qs(urlparse(url).query).get("pl", [None])[0]
+    if not pl_val:
+        return None
+    try:
         decoded = unquote(pl_val)
         if not decoded.strip().startswith("{"):
             padded = pl_val + "=" * (-len(pl_val) % 4)
             decoded = unquote(base64.b64decode(padded).decode("utf-8", errors="ignore"))
         data = json.loads(decoded)
-        return data.get("address") or data.get("title")
-    return None
+    except ValueError as error:  # bad base64 or JSON: the parameter is simply not what we expected
+        log.debug("Unreadable pl= parameter: %s", error)
+        return None
+    return (data.get("address") or data.get("title")) if isinstance(data, dict) else None
 
 
 # ---------------------------------------------------------------------------
@@ -332,13 +336,12 @@ async def close_item_modal(stagehand: Stagehand, page: Page) -> None:
     """Ensure no lingering item modal blocks the rest of the page."""
     if not await is_item_modal_open(page):
         return
-    print("    Closing lingering item modal...")
+    log.info("    Closing lingering item modal...")
     await js(page, "() => { pressEsc(); closeDialog(); }")
-    await page.wait_for_timeout(1000)
+    await settle(page, 1000)
     if await is_item_modal_open(page):
-        with contextlib.suppress(Exception):
-            await safe_act(stagehand, page, "Click the 'X' close button in the top-left corner of the open item modal.")
-            await page.wait_for_timeout(1000)
+        await try_act(stagehand, page, "Click the 'X' close button in the top-left corner of the open item modal.")
+        await settle(page, 1000)
 
 
 async def clear_existing_cart(stagehand: Stagehand, page: Page) -> None:
@@ -346,7 +349,7 @@ async def clear_existing_cart(stagehand: Stagehand, page: Page) -> None:
     existing = await get_cart_count(page)
     if existing <= 0:
         return
-    print(f"  Detected {existing} leftover item(s) in cart from a previous session; clearing cart...")
+    log.info(f"  Detected {existing} leftover item(s) in cart from a previous session; clearing cart...")
     if not await open_cart_drawer(page):
         return
     await settle(page, 1800)
@@ -359,20 +362,19 @@ async def clear_existing_cart(stagehand: Stagehand, page: Page) -> None:
             llm_clears += 1
             if llm_clears > 3:
                 break
-            with contextlib.suppress(Exception):
-                await safe_act(
-                    stagehand,
-                    page,
-                    "Inside the open cart drawer, click 'Clear cart' (or remove one item from the cart, confirming "
-                    "any 'Remove' prompt). Do NOT click 'Go to checkout'.",
-                )
-        await page.wait_for_timeout(1000)
+            await try_act(
+                stagehand,
+                page,
+                "Inside the open cart drawer, click 'Clear cart' (or remove one item from the cart, confirming "
+                "any 'Remove' prompt). Do NOT click 'Go to checkout'.",
+            )
+        await settle(page, 1000)
 
     await js(page, "() => { closeDialog() || pressEsc(); }")
     await settle(page, 1200)
     left = await get_cart_count(page)
     if left:
-        print(f"  WARNING: {left} leftover item(s) could not be removed; the checkout subtotal will include them.")
+        log.warning(f"  {left} leftover item(s) could not be removed; the checkout subtotal will include them.")
 
 
 # ---------------------------------------------------------------------------
@@ -410,19 +412,19 @@ async def confirm_address_step(stagehand: Stagehand, page: Page, address: str, u
 
     pl_addr = extract_pl_address_from_url(url)
     if addresses_match(state.displayed_address, address) or addresses_match(pl_addr, address):
-        print(f"  Delivery address confirmed: {state.displayed_address or pl_addr}")
+        log.info(f"  Delivery address confirmed: {state.displayed_address or pl_addr}")
         return True
 
     if state.displayed_address and not state.address_modal_or_input_open:
-        print(
+        log.info(
             f"  Header shows previous address '{state.displayed_address}' (expected '{address}'); updating delivery address..."
         )
     dom_step = await js(page, JS_SET_ADDRESS, {"target": address, "tokens": street_tokens(address)})
     if dom_step:
-        print(f"  Address step {step_no} (DOM): {dom_step}")
+        log.info(f"  Address step {step_no} (DOM): {dom_step}")
     else:
         act_res = await safe_act(stagehand, page, address_instruction(state, address))
-        print(f"  Address step {step_no}: {act_res.description}")
+        log.info(f"  Address step {step_no}: {act_res.description}")
     await settle(page, 2200)
     return False
 
@@ -462,7 +464,7 @@ async def open_store_from_feed(stagehand: Stagehand, page: Page, result: UberRes
 
     target_url = await store_url(page, chosen, result)
     if target_url:
-        print(
+        log.info(
             f"  Picking store: {result.store_name or target_url} "
             f"(Advertised delivery: {result.advertised_delivery_fee_display or 'not shown'})"
         )
@@ -494,8 +496,7 @@ async def ensure_address_and_open_store(
     for step_idx in range(MAX_ADDRESS_STEPS):
         curr_url = await page.url()
         if is_sso_redirect(curr_url):
-            print("  Waiting for corporate SSO redirect...")
-            await page.wait_for_timeout(3000)
+            await wait_out_sso(page)
             continue
 
         if is_login_url(curr_url):
@@ -513,7 +514,7 @@ async def ensure_address_and_open_store(
 
         if search_query and not query_submitted and "q=" not in curr_url.lower():
             search_url = f"{SITE_URL}/search?q={quote_plus(search_query)}"
-            print(f"  Navigating to search results: {search_url}")
+            log.info(f"  Navigating to search results: {search_url}")
             await page.goto(search_url)
             query_submitted = True
             await settle(page, 3000)
@@ -522,14 +523,15 @@ async def ensure_address_and_open_store(
         if "/store/" in await page.url():
             return await page.url()
 
-    raise RuntimeError(f"Could not open a `/store/` restaurant page (ended on {await page.url()})")
+    raise ElementNotFound(f"Could not open a `/store/` restaurant page (ended on {await page.url()})")
 
 
 def choose_menu_items(items: list[MenuItem], n: int) -> list[MenuItem]:
+    """The first `n` available dishes; cheap add-ons (sauces, extras under $3) are not a meaningful order."""
     return [i for i in items if i.is_food_or_drink and not i.sold_out and (parse_price(i.price) or 0) > 3.0][:n]
 
 
-def order_item(menu_item: MenuItem, **extra) -> dict:
+def order_item(menu_item: MenuItem, **extra: object) -> Item:
     return new_item(
         menu_item.name,
         menu_item.price,
@@ -543,11 +545,6 @@ def order_item(menu_item: MenuItem, **extra) -> dict:
     )
 
 
-def set_selected_price(item: dict, display: str | None) -> None:
-    item["selected_price_display"] = display
-    item["selected_price"] = parse_price(display) or item["shop_price"]
-
-
 async def open_item_modal(stagehand: Stagehand, page: Page, menu_item: MenuItem, cart_count_before: int) -> bool | None:
     """Open the item's customisation modal. True if it is open, None if the item was quick-added
     without a modal, False if it could not be opened."""
@@ -556,7 +553,7 @@ async def open_item_modal(stagehand: Stagehand, page: Page, menu_item: MenuItem,
         page,
         f"Click on the menu item '{menu_item.name}' (priced around {menu_item.price}) to open its customization modal.",
     )
-    print(f"    Open item: {step.description}")
+    log.info(f"    Open item: {step.description}")
     await settle(page, 1800)
     if await is_item_modal_open(page):
         return True
@@ -566,7 +563,7 @@ async def open_item_modal(stagehand: Stagehand, page: Page, menu_item: MenuItem,
     retry = await safe_act(
         stagehand, page, f"Scroll to and click directly on the menu item title '{menu_item.name}' to open its popup."
     )
-    print(f"    Retry open item: {retry.description}")
+    log.info(f"    Retry open item: {retry.description}")
     await settle(page, 1800)
     return await is_item_modal_open(page)
 
@@ -581,8 +578,8 @@ async def modal_round(
     """
     picked = [str(x) for x in await js(page, JS_SELECT_REQUIRED, default=[]) if x]
     if picked:
-        print(f"    Auto-selected required option(s): {', '.join(picked)}")
-        await page.wait_for_timeout(800)
+        log.info(f"    Auto-selected required option(s): {', '.join(picked)}")
+        await settle(page, 800)
 
     modal_state = (
         await stagehand.extract(
@@ -594,7 +591,7 @@ async def modal_round(
     ).data
     record_offers(result, item_idx, "item_modal", menu_item.name, modal_state.paid_modifier_offers)
     if modal_state.button_price_display:
-        set_selected_price(item, modal_state.button_price_display)
+        select_price(item, modal_state.button_price_display)
 
     if modal_state.has_unmet_required_choices and modal_state.next_required_group:
         cheapest = modal_state.cheapest_option_in_required_group
@@ -604,20 +601,20 @@ async def modal_round(
             f"In the required section '{modal_state.next_required_group}', "
             f"select '{cheapest or 'the first $0 / cheapest option'}'.",
         )
-        print(f"    Modifier ({modal_state.next_required_group}): {act_mod.description}")
-        await page.wait_for_timeout(900)
+        log.info(f"    Modifier ({modal_state.next_required_group}): {act_mod.description}")
+        await settle(page, 900)
         return picked + ([cheapest] if cheapest else []), False
 
     add = await js(page, JS_CLICK_ADD, default={"clicked": False, "price": None})
     if add["price"] and not item["selected_price_display"]:
-        set_selected_price(item, add["price"])
+        select_price(item, add["price"])
     if add["clicked"]:
-        print(f"    Clicked Add to order button ({item['selected_price_display'] or menu_item.price})")
+        log.info(f"    Clicked Add to order button ({item['selected_price_display'] or menu_item.price})")
     else:
         add_act = await safe_act(
             stagehand, page, "Click the black 'Add 1 to order' / 'Add to order' button at the bottom of the item modal."
         )
-        print(f"    Click Add: {add_act.description}")
+        log.info(f"    Click Add: {add_act.description}")
     await settle(page, 1800)
     return picked, True
 
@@ -637,11 +634,11 @@ async def add_menu_item_to_cart(
     try:
         opened = await open_item_modal(stagehand, page, menu_item, before_cart_count)
         if opened is None:  # quick-add without a modal
-            set_selected_price(item, menu_item.price)
+            select_price(item, menu_item.price)
             item["status"] = "added"
             return item
         if not opened:
-            print(f"    Modal did not open for '{menu_item.name}', skipping.")
+            log.info(f"    Modal did not open for '{menu_item.name}', skipping.")
             return item
 
         selected_modifiers: list[str] = []
@@ -656,10 +653,10 @@ async def add_menu_item_to_cart(
             if not await is_item_modal_open(page) or await get_cart_count(page) > before_cart_count:
                 item["status"] = "added"
                 break
-            print("    Modal remained open after clicking Add; checking newly scrolled required section...")
+            log.info("    Modal remained open after clicking Add; checking newly scrolled required section...")
 
         if item["selected_price"] is None:
-            set_selected_price(item, menu_item.price)
+            select_price(item, menu_item.price)
         item["selected_variant"] = ", ".join(dict.fromkeys(selected_modifiers)) or None
         if item["status"] != "added":
             item["status"] = "add_failed"
@@ -683,7 +680,7 @@ async def read_checkout_step(
     """Extract the current screen of the ordering flow and record it as a step. Returns (state, step type)."""
     state = (await stagehand.extract(CHECKOUT_QUESTION, CartAndCheckoutState)).data
     step_type = "checkout" if state.is_checkout_page else state.step_type
-    print(
+    log.info(
         f"  Step {step_idx}: {step_type} | subtotal={state.subtotal} | "
         f"delivery={state.delivery_fee} | service={state.service_fee} | "
         f"small_order={state.small_order_fee} | total={state.total}"
@@ -714,7 +711,7 @@ async def decline_upsell(stagehand: Stagehand, page: Page, declines: int) -> Non
     """
     clicked = await js(page, JS_DECLINE_UPSELL)
     if clicked:
-        print(f"    Declining upsell: clicked '{clicked}'")
+        log.info(f"    Declining upsell: clicked '{clicked}'")
     elif declines <= 2 and current_guard().mode_for(await page.url()) is Mode.NORMAL:
         act_res = await safe_act(
             stagehand,
@@ -723,10 +720,10 @@ async def decline_upsell(stagehand: Stagehand, page: Page, declines: int) -> Non
             "Dismiss it WITHOUT adding anything: click 'Skip', 'No thanks', 'Not now', 'Next' or "
             "'Continue to checkout', or its X close button. Never start an Uber One trial or place the order.",
         )
-        print(f"    Declining upsell: {act_res.description}")
+        log.info(f"    Declining upsell: {act_res.description}")
     else:  # last resort: close whatever dialog is open
         await js(page, "() => { closeDialog() || pressEsc(); }")
-        print("    Declining upsell: closed the dialog")
+        log.info("    Declining upsell: closed the dialog")
     await settle(page, 2000)
     if "/checkout" not in await page.url() and declines >= 2:
         await page.goto(CHECKOUT_URL)  # popup closed back to the menu: go straight to checkout
@@ -737,26 +734,26 @@ async def open_cart_or_checkout(stagehand: Stagehand, page: Page, cart_visible: 
     """Open the cart drawer if it is closed; otherwise press its 'Go to checkout' button."""
     if not cart_visible:
         if await open_cart_drawer(page):
-            print("    Opening cart via DOM click on header cart button")
+            log.info("    Opening cart via DOM click on header cart button")
         else:
             act_res = await safe_act(
                 stagehand,
                 page,
                 "Click the green cart button in the top-right header (or 'View cart') to open the cart drawer.",
             )
-            print(f"    Opening cart: {act_res.description}")
+            log.info(f"    Opening cart: {act_res.description}")
         await settle(page, 2200)
         return
 
     if await js(page, JS_CLICK_CHECKOUT, default=False):
-        print("    Clicked 'Go to checkout' button")
+        log.info("    Clicked 'Go to checkout' button")
     else:
         act_res = await safe_act(
             stagehand,
             page,
             "Click the 'Go to checkout' / 'Checkout' button in the cart drawer. Never click 'Place order' or 'Pay'.",
         )
-        print(f"    Proceeding to checkout: {act_res.description}")
+        log.info(f"    Proceeding to checkout: {act_res.description}")
     await settle(page, 3000)
 
 
@@ -775,13 +772,13 @@ async def walk_to_checkout(
         if not await login_pause(page, reason, interactive):
             raise Blocked(reason)
         if "/checkout" not in await page.url():
-            print("  Navigating to /au/checkout after login...")
+            log.info("  Navigating to /au/checkout after login...")
             await page.goto(CHECKOUT_URL)
             await settle(page, 3000)
 
     await close_item_modal(stagehand, page)
     if await open_cart_drawer(page):
-        print("  Opened cart drawer via header cart button")
+        log.info("  Opened cart drawer via header cart button")
         await settle(page, 2000)
 
     for step_idx in range(1, MAX_CHECKOUT_STEPS + 1):

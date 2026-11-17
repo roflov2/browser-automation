@@ -23,39 +23,13 @@ from stagehand import Stagehand, local_browser  # noqa: E402
 
 from audit import safety  # noqa: E402
 from audit.config import load_settings  # noqa: E402
-from tests.browser_support import find_chrome, launch_args, serve  # noqa: E402
+from tests.browser_support import StubModel, find_chrome, launch_args, serve  # noqa: E402
 
 INSTRUCTIONS = (
     "Click the 'Go to checkout' button.",
     "Click the 'Add to cart' button.",
     "Type 'alex@example.com' into the Email field.",
 )
-
-
-class StubModel:
-    """Answers observe()/act() prompts by picking the tree node named in the instruction. Counts calls."""
-
-    def __init__(self) -> None:
-        self.calls = 0
-        self.prompt_chars = 0
-
-    async def __call__(self, params: Any) -> dict[str, Any]:
-        request = params if isinstance(params, dict) else params.model_dump()
-        text = json.dumps(request["messages"], default=str)
-        self.calls += 1
-        self.prompt_chars += len(text) + len(request.get("system_prompt") or "")
-        quoted = re.search(r"instruction: [^\\]*?'([^']+)'[^\\]*?(?:into the (\w+) field)?\.", text)
-        wanted = (quoted.group(2) or quoted.group(1)) if quoted else ""
-        node = re.search(rf"\[(\d+-\d+)\] \w+: {re.escape(wanted)}", text)
-        typing = bool(quoted and quoted.group(2))
-        element = {"elementId": node.group(1) if node else "0-0", "description": f"{wanted} control",
-                   "method": "fill" if typing else "click", "arguments": [quoted.group(1)] if typing and quoted else []}  # fmt: skip
-        schema = request["response_format"].get("schema_") or request["response_format"].get("schema") or {}
-        observing = "elements" in schema.get("properties", {})
-        content = {"elements": [element]} if observing else {"action": element, "twoStep": False}
-        usage = {"input_tokens": len(text) // 4, "output_tokens": 40, "total_tokens": len(text) // 4 + 40}
-        return {"role": "assistant", "content": {"type": "text", "text": json.dumps(content)},
-                "output_format": "json_schema", "structured_content": content, "usage": usage}  # fmt: skip
 
 
 async def tokens(stagehand: Stagehand) -> float:

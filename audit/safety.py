@@ -28,7 +28,7 @@ from enum import StrEnum
 from typing import Any, Protocol
 from urllib.parse import urlsplit
 
-from .core import UnsafeActionRefused
+from .core import BROWSER_ERRORS, UnsafeActionRefused
 
 log = logging.getLogger(__name__)
 
@@ -454,10 +454,8 @@ class Acted:
     description: str
 
 
-class _Actions(Protocol):
-    async def observe(self, instruction: str, **options: Any) -> Any: ...
-
-    async def act(self, instruction: Any, **options: Any) -> Any: ...
+# The Stagehand client, the runner's recording wrapper around it, or a test double: anything with observe() and act().
+_Actions = Any
 
 
 def _selector_words(selector: str) -> str:
@@ -507,7 +505,7 @@ async def describe_element(page: _Evaluates, guard: Guard, selector: str) -> Map
     script = f"(() => {{ {_state_js(guard)}\n{RULES_JS}\nreturn ({_DESCRIBE_JS})({json.dumps(selector)}); }})()"
     try:
         found = await page.evaluate(script)
-    except Exception as error:  # noqa: BLE001 - any failure to read the page means "unknown", which fails closed
+    except BROWSER_ERRORS as error:  # any failure to read the page means "unknown", which fails closed
         log.debug("Could not resolve %r in the page: %s", selector, error)
         return None
     return found if isinstance(found, dict) else None
@@ -554,3 +552,15 @@ async def safe_act(
         if again.data and again.data[0].selector != first.selector:
             done = await act_on(stagehand, page, again.data[0], **options)
     return done
+
+
+async def try_act(stagehand: _Actions, page: _Evaluates, instruction: str, **options: Any) -> Acted | None:
+    """safe_act() for an optional step: an ordinary failure is logged at debug level and returns None.
+
+    A guard refusal is never an ordinary failure; it still raises and ends the run.
+    """
+    try:
+        return await safe_act(stagehand, page, instruction, **options)
+    except BROWSER_ERRORS as error:  # the caller treats this step as best-effort
+        log.debug("Optional action failed (%r): %s", instruction, error)
+        return None

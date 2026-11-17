@@ -49,11 +49,16 @@ max-complexity = 12
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["ANN", "PLC0415"]
+"scripts/**" = ["T201", "PLC0206"]  # command-line scripts print their results
 
 [tool.mypy]
 python_version = "3.11"
 strict = true
 files = ["audit", "main.py"]
+
+[[tool.mypy.overrides]]
+module = ["psutil"]
+ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
 # The site workflows pass LLM-shaped dicts around; they are checked, but not held to --strict.

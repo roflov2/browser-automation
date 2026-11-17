@@ -6,14 +6,18 @@ session, output folders, error handling and the report files.
 """
 
 import argparse
+import logging
 from abc import ABC, abstractmethod
-from typing import ClassVar
+from collections.abc import Callable, Sequence
+from typing import ClassVar, Literal
 from urllib.parse import urlparse
 
 from stagehand import Page, Stagehand
 
 from .config import Settings
-from .core import ITEM_FIELDS, SiteResult
+from .core import ITEM_FIELDS, Report, SiteResult, Status
+
+log = logging.getLogger(__name__)
 
 
 class Workflow(ABC):
@@ -21,18 +25,20 @@ class Workflow(ABC):
     help: ClassVar[str]  # one-line description shown in `main.py --help`
 
     system_prompt: ClassVar[str | None] = None  # safety rules given to the LLM for the whole session
-    log_level: ClassVar[str] = "warn"  # Stagehand log level recorded in session.json
+    log_level: ClassVar[Literal["off", "error", "warn", "info", "debug"]] = (
+        "warn"  # Stagehand log level recorded in session.json
+    )
     persistent_profile: ClassVar[bool] = True  # keep cookies/logins in .chrome-profile between local runs
     viewport: ClassVar[tuple[int, int] | None] = None  # local browser window size; None for Chrome's default
     clear_cookies: ClassVar[str | None] = None  # before each site: "domain" (that site's only), "all" or None
     result_class: ClassVar[type[SiteResult]] = SiteResult
-    item_fields: ClassVar[list[str]] = ITEM_FIELDS  # columns of price_comparison.csv
+    item_fields: ClassVar[Sequence[str]] = ITEM_FIELDS  # columns of price_comparison.csv
 
     def __init__(self, args: argparse.Namespace, settings: Settings) -> None:
         self.args = args
         self.settings = settings
 
-    @classmethod
+    @classmethod  # noqa: B027 - an optional hook, deliberately not abstract
     def add_arguments(cls, parser: argparse.ArgumentParser, settings: Settings) -> None:
         """Add this workflow's own command-line options; `settings` supplies environment defaults."""
 
@@ -48,9 +54,35 @@ class Workflow(ABC):
     async def run(self, stagehand: Stagehand, page: Page, url: str, result: SiteResult) -> None:
         """Drive the site and fill in `result` (status, items, extras, steps, comparison).
 
-        Raise `Blocked` for login walls and bot checks; any other exception is recorded as an error.
+        Raise `Blocked` for login walls and bot checks, or another `AuditError` for a specific
+        failure; any other exception is recorded as an error.
         Use try/finally for work that must happen however the run ends.
         """
+
+    @staticmethod
+    def conclude(result: SiteResult, compare: Callable[[], Report]) -> None:
+        """Fill in `result.comparison` from a `finally` block, however the run ended.
+
+        A failure here is logged and recorded, never raised: raising from `finally` would replace
+        the exception that actually ended the run.
+        """
+        try:
+            result.comparison = compare()
+        except Exception as error:  # noqa: BLE001 - see the docstring
+            log.error(f"  Price comparison failed: {type(error).__name__}: {error}")
+            if result.status == Status.OK:
+                result.status, result.message = Status.ERROR, f"Price comparison failed: {error}"
+
+    def target_key(self, url: str, result: SiteResult) -> str:
+        """What this run audited, for runs.csv and summary.csv: the latest run per (workflow, target) is kept.
+
+        Override when one start URL can lead to different things (two restaurants, two routes).
+        """
+        return url
+
+    def sensitive_values(self) -> dict[str, str]:
+        """Values (name -> value) that must not be written to session.json or extractions.jsonl."""
+        return {}
 
     def summarise(self, result: SiteResult) -> None:  # noqa: B027 - optional hook
         """Print the headline numbers once `result.comparison` is filled in."""

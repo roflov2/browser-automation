@@ -5,11 +5,16 @@ from types import SimpleNamespace
 import pytest
 
 from audit.core import (
+    Blocked,
+    ElementNotFound,
+    FailureReason,
     LineItem,
     SiteResult,
     best_match,
+    classify_failure,
     compare_item_prices,
     diff,
+    drip_outcome,
     money_sum,
     new_item,
     norm_name,
@@ -18,9 +23,12 @@ from audit.core import (
     pct_diff,
     pct_of,
     pop_best_line,
+    positive,
     record_offers,
+    select_price,
     slug,
     summarise_extras,
+    unit_price,
 )
 
 
@@ -56,7 +64,6 @@ def test_parse_price(text, expected):
     assert parse_price(text) == expected
 
 
-@pytest.mark.xfail(strict=True, reason="REVIEW H2: fixed in Phase 4")
 @pytest.mark.parametrize(
     ("text", "expected"),
     [
@@ -112,7 +119,6 @@ def test_pct_of():
     assert pct_of(5.0, 0.0) is None
 
 
-@pytest.mark.xfail(strict=True, reason="REVIEW H5: fixed in Phase 4")
 def test_pct_of_zero_amount_is_zero_percent():
     assert pct_of(0.0, 47.4) == 0.0
 
@@ -144,7 +150,6 @@ def test_best_match_prefers_closest_containing_candidate():
     assert best_match("Lebo Fries", ["OOSH Fries Large", "Lebo Fries Regular"]) == 1
 
 
-@pytest.mark.xfail(strict=True, reason="REVIEW M8: fixed in Phase 4")
 def test_best_match_containment_prefers_most_token_overlap():
     assert best_match("Fries", ["OOSH Fries Large", "Lebo Fries"]) == 1
 
@@ -170,6 +175,55 @@ def test_compare_item_prices_unit_price_and_increase():
     assert items[0]["price_increased"] is True
     assert items[1]["expected_price"] == 23.0  # falls back to the shop price
     assert items[1]["price_increased"] is False
+
+
+def test_compare_item_prices_without_a_checkout_line_is_unknown():
+    items = [new_item("Rogue Coffee", "$23.00")]
+    assert compare_item_prices(items, lambda item: None) == 23.0
+    assert items[0]["checkout_price"] is None
+    assert items[0]["price_increased"] is None  # not "False": nothing was compared
+
+
+def test_zero_is_a_price():
+    """$0.00 is a real amount everywhere; only None means unknown (REVIEW H5)."""
+    item = new_item("Tap water", "$0.00")
+    assert item["shop_price"] == 0.0
+    select_price(item, "$0.00")
+    assert item["selected_price"] == 0.0
+    select_price(item, "see menu")
+    assert item["selected_price"] == 0.0  # unreadable: falls back to the shop price, which is zero
+    assert positive(0.0) is False and positive(None) is False and positive(0.01) is True
+    assert (
+        compare_item_prices([item], lambda _: LineItem(name="Tap water", variant=None, quantity=1, price="$1.00"))
+        == 0.0
+    )
+    assert item["price_increased"] is True
+
+
+def test_decimal_arithmetic_rounds_half_up():
+    assert money_sum([0.1, 0.2, 0.3]) == 0.6
+    assert money_sum([1.005, 1.005]) == 2.01
+    assert diff(1.15, 1.0) == 0.15
+    assert unit_price(10.0, 3) == 3.33
+    assert unit_price(0.05, 2) == 0.03
+    assert pct_of(1.0, 8.0) == 12.5
+
+
+def test_drip_outcome_is_three_valued():
+    assert drip_outcome(["fee added"], final_price_read=False)["drip_detected"] is True
+    assert drip_outcome([], final_price_read=True)["drip_detected"] is False
+    assert drip_outcome([], final_price_read=False)["drip_detected"] is None
+
+
+def test_failures_are_classified():
+    assert classify_failure(Blocked("captcha")) is FailureReason.BLOCKED
+    assert classify_failure(ElementNotFound("no cart")) is FailureReason.ELEMENT_NOT_FOUND
+    assert classify_failure(TimeoutError()) is FailureReason.TIMEOUT
+    assert classify_failure(RuntimeError("observe() timed out after 90000ms")) is FailureReason.TIMEOUT
+    assert classify_failure(KeyError("x")) is None
+    assert [reason.value for reason in FailureReason] == [
+        "blocked", "out_of_stock", "flow_changed", "element_not_found", "extract_failed", "timeout", "unsafe_action_refused",
+    ]  # fmt: skip
 
 
 def test_record_offers_dedupes_per_step_type():
