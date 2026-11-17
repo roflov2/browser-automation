@@ -201,3 +201,44 @@ def test_conclude_never_masks_the_run_s_own_failure():
 def test_workflows_declare_their_policy(workflow):
     assert workflow.clear_cookies in (None, "domain", "all")
     assert workflow.log_level in ("warn", "info")
+
+
+# --- Phase 5: no extraction is paid for when an action changed nothing ----------------------------------
+def test_virgin_reuses_the_step_when_the_screen_did_not_change(monkeypatch, tmp_path):
+    screens = iter(["extras|A", "extras|A", "extras|A", "extras|A"])  # every action leaves the screen as it was
+    extracts, actions = [], []
+
+    def state():
+        return virgin.StepState(step_type="extras", heading="Extras", is_payment_page=False, blocked_reason=None,
+                                offers=[], price_lines=[], total="$199.00", validation_errors=[], summary="extras page")  # fmt: skip
+
+    class Stagehand:
+        async def extract(self, instruction, schema, **options):
+            extracts.append(schema.__name__)
+            return SimpleNamespace(data=state())
+
+    async def fake_safe_act(stagehand, page, instruction, **options):
+        actions.append(instruction)
+        return SimpleNamespace(description="clicked continue", success=True)
+
+    async def nothing(*args, **kwargs):
+        return None
+
+    class Page:
+        async def url(self):
+            return "https://book.air.test/dx/#/extras"
+
+    async def fake_fingerprint(page):
+        return next(screens)
+
+    monkeypatch.setattr(virgin, "fingerprint", fake_fingerprint)
+    monkeypatch.setattr(virgin, "safe_act", fake_safe_act)
+    for name in ("wait_for_render", "shot", "settle"):
+        monkeypatch.setattr(virgin, name, nothing)
+    run = SiteResult(site="s", out_dir=tmp_path)
+    reached = asyncio.run(virgin.walk_to_payment(Stagehand(), Page(), Passenger(), run))
+    assert reached is False
+    assert run.message.startswith("Stuck on 'Extras'")
+    assert extracts == ["StepState"]  # one read; the three repeats cost no extraction (was four reads)
+    assert len(actions) == 3
+    assert len(run.steps) == 1

@@ -176,6 +176,43 @@ async def wait_for_render(page: Page, seconds: int = 20) -> bool:
     return await wait_until(page, JS_RENDERED, seconds * 1000)
 
 
+async def fetch_json(page: Page, path: str, timeout_ms: int = 5000) -> Any:
+    """GET a same-origin JSON endpoint from inside the page (with its cookies); None if it is not there.
+
+    No model call and no click: used to read prices straight from a shop's own API where it has one.
+    """
+    script = (
+        "(async () => { const ctrl = new AbortController(); setTimeout(() => ctrl.abort(), "
+        f"{timeout_ms}); try {{ const r = await fetch({json.dumps(path)}, {{ credentials: 'same-origin', "
+        "headers: { Accept: 'application/json' }, signal: ctrl.signal }); "
+        "if (!r.ok) return null; const body = await r.text(); try { return JSON.parse(body); } catch (e) { return null; } } "
+        "catch (e) { return null; } })()"
+    )
+    try:
+        return await page.evaluate(script)
+    except BROWSER_ERRORS as error:  # the page navigated away while fetching
+        log.debug("fetch %s failed: %s", path, error)
+        return None
+
+
+# What a person would see change after an action: the URL, the main heading, the open dialogs and the
+# amount of text. Used to tell whether an action did anything before paying for another extraction.
+JS_FINGERPRINT = r"""() => {
+    const heading = document.querySelector('h1, [role="heading"][aria-level="1"], h2');
+    const dialogs = Array.from(document.querySelectorAll('[role="dialog"], [aria-modal="true"]')).filter(d => vis(d, 50, 50));
+    const text = document.body ? document.body.innerText : '';
+    let hash = 0;
+    for (let i = 0; i < text.length; i++) hash = (hash * 31 + text.charCodeAt(i)) | 0;
+    return [location.href, heading ? clean(heading.innerText) : '', dialogs.length, text.length, hash].join('|');
+}"""
+
+
+async def fingerprint(page: Page) -> str | None:
+    """A cheap summary of what is on screen; equal fingerprints mean nothing visible changed."""
+    value = await js(page, JS_FINGERPRINT)
+    return value if isinstance(value, str) else None
+
+
 async def try_goto(page: Page, url: str) -> bool:
     """Navigate where a failure is survivable (slow sites can time out yet still render). False if it failed."""
     try:

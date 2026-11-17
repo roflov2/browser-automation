@@ -152,16 +152,30 @@ class SessionLog:
             f.write(json.dumps(redact(entry, self.secrets), ensure_ascii=False) + "\n")
 
 
+# Page furniture that never holds a price we audit: the site footer and the common cookie-consent
+# dialogs. Left out of every extraction to make the prompt smaller. A selector that matches nothing
+# costs nothing. Headers are kept on purpose: Uber Eats shows the delivery address there.
+EXTRACT_IGNORE = (
+    "body > footer",
+    '[role="contentinfo"]',
+    "#onetrust-consent-sdk",
+    "#CybotCookiebotDialog",
+    "#usercentrics-root",
+)
+
+
 class RecordingStagehand:
     """A Stagehand stand-in handed to the workflows.
 
-    extract() gets an explicit timeout, raises a specific error when it fails, and has every result
-    appended to the run's extractions.jsonl. Everything else is passed straight through.
+    extract() gets an explicit timeout, leaves out the page furniture in EXTRACT_IGNORE, raises a
+    specific error when it fails, and has every result appended to the run's extractions.jsonl.
+    Everything else is passed straight through.
     """
 
-    def __init__(self, stagehand: Stagehand, session_log: SessionLog | None = None) -> None:
+    def __init__(self, stagehand: Stagehand, session_log: SessionLog | None = None, page: Page | None = None) -> None:
         self._stagehand = stagehand
         self._log = session_log or SessionLog()
+        self._page = page
 
     def record_to(self, path: Path | None) -> None:
         """Start writing extractions to `path` (one file per run); None stops recording."""
@@ -169,6 +183,8 @@ class RecordingStagehand:
 
     async def extract(self, instruction: str, schema: type[BaseModel], **options: Any) -> Any:
         options.setdefault("timeout", safety.LLM_TIMEOUT_MS)
+        if self._page is not None and "locator" not in options:
+            options.setdefault("ignore_locators", [self._page.locator(selector) for selector in EXTRACT_IGNORE])
         try:
             result = await self._stagehand.extract(instruction, schema, **options)
         except ValidationError as error:
@@ -388,7 +404,7 @@ async def run(
                 return
             # The in-page purchase blocker, on every page from here on (not for --login, where a person signs in).
             await safety.install(browser.context, page)
-            stagehand = RecordingStagehand(client, session_log)
+            stagehand = RecordingStagehand(client, session_log, page)
             for url in targets:
                 session_log.start_site()
                 await audit_and_record(workflow, stagehand, page, browser, url, session_log, describe)

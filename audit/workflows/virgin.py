@@ -41,7 +41,7 @@ from ..core import (
     summarise_extras,
     write_csv,
 )
-from ..page import dismiss_popups, settle, shot, wait_for_render
+from ..page import dismiss_popups, fingerprint, settle, shot, wait_for_render
 from ..safety import current_guard, safe_act
 from ..workflow import Workflow
 
@@ -415,12 +415,49 @@ DEFAULT_NEXT_ACTION = (
 )
 
 
+async def next_booking_action(
+    stagehand: Stagehand, page: Page, passenger: Passenger, state: StepState, step_type: str
+) -> None:
+    """Take the one action that moves the booking on from `step_type`, declining every extra."""
+    if step_type == "passenger_details":
+        await fill_passenger_details(stagehand, page, passenger)
+    instruction = NEXT_ACTIONS.get(step_type, DEFAULT_NEXT_ACTION)
+    if state.validation_errors:
+        instruction = (
+            f"The page shows these errors: {'; '.join(state.validation_errors[:3])}. Fix the first one if it is a "
+            f"missing choice or field (never by adding a paid extra). Otherwise: {instruction}"
+        )
+    step = await safe_act(stagehand, page, instruction)
+    log.info(f"    {step.description}")
+    await settle(page, SETTLE_MS)
+
+
 async def walk_to_payment(stagehand: Stagehand, page: Page, passenger: Passenger, result: SiteResult) -> bool:
     """Step through the booking flow, recording every extra offered, until the payment page. True if reached."""
     out = result.out_dir
     last_signature, repeats = None, 0
+    last_state: StepState | None = None
+    last_seen: str | None = None
     for index in range(1, MAX_BOOKING_STEPS + 1):
         await wait_for_render(page, 10)
+        seen = await fingerprint(page)
+        if last_state is not None and seen is not None and seen == last_seen:
+            # The last action changed nothing on screen: the step is the same, so is what an extraction
+            # would report. Count it as a repeat without paying for another extraction.
+            repeats += 1
+            log.info(f"  Step {index}: unchanged after the last action (repeat {repeats})")
+            if repeats >= MAX_STUCK_REPEATS:
+                errors = "; ".join(last_state.validation_errors) or last_state.summary
+                result.message = f"Stuck on '{last_state.heading or last_state.step_type}': {errors}"
+                return False
+            await next_booking_action(
+                stagehand,
+                page,
+                passenger,
+                last_state,
+                "payment" if last_state.is_payment_page else last_state.step_type,
+            )
+            continue
         state = (
             await stagehand.extract(
                 "We are part-way through booking a flight and want to reach the payment page without buying any "
@@ -468,17 +505,10 @@ async def walk_to_payment(stagehand: Stagehand, page: Page, passenger: Passenger
             )
             return False
 
-        if step_type == "passenger_details":
-            await fill_passenger_details(stagehand, page, passenger)
-        instruction = NEXT_ACTIONS.get(step_type, DEFAULT_NEXT_ACTION)
-        if state.validation_errors:
-            instruction = (
-                f"The page shows these errors: {'; '.join(state.validation_errors[:3])}. Fix the first one if it is a "
-                f"missing choice or field (never by adding a paid extra). Otherwise: {instruction}"
-            )
-        step = await safe_act(stagehand, page, instruction)
-        log.info(f"    {step.description}")
-        await settle(page, SETTLE_MS)
+        # Remember what the screen looked like when it was read; if the action leaves it exactly so,
+        # the next turn knows without asking the model.
+        last_state, last_seen = state, seen
+        await next_booking_action(stagehand, page, passenger, state, step_type)
 
     result.message = f"Payment page not reached within {MAX_BOOKING_STEPS} steps"
     return False

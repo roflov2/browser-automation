@@ -10,11 +10,8 @@ Each instruction is run `--repeat` times both ways. Tokens come from stagehand.m
 
 import argparse
 import asyncio
-import json
-import re
 import sys
 from pathlib import Path
-from typing import Any
 
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))

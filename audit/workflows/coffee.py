@@ -39,11 +39,13 @@ from ..core import (
 )
 from ..page import (
     dismiss_popups,
+    fetch_json,
     is_sso_redirect,
     js,
     maybe_dismiss_popups,
     settle,
     shot,
+    try_goto,
     wait_for_render,
     wait_out_sso,
     wait_until,
@@ -295,6 +297,7 @@ async def add_product_to_cart(stagehand: Stagehand, page: Page, product: Product
         selected = parse_price(state.current_price)
         item["selected_price"] = selected if selected is not None else item["shop_price"]  # a real $0.00 stays $0.00
 
+    count_before = await shopify_item_count(page)
     add = await safe_act(
         stagehand, page, "Click the 'Add to cart', 'ADD TO BAG', 'Add to bag' or 'Buy' button for this product."
     )
@@ -302,10 +305,61 @@ async def add_product_to_cart(stagehand: Stagehand, page: Page, product: Product
     await wait_until(page, "() => document.readyState === 'complete'", 3000)
     await settle(page, 1200)
     item["status"] = "added" if add.success else "add_failed"
+    if count_before is not None and add.success:
+        # On Shopify the cart itself says whether the click worked, rather than the model's own report.
+        count_after = await shopify_item_count(page)
+        if count_after is not None and count_after <= count_before:
+            log.warning("    The cart did not grow after 'Add to cart'; counting the item as not added")
+            item["status"] = "add_failed"
     return item
 
 
+# ---------------------------------------------------------------------------
+# Shopify's own cart API: exact prices with no model call
+# ---------------------------------------------------------------------------
+def money_from_cents(cents: object) -> str | None:
+    return f"${int(cents) / 100:.2f}" if isinstance(cents, int | float) else None
+
+
+def cart_from_shopify(data: object) -> CartLines | None:
+    """Build the cart from Shopify's /cart.js answer; None if it is not one, or holds nothing."""
+    if not isinstance(data, dict) or not isinstance(data.get("items"), list) or not data["items"]:
+        return None
+    lines = [
+        LineItem(
+            name=str(line.get("product_title") or line.get("title") or ""),
+            variant=line.get("variant_title") or None,
+            quantity=int(line.get("quantity") or 1),
+            price=money_from_cents(line.get("final_line_price", line.get("line_price"))),
+        )
+        for line in data["items"]
+        if isinstance(line, dict)
+    ]
+    return CartLines(
+        is_cart_visible=True,
+        items=lines,
+        subtotal=money_from_cents(data.get("items_subtotal_price", data.get("total_price"))),
+        has_checkout_button=True,  # every Shopify store checks out at /checkout
+        reason="read from the store's /cart.js",
+    )
+
+
+async def shopify_cart(page: Page) -> CartLines | None:
+    return cart_from_shopify(await fetch_json(page, "/cart.js"))
+
+
+async def shopify_item_count(page: Page) -> int | None:
+    data = await fetch_json(page, "/cart.js")
+    return int(data["item_count"]) if isinstance(data, dict) and isinstance(data.get("item_count"), int) else None
+
+
 async def open_cart(stagehand: Stagehand, page: Page) -> CartLines:
+    """The cart's lines and subtotal: from Shopify's /cart.js when the store has it, else read by the model."""
+    if cart := await shopify_cart(page):
+        log.info("  Cart read from the store's /cart.js (no model call)")
+        await try_goto(page, urljoin(await page.url(), "/cart"))  # for the cart.png evidence
+        await settle(page, SETTLE_MS)
+        return cart
     for _ in range(3):
         cart = (
             await stagehand.extract(
@@ -368,11 +422,15 @@ def compare_prices(added: list[Item], cart: CartLines, checkout: CheckoutDetails
     }
 
 
-async def go_to_checkout(stagehand: Stagehand, page: Page, result: SiteResult) -> CheckoutDetails:
-    step = await safe_act(
-        stagehand, page, "Click the 'Check out' / 'CHECKOUT' / 'Checkout' button to proceed to the checkout page."
-    )
-    log.info(f"  Checkout: {step.description}")
+async def go_to_checkout(stagehand: Stagehand, page: Page, result: SiteResult, shopify: bool) -> CheckoutDetails:
+    if shopify:  # Shopify starts checkout from a plain /checkout link: no click, no model call
+        log.info("  Checkout: opening /checkout directly")
+        await page.goto(urljoin(await page.url(), "/checkout"))
+    else:
+        step = await safe_act(
+            stagehand, page, "Click the 'Check out' / 'CHECKOUT' / 'Checkout' button to proceed to the checkout page."
+        )
+        log.info(f"  Checkout: {step.description}")
     await settle(page, 3000)
 
     # If the page hasn't left /cart (e.g. the button was a decoy link or needed a form submit), navigating
@@ -467,7 +525,8 @@ class CoffeeWorkflow(Workflow):
         log.info(f"  Cart: {len(cart.items)} line(s), subtotal {cart.subtotal}")
         await shot(page, out / "cart.png", full_page=False)
 
-        checkout = await go_to_checkout(stagehand, page, result) if cart.has_checkout_button else None
+        shopify = cart.reason.endswith("/cart.js")
+        checkout = await go_to_checkout(stagehand, page, result, shopify) if cart.has_checkout_button else None
         result.checkout_url = await page.url()
         result.comparison = compare_prices(result.added, cart, checkout)
         if checkout is None:
