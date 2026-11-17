@@ -6,8 +6,10 @@
 | --- | --- | --- |
 | `coffee-shopify.py` | Coffee roaster / retailer stores | Adds 1–5 coffees to the cart and compares shop prices with checkout |
 | `airlines-virgin.py` | [Virgin Australia](https://www.virginaustralia.com/au/en/) | Books a one-way flight through to the payment page and records every extra and fee offered |
+| `uber-eats.py` | [Uber Eats AU](https://www.ubereats.com/au) | Orders food through to checkout, records delivery/service fees and compares menu prices with the restaurant's own site |
+| `ticketek.py` | [Ticketek AU](https://premier.ticketek.com.au/) | Holds the cheapest adult ticket(s) for an event and walks through to the payment page, recording booking, handling, delivery and card fees |
 
-Both write the same output layout and share `output/summary.csv`.
+All write the same output layout and share `output/summary.csv`.
 
 ## `coffee-shopify.py`: Key Capabilities & Coffee Site Calibration
 
@@ -33,6 +35,17 @@ Both write the same output layout and share `output/summary.csv`.
 - **Extras and fees log**: At each step records every add-on, upsell, fee and surcharge shown: checked and carry-on baggage, seat selection, fare upgrades, travel insurance, carbon offset, lounge, car hire, service fees and card payment surcharges, with price, price basis, whether it was pre-selected and whether it is mandatory.
 - **Drip pricing analysis**: Compares the advertised fare with the selected fare, the fare at checkout and the total due with no extras chosen, and flags added fees, pre-selected extras and payment surcharges.
 - **Stops before paying**: The run ends on the payment page. No payment details are entered and no booking is made. Guest details are placeholders (override with the `PAX_*` variables below).
+
+## `ticketek.py`: Event Ticket Audit
+
+- **Event search**: Searches Ticketek from the homepage (`--query`, default `comedy`) and opens the first on-sale event, or starts from an event URL you pass.
+- **Upfront price capture**: Records the advertised "from" price, what the page says that price includes (e.g. "includes booking fee") and quotes every fee disclosure on the event and ticket-selection pages.
+- **Cheapest standard ticket**: Lists every price reserve and ticket type, and picks the cheapest available standard adult ticket (concession, child, companion, VIP and package tickets are skipped unless nothing else is on sale). Holds 1–4 tickets with best-available seating.
+- **Waiting rooms**: Waits in a Queue-it waiting room for up to 15 minutes before giving up as `blocked`.
+- **Purchase chain**: Steps through login, delivery method (cheapest, free where offered), ticket protection, donations, upsells and review to the payment page, declining every optional extra.
+- **Fees breakdown**: Compares the selected ticket price × quantity with the checkout ticket subtotal, booking fees, handling/transaction fee, delivery fee, other fees, card surcharges and total, and shows for each fee whether it was disclosed before checkout.
+- **Login**: Ticketek usually needs a My Ticketek account to check out. Run `python ticketek.py --login` once to save a login into `.chrome-profile`. In a headed run the script also pauses for you to sign in when it reaches a login wall. Headless runs stop there with status `blocked`.
+- **Stops before paying**: Nothing is purchased. Held tickets go back on sale when Ticketek's hold timer runs out.
 
 ## Setup
 
@@ -61,6 +74,7 @@ GOOGLE_GENERATIVE_AI_API_KEY=your-gemini-key
 | `BROWSERBASE_API_KEY` | (optional) | Browserbase API key for cloud execution |
 | `BROWSERBASE_PROJECT_ID` | (optional) | Browserbase project ID |
 
+| `TICKETEK_QUERY` | `comedy` | Default search term for `ticketek.py` |
 | `PAX_TITLE`, `PAX_FIRST_NAME`, `PAX_LAST_NAME`, `PAX_GENDER`, `PAX_DATE_OF_BIRTH`, `PAX_EMAIL`, `PAX_PHONE`, `PAX_COUNTRY` | placeholder guest | Guest details typed into the airline booking form (`airlines-virgin.py` only) |
 
 ## Usage
@@ -75,6 +89,19 @@ python coffee-shopify.py https://redbrick.coffee
 
 # Audit multiple coffee sites and specify how many products to add (1 to 5)
 python coffee-shopify.py https://redbrick.coffee https://marketlane.com.au https://onacoffee.com.au --products 3
+```
+
+### Ticketek
+
+```bash
+# Save a My Ticketek login once (opens a browser window)
+python ticketek.py --login
+
+# Search for an event and hold 2 tickets
+python ticketek.py --query "comedy" --tickets 2
+
+# Audit a specific event page
+python ticketek.py https://premier.ticketek.com.au/shows/show.aspx?sh=EXAMPLE
 ```
 
 ### Virgin Australia
@@ -112,13 +139,15 @@ output/
         └── extras.csv                        # Every extra, add-on, fee and surcharge offered, by step
 ```
 
+`ticketek.py` writes under `output/ticketek.com.au/<YYYYMMDD-HHMMSS>/`. `products.csv` lists every ticket option on the selection page and `cart.png` is the first step after the tickets are held. It also writes `search_results.csv`, `shows.csv`, `event.png`, `tickets.png`, `queue.png` (if queued), `step-NN-<step>.png`, `extras.csv` and `fees_breakdown.csv` (each fee, what was disclosed upfront, the amount at checkout and its % of the ticket subtotal). One `summary.csv` row is kept per event URL.
+
 `price_comparison.json` additionally holds the search, the `extras` list, the per-step log (`steps`), `payment_surcharges`, `extras_preselected` and `total_vs_expected_diff`.
 
 ### Summary File (`output/summary.csv`)
 Maintains a persistent record across all evaluated sites:
 - Run timestamp
 - Site URL
-- Run status (`ok`, `blocked`, `no_checkout`, `no_coffee_found`, `no_flights_found`, `add_to_cart_failed`, `error`)
+- Run status (`ok`, `blocked`, `no_checkout`, `no_coffee_found`, `no_flights_found`, `no_tickets_found`, `add_to_cart_failed`, `error`)
 - Items added count (coffees, or flights)
 - Expected subtotal vs checkout subtotal vs final total
 - Other non-tax, non-shipping fees
