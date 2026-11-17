@@ -5,8 +5,7 @@ No live workflow was run. Evidence comes from reading every module, diffing `mai
 `output/` runs, the installed `stagehand==4.4.0` source, and one local probe of an init script in headless Chromium
 against an HTML fixture (no site, no LLM).
 
-Status column: every finding is **open** until you approve the plan. Later phases will mark each one
-fixed, deferred (with a reason) or rejected.
+The final status of every finding is in [Status after Phases 2–6](#status-after-phases-26) at the end.
 
 ## Baseline (measured at `0de8176`)
 
@@ -445,3 +444,85 @@ If budget runs short the order of sacrifice is Phase 5, then the function splits
 A scheduler; a database behind `runs.csv`; hashing screenshots and extractions as evidence; per-jurisdiction rules;
 redacting address and payment regions from screenshots before they are saved (would address the cause of C2);
 `set_domain_policy` to block payment-processor domains as a network-level guard layer.
+
+
+## Status after Phases 2–6
+
+Branch `claude/harden-audit`: `0cd0599` tests, `0615c0a` guard, `81c8603` settings and splits,
+`2ce6b33` results and failures, `7d73a17` efficiency, then the docs commit. Nothing was pushed and no
+live workflow was run: every figure below comes from tests against local fixtures or is labelled an
+estimate.
+
+| ID | Status | Notes |
+| --- | --- | --- |
+| C1 purchase guard | **Fixed** | `audit/safety.py`, five layers; 0 `act(` and 0 raw clicks outside it (enforced by a test). Verified in headless Chromium: same- and cross-origin frames, navigation, shadow DOM, Enter key, `submit()`/`requestSubmit()`, typing into card/CVV/expiry/gift fields. Gaps are listed in the README |
+| C2 personal data in `output/` | **Fixed going forward; history open** | `output/` git-ignored and untracked (you chose this). The address, coordinates and card suffix remain in git history and on GitHub; that needs your decision |
+| H1 false "no drip" | Fixed | three-valued `drip_detected`, `final_price_read`, `price_increased: null` without a checkout line |
+| H2 `parse_price` | Fixed | all cases in the table above are tests |
+| H3 discounts | Fixed | `fees_and_delivery_total`, `total_vs_components_diff` (the saved run shows −11.85) |
+| H4 summary | Fixed | `runs.csv` + rebuilt `summary.csv`, atomic writes; key = site / site + route / store path |
+| H5 falsy zero, currency | Fixed | every site in the table; currency `null` + `currency_assumed` |
+| H6 silent failures | Fixed | `failure_reason`; `js()` raises `PageScriptError`; 25 broad handlers → 5 (each documented: last-resort runner boundary, `conclude()` in `finally`, Browserbase release, two closes). Others catch `BROWSER_ERRORS` (`RuntimeError`, `TimeoutError`, `OSError`) and log |
+| H7 passenger details | Fixed | variables instead of prompt text; redacted from `session.json` and `extractions.jsonl` |
+| H8 work in `finally` | Fixed | direct-site step skipped after a refusal; `conclude()` cannot mask the real failure |
+| M1 telemetry scope | Fixed | per-site monitor and `metrics` delta |
+| M2 config | Fixed | `audit/config.py`; no import-time side effects (tested in a subprocess) |
+| M3 stream filter | Fixed | scoped context manager, per line, restored on exit |
+| M4 fixed sleeps | Fixed | 17 `wait_for_timeout` + 35 fixed `settle` sleeps → 0 fixed sleeps: `settle(ms)` now waits for load, then for the page to stop changing, with `ms` as the upper bound (measured on fixtures: 0.5 s on a static page where it slept 3 s). `dom_settle_timeout_ms` was tried first: it made no measurable difference on a fixture with constant network traffic, so it is not set |
+| M5 lifecycle | Fixed | `async with` wrappers, monitor task awaited, Browserbase session released if `connect()` fails. My earlier note that the process hung after closing was a misreading: the "Terminated" came from stopping the fixture server |
+| M6 complexity | Partly fixed | `store.py`'s three functions now C(12), C(17), C(11) (were E39, D25, D23); `pricing.compare_prices` split (F46 → largest piece C). **Deferred:** `virgin.compare_prices` D(30) and `UberEatsWorkflow.run` D(25, up from 22 with the refusal handling); splitting them is priority 5 and I ran out of budget |
+| M7 collapsed cart | Fixed | falls back to the cart drawer; `item_prices_source` |
+| M8 `best_match` | Fixed | whole-word containment, closest name wins |
+| M9 trusting "added" | Fixed on Shopify, deferred elsewhere | `/cart.js` confirms each add; other stores still trust the model |
+| M10 `ok` without checkout | Partly fixed | the verdict is safe (`drip_detected` is `null` unless the checkout page was read); the `status` rule is unchanged so as not to change status values |
+| M11 raw extractions | Fixed | `extractions.jsonl` |
+| M12 pins | Fixed | `pyproject.toml` + synced `requirements.txt` (tested) |
+| L1 print | Fixed | `logging`, `-v`/`-q`; progress lines unchanged |
+| L2 tooling | Fixed | ruff, mypy (`--strict` on core, config, safety, runner, cli, page, workflow), pytest: 350 tests |
+| L3 stringly types | Partly fixed | `Status`, `FailureReason` are `StrEnum`; `item_fields` immutable. **Deferred:** `clear_cookies` is still `"domain" | "all" | None` |
+| L4 dict items | Deferred | items stay dicts because their keys are the JSON output contract; a typed model is a larger change than it is worth now |
+| L5 `is_login_url` | Deferred | not observed to misfire; no fixture to prove a fix |
+| L6 search-engine CAPTCHA | Fixed | logged and skipped, never worked around |
+| L7 blocking writes | Rejected | negligible at this scale |
+| Decimal | Done | parsing and arithmetic in `core` use `Decimal`, half-up; all seven saved reports serialise identically (characterisation tests) |
+
+Consolidation changes: 4 and 7 kept (your decision); 3 and 8 documented in `MIGRATION.md`; 1, 2, 5,
+6, 9–13 documented there too.
+
+### Phase 5: cost
+
+Facts established on the way, from the installed Stagehand 4.4.0 and the fixture tests:
+
+- **`extract()` makes two model calls** (the extraction, then a "progress / completed" check). Each
+  `extract` site on a code path below therefore counts twice.
+- **`safe_act` makes the same number of calls as `act(str)`:** one `observe`; executing the vetted
+  `Action` costs no model call (asserted in a test with a model that fails on any call). On the small
+  fixture the observe prompt was 391 estimated tokens against 1,004 for `act(str)`, but that is
+  dominated by the system prompt; on a real page both carry the same accessibility tree, so I do not
+  claim a saving. `python scripts/measure_safe_act.py` with your key gives real numbers.
+- **`cache` does nothing for local runs** (server-side, Browserbase transport only, served after a
+  hit-count threshold). Not adopted. On Browserbase it could replay `observe` for stable navigation;
+  it must never be used for `extract` (stale prices).
+- **`ignore_locators` / `locator`** work with `page.locator(...)` objects; a selector that matches
+  nothing is ignored, and a `locator` that matches nothing falls back to the whole page.
+
+Estimates against the baselines (no live run; counts from the code path):
+
+| Workflow | Baseline tokens | What changed | Estimated effect |
+| --- | --- | --- | --- |
+| `coffee` (Shopify, 3 products) | 134k–159k, ~23–30 model calls | cart read from `/cart.js` (−1 extract = −2 calls), checkout via `/checkout` (−1 call), footers left out of every extract | about −3 calls and −10% tokens (≈ 120k–145k); on non-Shopify stores unchanged except the footer trim |
+| `virgin` | 286k / 554k | an action that leaves the screen unchanged no longer triggers another extract (each saves 2 calls, ≈ 15k tokens); footer trim | 0–30k per run; the twofold variance comes from the number of steps and retries, which this does not remove |
+| `ubereats` | 467k (78% extract) | footer trim only | a few percent; the big lever, scoping the checkout and menu extracts to the order summary with `locator`, needs selectors verified on the live site |
+
+Deferred efficiency work, each needing either a live run or a prompt change you have not approved:
+scope the Uber Eats checkout/menu extracts with `locator`; read Shopify `/products/<handle>.js` for
+variants and prices instead of `ProductPageState` (changes how size and subscription choices are made);
+merge `virgin`'s `SearchState` re-read after each form action; merge coffee's shop-page check with the
+product extraction (changes a prompt).
+
+### Open questions
+
+1. Git history still holds the Uber Eats address, coordinates and card suffix (C2).
+2. Run `python scripts/measure_safe_act.py` once with your key, and one live run per workflow when you
+   are ready, to replace the estimates above.
+3. `UberEatsWorkflow.run` and `virgin.compare_prices` splits, and a typed `clear_cookies` (deferred).
