@@ -11,7 +11,7 @@ from audit.cli import build_parser
 from audit.config import Settings
 
 REPO = Path(__file__).parent.parent
-WORKFLOWS = ["coffee", "virgin", "ubereats"]
+WORKFLOWS = ["coffee", "virgin", "ubereats", "ticketek"]
 
 
 def run_main(*args: str, cwd: Path) -> subprocess.CompletedProcess[str]:

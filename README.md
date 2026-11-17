@@ -9,10 +9,11 @@ Everything runs through one entry point, `main.py` (or the `drip-audit` command 
 | `coffee` | Coffee roaster / retailer stores | Adds 1–5 coffees to the cart and compares shop prices with checkout |
 | `virgin` | [Virgin Australia](https://www.virginaustralia.com/au/en/) | Books a one-way flight through to the payment page and records every extra and fee offered |
 | `ubereats` | [Uber Eats AU](https://www.ubereats.com/au) | Orders 1–5 menu items through to checkout, records every fee, and compares menu prices with the restaurant's own website |
+| `ticketek` | [Ticketek AU](https://premier.ticketek.com.au/) | Holds 1–8 tickets for an event through to the payment page and records every booking, service, handling, delivery and card fee |
 
 No workflow ever pays: runs stop on the checkout / payment page, and a purchase guard in the code makes sure of it (see [Safety](#safety)).
 
-**Use an account with no saved payment method** for any workflow that signs in (`ubereats`). The guard is designed to make a purchase impossible, but an account that cannot pay is the last line of defence.
+**Use an account with no saved payment method** for any workflow that signs in (`ubereats`, `ticketek`). The guard is designed to make a purchase impossible, but an account that cannot pay is the last line of defence.
 
 ## Setup
 
@@ -102,6 +103,21 @@ python main.py ubereats https://www.ubereats.com/au/store/... --restaurant-url h
 
 Sets the delivery address, records the delivery and service fees advertised on the feed card and store banner, clears any leftover cart, adds 1–5 menu items (cheapest required modifiers, no paid add-ons), and walks the cart to the checkout screen to read every fee. It then finds the restaurant's own website (by search, or `--restaurant-url`), walks Menu → Order online → Pickup → nearest store until prices are on screen, and reports the Uber Eats markup per item. `--skip-direct-site` skips that last part.
 
+### Ticketek
+
+```bash
+# Ticketek sells only to signed-in accounts: sign in once (an account with no saved card)
+python main.py ticketek --login
+
+# Search for an event and hold 2 tickets for its first session on sale
+python main.py ticketek --query "Hamilton"
+
+# Start from an event page, pick a session and hold 4 tickets
+python main.py ticketek https://premier.ticketek.com.au/shows/show.aspx?sh=... --session "Sat 14 Mar" --tickets 4
+```
+
+Opens the event (by search, or from the URL), records the advertised "from" price, what the prices are said to include, and every session, then picks a session (`--session` matches words in its date and venue). On the ticket page it records every area and price type, holds the cheapest standard adult ticket on "Best available" (not child, concession, member or package tickets), and walks cart → delivery → extras to the payment page, choosing free delivery and declining refund protection, parking and every other extra. A sign-in page pauses a headed run so you can sign in; a headless run without a saved login is recorded as `blocked`. An on-sale queue is waited out for up to 15 minutes. Drip pricing is flagged for booking/service/handling fees, a paid delivery method, pre-selected extras, card surcharges, a ticket price that rises in the cart, and an advertised "from" price lower than any ticket actually offered for the session.
+
 ## Code Layout
 
 ```
@@ -124,6 +140,7 @@ audit/
         ├── store.py        # Uber Eats: address, store, menu items, cart, checkout
         ├── direct_site.py  # the restaurant's own website
         └── pricing.py      # fee and markup comparison
+    └── ticketek/           # same split: models.py, flow.py (event → tickets → payment), pricing.py
 ```
 
 A workflow holds only what is particular to its site: CLI options, prompts, schemas, navigation and its price comparison. The runner and shared modules know nothing about any site.

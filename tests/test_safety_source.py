@@ -20,7 +20,7 @@ FORBIDDEN = {
 def test_the_scan_sees_the_whole_package():
     names = {p.relative_to(PACKAGE).as_posix() for p in SOURCES}
     assert {"page.py", "runner.py", "workflows/coffee.py", "workflows/virgin.py", "workflows/ubereats/store.py",
-            "workflows/ubereats/direct_site.py"} <= names  # fmt: skip
+            "workflows/ubereats/direct_site.py", "workflows/ticketek/flow.py"} <= names  # fmt: skip
 
 
 @pytest.mark.parametrize("path", SOURCES, ids=lambda p: p.relative_to(PACKAGE).as_posix())
