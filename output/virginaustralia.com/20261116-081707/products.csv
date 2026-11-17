@@ -1,5 +1,0 @@
-flight_number,departs,arrives,stops,duration,price,sold_out,fares
-VA 629,7:05am,8:05am,0,1h 0m,from $ 199.00,False,Choice $ 199.00; Business None
-VA 653,3:20pm,4:20pm,0,1h 0m,from $ 199.00,False,Choice $ 199.00; Business None
-VA 657,4:05pm,5:05pm,0,1h 0m,from $ 199.00,False,Choice $ 199.00; Business None
-VA 669,7:05pm,8:05pm,0,1h 0m,from $ 199.00,False,Choice $ 199.00; Business None

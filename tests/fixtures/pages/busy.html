@@ -1,0 +1,15 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Page that keeps rendering for a while</title>
+<div class="loading-spinner" id="spinner">Loading…</div>
+<div id="app"></div>
+<script>
+  // Adds a row every 100 ms for ?ms= milliseconds (default 1200), then removes the spinner.
+  const until = Date.now() + Number(new URLSearchParams(location.search).get('ms') || 1200);
+  const filler = 'Lorem ipsum dolor sit amet, consectetur adipiscing elit. ';
+  const tick = () => {
+    document.getElementById('app').insertAdjacentHTML('beforeend', '<p>' + filler + '</p>');
+    if (Date.now() < until) setTimeout(tick, 100); else document.getElementById('spinner').remove();
+  };
+  tick();
+</script>
