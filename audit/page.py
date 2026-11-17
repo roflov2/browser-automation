@@ -4,7 +4,6 @@ import asyncio
 import contextlib
 import json
 import logging
-import os
 import sys
 from pathlib import Path
 
@@ -166,9 +165,9 @@ def is_sso_redirect(url: str) -> bool:
     return "login.microsoftonline.com" in url or "login.windows.net" in url
 
 
-async def pause_for_login(page: Page, message: str) -> bool:
-    """Pause a headed, interactive run so the user can sign in in the browser window. False if we can't pause."""
-    if os.getenv("HEADLESS") == "true" or not sys.stdin.isatty():
+async def pause_for_login(page: Page, message: str, interactive: bool) -> bool:
+    """Pause a headed (`interactive`) run so the user can sign in in the browser window. False if we can't pause."""
+    if not interactive or not sys.stdin.isatty():
         return False
     print(f"\n  [LOGIN REQUIRED] {message}")
     print("  1. Complete the sign-in (and any SMS/email OTP) in the open browser window.")

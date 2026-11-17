@@ -13,6 +13,7 @@ from urllib.parse import urljoin
 from pydantic import BaseModel, Field
 from stagehand import Page, Stagehand
 
+from ..config import Settings
 from ..core import (
     Fee,
     LineItem,
@@ -144,9 +145,10 @@ async def find_shop_page(stagehand: Stagehand, page: Page) -> str:
             raise RuntimeError(check.data.reason)
 
         step = await safe_act(
-            stagehand, page,
+            stagehand,
+            page,
             "Take the next step to get to this store's shop page where its coffee is listed for sale "
-            "(e.g. a 'Shop', 'Coffee' or 'Shop Coffee' link). If navigation links are hidden behind a menu button, open the menu first."
+            "(e.g. a 'Shop', 'Coffee' or 'Shop Coffee' link). If navigation links are hidden behind a menu button, open the menu first.",
         )
         await settle(page, SETTLE_MS)
         await maybe_dismiss_popups(stagehand, page, POPUPS)
@@ -195,7 +197,7 @@ async def resolve_product_url(page: Page, product: Product, shop_url: str) -> st
     """Return a validated product URL from extraction or exact DOM match; None if clicking is required."""
     if product.url and product.url.startswith(("http://", "https://", "/")):
         full = urljoin(shop_url, product.url)
-        if full.split("?")[0].rstrip("/") != shop_url.split("?")[0].rstrip("/"):
+        if full.split("?")[0].rstrip("/") != shop_url.split("?", maxsplit=1)[0].rstrip("/"):
             return full
 
     names = [product.name, COFFEE_AFFIX.sub("", product.name).strip()]
@@ -232,7 +234,11 @@ async def add_product_to_cart(stagehand: Stagehand, page: Page, product: Product
         if not state.is_product_page:
             if attempt == 0 and not target_url:
                 # If the initial click didn't open the product page, try once more
-                await safe_act(stagehand, page, f"Click on the product link or title for '{product.name}' to open its product page.")
+                await safe_act(
+                    stagehand,
+                    page,
+                    f"Click on the product link or title for '{product.name}' to open its product page.",
+                )
                 await settle(page, 1000)
                 continue
             print(f"    Not on a valid product page for '{product.name}' ({state.reason}), skipping.")
@@ -245,12 +251,16 @@ async def add_product_to_cart(stagehand: Stagehand, page: Page, product: Product
             await page.wait_for_timeout(800)
             acted = True
 
-        print(f"    Size: selected={state.selected_size}, lowest={state.lowest_available_size}, price={state.current_price}")
+        print(
+            f"    Size: selected={state.selected_size}, lowest={state.lowest_available_size}, price={state.current_price}"
+        )
         if state.has_size_options and not state.lowest_size_selected:
             target = state.lowest_available_size or "the smallest/cheapest option"
             step = await safe_act(
-                stagehand, page,
-                f"Change the package size or weight selector (currently '{state.selected_size}') to {target}."
+                stagehand,
+                page,
+                f"Change the package size or weight selector (currently '{state.selected_size}') to {target}.",
+                follow_up=True,  # a custom dropdown needs opening before the option can be picked
             )
             print(f"    Size selection: {step.description}")
             await page.wait_for_timeout(800)
@@ -264,7 +274,9 @@ async def add_product_to_cart(stagehand: Stagehand, page: Page, product: Product
         item["selected_price_display"] = state.current_price or product.price
         item["selected_price"] = parse_price(state.current_price) or item["shop_price"]
 
-    add = await safe_act(stagehand, page, "Click the 'Add to cart', 'ADD TO BAG', 'Add to bag' or 'Buy' button for this product.")
+    add = await safe_act(
+        stagehand, page, "Click the 'Add to cart', 'ADD TO BAG', 'Add to bag' or 'Buy' button for this product."
+    )
     print(f"    Added: {add.description}")
     with contextlib.suppress(Exception):
         await page.wait_for_load_state("networkidle", timeout=3000)
@@ -283,7 +295,9 @@ async def open_cart(stagehand: Stagehand, page: Page) -> CartLines:
         ).data
         if cart.is_cart_visible and cart.items:
             return cart
-        step = await safe_act(stagehand, page, "Open the shopping cart (click the cart/bag icon or link in the header, or 'View cart').")
+        step = await safe_act(
+            stagehand, page, "Open the shopping cart (click the cart/bag icon or link in the header, or 'View cart')."
+        )
         print(f"  Cart navigation: {step.description}")
         await settle(page, SETTLE_MS)
     raise RuntimeError("Couldn't open the shopping cart")
@@ -332,7 +346,9 @@ def compare_prices(added: list[dict], cart: CartLines, checkout: CheckoutDetails
 
 
 async def go_to_checkout(stagehand: Stagehand, page: Page, result: SiteResult) -> CheckoutDetails:
-    step = await safe_act(stagehand, page, "Click the 'Check out' / 'CHECKOUT' / 'Checkout' button to proceed to the checkout page.")
+    step = await safe_act(
+        stagehand, page, "Click the 'Check out' / 'CHECKOUT' / 'Checkout' button to proceed to the checkout page."
+    )
     print(f"  Checkout: {step.description}")
     await page.wait_for_timeout(3000)
 
@@ -368,10 +384,16 @@ class CoffeeWorkflow(Workflow):
     clear_cookies = "domain"
 
     @classmethod
-    def add_arguments(cls, parser: argparse.ArgumentParser) -> None:
+    def add_arguments(cls, parser: argparse.ArgumentParser, settings: Settings) -> None:
         parser.add_argument("urls", nargs="+", help="Coffee website URL(s)")
-        parser.add_argument("--products", type=int, default=3, choices=range(1, 6), metavar="N",
-                            help="Number of coffee products to add to the cart (1-5, default 3)")
+        parser.add_argument(
+            "--products",
+            type=int,
+            default=3,
+            choices=range(1, 6),
+            metavar="N",
+            help="Number of coffee products to add to the cart (1-5, default 3)",
+        )
 
     def targets(self) -> list[str]:
         return self.args.urls

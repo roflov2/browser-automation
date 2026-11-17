@@ -13,11 +13,11 @@ The run always stops on the checkout screen: nothing is ordered or paid for.
 
 import argparse
 import contextlib
-import os
 from urllib.parse import urlparse
 
 from stagehand import Page, Stagehand
 
+from ...config import Settings
 from ...core import ITEM_FIELDS, UnsafeActionRefused, parse_price, slug, write_csv
 from ...page import settle, shot
 from ...workflow import Workflow
@@ -35,7 +35,6 @@ from .store import (
     walk_to_checkout,
 )
 
-DEFAULT_ADDRESS = os.getenv("UBEREATS_ADDRESS", "260 City Walk, Canberra ACT 2601")
 SETTLE_MS = 2000
 
 SAFETY_PROMPT = (
@@ -53,24 +52,51 @@ class UberEatsWorkflow(Workflow):
     result_class = UberResult
     item_fields = [
         *ITEM_FIELDS[:-1],
-        "direct_item_name", "direct_price_display", "uber_vs_direct_diff", "uber_vs_direct_markup_pct",
+        "direct_item_name",
+        "direct_price_display",
+        "uber_vs_direct_diff",
+        "uber_vs_direct_markup_pct",
         ITEM_FIELDS[-1],
     ]
 
     @classmethod
-    def add_arguments(cls, parser: argparse.ArgumentParser) -> None:
-        parser.add_argument("urls", nargs="*", default=[SITE_URL],
-                            help=f"Uber Eats homepage or direct `/store/...` URL(s) (default: {SITE_URL})")
-        parser.add_argument("--address", default=DEFAULT_ADDRESS,
-                            help=f"Delivery address to enter (default: '{DEFAULT_ADDRESS}')")
-        parser.add_argument("--query", default=None,
-                            help="Optional search term when starting from the homepage (e.g. 'burgers', 'thai')")
-        parser.add_argument("--items", "--products", dest="items", type=int, default=2, choices=range(1, 6), metavar="N",
-                            help="Number of menu items to add to the order (1-5, default 2)")
-        parser.add_argument("--restaurant-url", default=None,
-                            help="Optional direct URL to the restaurant's own website/ordering page for unit-price comparison")
-        parser.add_argument("--skip-direct-site", action="store_true",
-                            help="Skip visiting the restaurant's own website at the end of the Uber Eats run")
+    def add_arguments(cls, parser: argparse.ArgumentParser, settings: Settings) -> None:
+        parser.add_argument(
+            "urls",
+            nargs="*",
+            default=[SITE_URL],
+            help=f"Uber Eats homepage or direct `/store/...` URL(s) (default: {SITE_URL})",
+        )
+        parser.add_argument(
+            "--address",
+            default=settings.ubereats_address,
+            help=f"Delivery address to enter (default: '{settings.ubereats_address}')",
+        )
+        parser.add_argument(
+            "--query",
+            default=None,
+            help="Optional search term when starting from the homepage (e.g. 'burgers', 'thai')",
+        )
+        parser.add_argument(
+            "--items",
+            "--products",
+            dest="items",
+            type=int,
+            default=2,
+            choices=range(1, 6),
+            metavar="N",
+            help="Number of menu items to add to the order (1-5, default 2)",
+        )
+        parser.add_argument(
+            "--restaurant-url",
+            default=None,
+            help="Optional direct URL to the restaurant's own website/ordering page for unit-price comparison",
+        )
+        parser.add_argument(
+            "--skip-direct-site",
+            action="store_true",
+            help="Skip visiting the restaurant's own website at the end of the Uber Eats run",
+        )
 
     def targets(self) -> list[str]:
         return self.args.urls
@@ -94,7 +120,9 @@ class UberEatsWorkflow(Workflow):
             await settle(page, SETTLE_MS)
             await dismiss_uber_popups(stagehand, page)
 
-            result.shop_url = await ensure_address_and_open_store(stagehand, page, args.address, args.query, result)
+            result.shop_url = await ensure_address_and_open_store(
+                stagehand, page, args.address, args.query, result, interactive=not self.settings.headless
+            )
             print(f"  Store page: {result.shop_url}")
             await clear_existing_cart(stagehand, page)
             await shot(page, out / "store.png")
@@ -113,7 +141,9 @@ class UberEatsWorkflow(Workflow):
             if header.advertised_delivery_fee and not result.advertised_delivery_fee_display:
                 result.advertised_delivery_fee_display = header.advertised_delivery_fee
                 result.advertised_delivery_fee = parse_price(header.advertised_delivery_fee)
-            result.advertised_service_fee_display = result.advertised_service_fee_display or header.advertised_service_fee
+            result.advertised_service_fee_display = (
+                result.advertised_service_fee_display or header.advertised_service_fee
+            )
 
             write_csv(out / "products.csv", list(MenuItem.model_fields), [m.model_dump() for m in menu.items])
             print(
@@ -123,7 +153,10 @@ class UberEatsWorkflow(Workflow):
 
             chosen = choose_menu_items(menu.items, args.items)
             if not chosen:
-                result.status, result.message = "no_items_found", "No available food/drink items found on the store menu"
+                result.status, result.message = (
+                    "no_items_found",
+                    "No available food/drink items found on the store menu",
+                )
                 return
 
             for idx, menu_item in enumerate(chosen, start=1):
@@ -139,8 +172,12 @@ class UberEatsWorkflow(Workflow):
                 result.status, result.message = "add_to_cart_failed", "No menu items could be added to the order"
                 return
 
-            cart_state, checkout_state = await walk_to_checkout(stagehand, page, result)
-            if checkout_state and (checkout_state.is_checkout_page or checkout_state.delivery_fee or checkout_state.service_fee):
+            cart_state, checkout_state = await walk_to_checkout(
+                stagehand, page, result, interactive=not self.settings.headless
+            )
+            if checkout_state and (
+                checkout_state.is_checkout_page or checkout_state.delivery_fee or checkout_state.service_fee
+            ):
                 result.status = "ok"
             elif cart_state or checkout_state:
                 result.status, result.message = "no_checkout", "Cart reached, but final checkout screen was not reached"

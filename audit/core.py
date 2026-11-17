@@ -6,7 +6,7 @@ import re
 from collections import Counter
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
 
@@ -15,12 +15,26 @@ from pydantic import BaseModel, Field
 OUTPUT_ROOT = Path("output")
 
 ITEM_FIELDS = [
-    "name", "selected_variant", "shop_price_display", "selected_price_display",
-    "checkout_price_display", "checkout_vs_expected_diff", "price_increased", "status",
+    "name",
+    "selected_variant",
+    "shop_price_display",
+    "selected_price_display",
+    "checkout_price_display",
+    "checkout_vs_expected_diff",
+    "price_increased",
+    "status",
 ]
 EXTRA_FIELDS = [
-    "step", "step_type", "step_heading", "category", "label",
-    "price_display", "price", "price_basis", "selected_by_default", "mandatory",
+    "step",
+    "step_type",
+    "step_heading",
+    "category",
+    "label",
+    "price_display",
+    "price",
+    "price_basis",
+    "selected_by_default",
+    "mandatory",
 ]
 
 
@@ -216,22 +230,26 @@ def record_offers(result: SiteResult, step: int, step_type: str, heading: str | 
         if key in seen:
             continue
         seen.add(key)
-        result.extras.append({
-            "step": step,
-            "step_type": step_type,
-            "step_heading": heading,
-            "category": offer.category,
-            "label": offer.label,
-            "price_display": offer.price,
-            "price": parse_amount(offer.price),
-            "price_basis": offer.price_basis,
-            "selected_by_default": offer.selected,  # we never add extras, so anything selected was pre-selected
-            "mandatory": offer.mandatory,
-        })
+        result.extras.append(
+            {
+                "step": step,
+                "step_type": step_type,
+                "step_heading": heading,
+                "category": offer.category,
+                "label": offer.label,
+                "price_display": offer.price,
+                "price": parse_amount(offer.price),
+                "price_basis": offer.price_basis,
+                "selected_by_default": offer.selected,  # we never add extras, so anything selected was pre-selected
+                "mandatory": offer.mandatory,
+            }
+        )
 
 
 def summarise_extras(extras: list[dict]) -> dict:
-    preselected = [e["label"] for e in extras if e["selected_by_default"] and not e["mandatory"] and (e["price"] or 0) > 0]
+    preselected = [
+        e["label"] for e in extras if e["selected_by_default"] and not e["mandatory"] and (e["price"] or 0) > 0
+    ]
     return {
         "extras_offered": len(extras),
         "extras_offered_by_category": dict(Counter(e["category"] for e in extras)),
@@ -308,7 +326,7 @@ def update_summary(result: SiteResult) -> None:
     path = OUTPUT_ROOT / "summary.csv"
     c = result.comparison
     row = {
-        "run_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "run_at": datetime.now(UTC).isoformat(timespec="seconds"),
         "site": result.site,
         "status": result.status,
         "message": result.message,

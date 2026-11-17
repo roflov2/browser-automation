@@ -307,3 +307,37 @@ def test_a_refusal_cannot_be_swallowed_by_broad_handlers():
 
     with pytest.raises(UnsafeActionRefused):
         step()
+
+
+def test_follow_up_takes_a_vetted_second_step():
+    """Opening a custom dropdown, then picking the option: both steps are observed and vetted."""
+    opener, option = action("Title dropdown", "xpath=//div[1]"), action("Option 'Mr'", "xpath=//li[2]")
+
+    class TwoStep(FakeStagehand):
+        async def observe(self, instruction, **options):
+            self.observed.append((instruction, options))
+            return SimpleNamespace(data=[opener] if len(self.observed) == 1 else [option])
+
+    stagehand = TwoStep([])
+    done = asyncio.run(safe_act(stagehand, FakePage(element=CLEAN), "Select 'Mr' for the Title field", follow_up=True))
+    assert [a for a, _ in stagehand.acted] == [opener, option]
+    assert done.description == "did: Option 'Mr'"
+
+    same = FakeStagehand([opener])  # the model points at the same element again: nothing more to do
+    asyncio.run(safe_act(same, FakePage(element=CLEAN), "Select 'Mr' for the Title field", follow_up=True))
+    assert len(same.acted) == 1
+
+    denied = {**CLEAN, "click": "purchase, payment or membership control: Pay now"}
+    refusing = TwoStep([])
+    page = FakePage(element=CLEAN)
+    original = page.evaluate
+
+    async def evaluate(expression):
+        if "auditChain" in expression and len(refusing.observed) == 2:
+            return denied
+        return await original(expression)
+
+    page.evaluate = evaluate
+    with pytest.raises(UnsafeActionRefused):
+        asyncio.run(safe_act(refusing, page, "Select 'Mr' for the Title field", follow_up=True))
+    assert [a for a, _ in refusing.acted] == [opener]

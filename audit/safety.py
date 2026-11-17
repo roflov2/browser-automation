@@ -528,10 +528,17 @@ async def act_on(stagehand: _Actions, page: _Evaluates, action: Any, **options: 
     return Acted(bool(result.data.success), result.data.action_description or action.description)
 
 
-async def safe_act(stagehand: _Actions, page: _Evaluates, instruction: str, **options: Any) -> Acted:
+async def safe_act(
+    stagehand: _Actions, page: _Evaluates, instruction: str, *, follow_up: bool = False, **options: Any
+) -> Acted:
     """Run one LLM action: observe, vet, act. Raises UnsafeActionRefused instead of doing anything unsafe.
 
     `options` are passed to both observe() and act() (e.g. `variables`, `timeout`, `locator`).
+
+    Stagehand's own act() on a plain instruction can take a second step by itself (open a custom
+    dropdown, then pick the option). Vetting needs each step to be observed first, so that second
+    step is opt-in here: with `follow_up`, the instruction is observed once more after the first
+    action and, if the model now points at a different element, that action is vetted and run too.
     """
     if current_guard().mode_for(await page.url()) is Mode.FROZEN:
         raise UnsafeActionRefused(f"{FROZEN_REASON} (instruction: {instruction!r})")
@@ -540,4 +547,10 @@ async def safe_act(stagehand: _Actions, page: _Evaluates, instruction: str, **op
     if not found.data:
         log.debug("Nothing to act on for %r", instruction)
         return Acted(False, "no matching element found")
-    return await act_on(stagehand, page, found.data[0], **options)
+    first = found.data[0]
+    done = await act_on(stagehand, page, first, **options)
+    if follow_up and done.success and first.method == "click":
+        again = await stagehand.observe(instruction, **options)
+        if again.data and again.data[0].selector != first.selector:
+            done = await act_on(stagehand, page, again.data[0], **options)
+    return done

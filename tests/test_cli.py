@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from audit.cli import build_parser
+from audit.config import Settings
 
 REPO = Path(__file__).parent.parent
 WORKFLOWS = ["coffee", "virgin", "ubereats"]
@@ -50,7 +51,7 @@ def test_missing_api_key_is_a_clear_error(tmp_path):
 
 
 def test_options_are_stable():
-    parser = build_parser()
+    parser = build_parser(Settings(ubereats_address="9 Default St"))
     coffee = parser.parse_args(["coffee", "a.test", "b.test", "--products", "5"])
     assert (coffee.urls, coffee.products, coffee.local, coffee.login) == (["a.test", "b.test"], 5, False, False)
     virgin = parser.parse_args(["virgin", "--origin", "BNE", "--destination", "PER", "--date", "2099-01-01"])
@@ -78,9 +79,11 @@ def test_options_are_stable():
         True,
         True,
     )
-    assert parser.parse_args(["ubereats", "--products", "3"]).items == 3  # alias kept
+    defaults = parser.parse_args(["ubereats", "--products", "3"])
+    assert defaults.items == 3  # alias kept
+    assert defaults.address == "9 Default St"  # UBEREATS_ADDRESS is the default for --address
 
 
 def test_virgin_rejects_past_dates():
     with pytest.raises(SystemExit):
-        build_parser().parse_args(["virgin", "--date", "2020-01-01"])
+        build_parser(Settings()).parse_args(["virgin", "--date", "2020-01-01"])

@@ -12,6 +12,7 @@ from urllib.parse import urlparse
 
 from stagehand import Page, Stagehand
 
+from .config import Settings
 from .core import ITEM_FIELDS, SiteResult
 
 
@@ -27,12 +28,13 @@ class Workflow(ABC):
     result_class: ClassVar[type[SiteResult]] = SiteResult
     item_fields: ClassVar[list[str]] = ITEM_FIELDS  # columns of price_comparison.csv
 
-    def __init__(self, args: argparse.Namespace) -> None:
+    def __init__(self, args: argparse.Namespace, settings: Settings) -> None:
         self.args = args
+        self.settings = settings
 
     @classmethod
-    def add_arguments(cls, parser: argparse.ArgumentParser) -> None:
-        """Add this workflow's own command-line options."""
+    def add_arguments(cls, parser: argparse.ArgumentParser, settings: Settings) -> None:
+        """Add this workflow's own command-line options; `settings` supplies environment defaults."""
 
     @abstractmethod
     def targets(self) -> list[str]:
@@ -50,5 +52,5 @@ class Workflow(ABC):
         Use try/finally for work that must happen however the run ends.
         """
 
-    def summarise(self, result: SiteResult) -> None:
+    def summarise(self, result: SiteResult) -> None:  # noqa: B027 - optional hook
         """Print the headline numbers once `result.comparison` is filled in."""

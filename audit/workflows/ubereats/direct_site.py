@@ -12,25 +12,70 @@ from ...safety import safe_act
 from .models import DirectMenuMatch, DirectSiteExtraction, UberResult, extract_suburb_hint
 from .store import STREET_TYPES
 
-MAX_DIRECT_SITES = 2          # search results to try before giving up
-MAX_DIRECT_SITE_STEPS = 8     # navigation steps per site
-MAX_DIRECT_LLM_NAV = 3        # LLM-driven clicks per site once DOM navigation runs dry
-MAX_CATEGORY_HOPS = 2         # "open the category containing X" attempts per site
-MIN_PRICE_SIGNALS = 4         # price-looking strings on a page before it is worth an LLM extract
+MAX_DIRECT_SITES = 2  # search results to try before giving up
+MAX_DIRECT_SITE_STEPS = 8  # navigation steps per site
+MAX_DIRECT_LLM_NAV = 3  # LLM-driven clicks per site once DOM navigation runs dry
+MAX_CATEGORY_HOPS = 2  # "open the category containing X" attempts per site
+MIN_PRICE_SIGNALS = 4  # price-looking strings on a page before it is worth an LLM extract
 DIRECT_KIND_ORDER = ("menu", "order", "pickup", "store", "frame")
 DIRECT_KIND_BUDGET = {"menu": 2, "order": 2, "pickup": 2, "store": 2, "frame": 1}
 
 # Never treated as "the restaurant's own site": delivery platforms, search engines, social, review/listing sites.
 EXCLUDED_SEARCH_DOMAINS = (
-    "ubereats.com", "uber.com", "doordash.com", "menulog.com", "deliveroo.", "hungrypanda.", "easi.",
-    "google.", "bing.com", "duckduckgo.com", "yahoo.com", "facebook.com", "instagram.com", "tiktok.com",
-    "x.com", "twitter.com", "pinterest.", "youtube.com", "linkedin.com", "reddit.com", "wikipedia.org",
-    "apple.com", "tripadvisor.", "yelp.", "zomato.com", "restaurantguru.", "foursquare.com",
-    "opentable.", "thefork.", "quandoo.", "agfg.com.au", "broadsheet.com.au", "timeout.com",
-    "yellowpages.", "whitepages.", "truelocal.", "localsearch.", "eatability.",
+    "ubereats.com",
+    "uber.com",
+    "doordash.com",
+    "menulog.com",
+    "deliveroo.",
+    "hungrypanda.",
+    "easi.",
+    "google.",
+    "bing.com",
+    "duckduckgo.com",
+    "yahoo.com",
+    "facebook.com",
+    "instagram.com",
+    "tiktok.com",
+    "x.com",
+    "twitter.com",
+    "pinterest.",
+    "youtube.com",
+    "linkedin.com",
+    "reddit.com",
+    "wikipedia.org",
+    "apple.com",
+    "tripadvisor.",
+    "yelp.",
+    "zomato.com",
+    "restaurantguru.",
+    "foursquare.com",
+    "opentable.",
+    "thefork.",
+    "quandoo.",
+    "agfg.com.au",
+    "broadsheet.com.au",
+    "timeout.com",
+    "yellowpages.",
+    "whitepages.",
+    "truelocal.",
+    "localsearch.",
+    "eatability.",
 )
 NON_SUBURB_WORDS = STREET_TYPES | {
-    "act", "nsw", "vic", "qld", "sa", "wa", "tas", "nt", "australia", "shop", "unit", "level", "the", "and",
+    "act",
+    "nsw",
+    "vic",
+    "qld",
+    "sa",
+    "wa",
+    "tas",
+    "nt",
+    "australia",
+    "shop",
+    "unit",
+    "level",
+    "the",
+    "and",
 }
 
 
@@ -201,7 +246,9 @@ async def find_direct_restaurant_urls(page: Page, store_name: str, loc_tokens: l
     query = quote_plus(f"{name} {loc_tokens[0] if loc_tokens else ''} menu order online".replace("  ", " "))
 
     def score(c: dict) -> int:
-        host = re.sub(r"[^a-z0-9]", "", c["host"].rsplit(".", 2)[0] if c["host"].count(".") >= 2 else c["host"].split(".")[0])
+        host = re.sub(
+            r"[^a-z0-9]", "", c["host"].rsplit(".", 2)[0] if c["host"].count(".") >= 2 else c["host"].split(".")[0]
+        )
         title = norm_name(c["text"])
         return (
             (4 if joined and (joined in host or (len(host) >= 5 and host in joined)) else 0)
@@ -209,7 +256,10 @@ async def find_direct_restaurant_urls(page: Page, store_name: str, loc_tokens: l
             + (2 if name_tokens and all(t in title for t in name_tokens) else 0)
         )
 
-    for engine_url in (f"https://html.duckduckgo.com/html/?q={query}", f"https://www.google.com/search?q={query}&hl=en"):
+    for engine_url in (
+        f"https://html.duckduckgo.com/html/?q={query}",
+        f"https://www.google.com/search?q={query}&hl=en",
+    ):
         with contextlib.suppress(Exception):
             await page.goto(engine_url)
             await settle(page, 2000)
@@ -246,7 +296,9 @@ def apply_direct_matches(pending: list[dict], matches: list[DirectMenuMatch]) ->
 async def extract_direct_prices(stagehand: Stagehand, store_name: str, pending: list[dict]) -> str:
     """One LLM extract for the still-unmatched items; returns the page_state."""
     wanted = "; ".join(
-        f"'{i['name']}'" + (f" [{i['category']}]" if i.get("category") else "") + f" (Uber Eats {i['shop_price_display']})"
+        f"'{i['name']}'"
+        + (f" [{i['category']}]" if i.get("category") else "")
+        + f" (Uber Eats {i['shop_price_display']})"
         for i in pending
     )
     data = (
@@ -305,14 +357,20 @@ async def walk_direct_site(
             await js(page, "f => window.scrollTo(0, document.documentElement.scrollHeight * f)", frac)
             await page.wait_for_timeout(350)
 
-        scan = await js(page, JS_DIRECT_SCAN, {"tokens": loc_tokens},
-                        default={"url": await page.url(), "prices": 0, "needsStore": False, "actions": []})
+        scan = await js(
+            page,
+            JS_DIRECT_SCAN,
+            {"tokens": loc_tokens},
+            default={"url": await page.url(), "prices": 0, "needsStore": False, "actions": []},
+        )
         can_navigate = any(
             f"{a['kind']}|{a['text'].lower()}|{a['href'].split('#')[0]}" not in tried
             and used.get(a["kind"], 0) < DIRECT_KIND_BUDGET[a["kind"]]
             for a in scan["actions"]
         )
-        print(f"    Direct step {step}: {scan['url']} | price signals={scan['prices']} | nav options={len(scan['actions'])}")
+        print(
+            f"    Direct step {step}: {scan['url']} | price signals={scan['prices']} | nav options={len(scan['actions'])}"
+        )
 
         # Only spend an LLM extract where prices are actually on screen (or there is nowhere left to click)
         page_key = (scan["url"], scan["prices"] // 5)
@@ -327,10 +385,11 @@ async def walk_direct_site(
                 category_hops += 1
                 target = pending[0]
                 act_res = await safe_act(
-                    stagehand, page,
+                    stagehand,
+                    page,
                     f"On this menu, click the category tab or section link most likely to contain '{target['name']}'"
                     + (f" (it is under '{target['category']}' on Uber Eats)" if target.get("category") else "")
-                    + ". Do not add anything to the cart."
+                    + ". Do not add anything to the cart.",
                 )
                 print(f"    Category hop: {act_res.description}")
                 force_extract = True
@@ -343,14 +402,15 @@ async def walk_direct_site(
                 return
             llm_navs += 1
             act_res = await safe_act(
-                stagehand, page,
+                stagehand,
+                page,
                 "We need this restaurant's food menu WITH PRICES. Do the single next step towards it, in this order "
                 "of preference: (1) open the food 'Menu'; (2) otherwise click 'Order online' / 'Order now'; "
                 "(3) choose 'Pickup' / 'Takeaway' rather than delivery; "
                 f"(4) if asked to choose a store or location, choose the one in or nearest to {where} "
                 "(type the suburb into the store search if needed), and choose ASAP / the earliest time if asked. "
                 "Never open Uber Eats, DoorDash, Menulog or Deliveroo links, never sign in, never add items or pay."
-                + (" A store must be selected first." if scan["needsStore"] else "")
+                + (" A store must be selected first." if scan["needsStore"] else ""),
             )
             action = f"LLM -> {act_res.description}"
         print(f"    Direct navigation: {action}")
@@ -371,8 +431,10 @@ async def audit_direct_restaurant_site(
 
     print(f"\n  --- Auditing Direct Restaurant Website for '{result.store_name}' ---")
     loc_tokens = location_tokens(result.store_name, result.store_location, address)
-    urls = [explicit_restaurant_url] if explicit_restaurant_url else await find_direct_restaurant_urls(
-        page, result.store_name, loc_tokens
+    urls = (
+        [explicit_restaurant_url]
+        if explicit_restaurant_url
+        else await find_direct_restaurant_urls(page, result.store_name, loc_tokens)
     )
     if not urls:
         print(f"  Could not locate an independent website for '{result.store_name}'.")
@@ -385,7 +447,9 @@ async def audit_direct_restaurant_site(
             await page.goto(url)
             await settle(page, 2500)
             await maybe_dismiss_popups(
-                stagehand, page, "cookie banner, promotional/newsletter popup or app-install banner",
+                stagehand,
+                page,
+                "cookie banner, promotional/newsletter popup or app-install banner",
                 caution="Do NOT sign in or start an order. ",
             )
             await walk_direct_site(stagehand, page, result.store_name, pending, loc_tokens)

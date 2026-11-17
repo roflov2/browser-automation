@@ -5,7 +5,8 @@ import asyncio
 import contextlib
 import json
 import os
-from datetime import datetime, timezone
+from collections.abc import Callable
+from datetime import UTC, datetime
 from pathlib import Path
 from time import perf_counter
 from typing import Any
@@ -22,12 +23,16 @@ from browserbase import Browserbase
 from stagehand import (
     Page,
     Stagehand,
+    StagehandBrowser,
     StagehandClientLoggingConfig,
-    browserbase as stagehand_browserbase,
     local_browser,
+)
+from stagehand import (
+    browserbase as stagehand_browserbase,
 )
 
 from . import safety
+from .config import Settings
 from .core import OUTPUT_ROOT, AuditError, SiteResult, UnsafeActionRefused, update_summary, write_reports
 from .page import install_noise_filter, is_noise, pause_for_login, settle
 from .workflow import Workflow
@@ -86,7 +91,7 @@ class RecordingStagehand:
         if self._path is not None:
             metadata = getattr(result, "metadata", None)
             entry = {
-                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "timestamp": datetime.now(UTC).isoformat(),
                 "schema": schema.__name__,
                 "instruction": instruction,
                 "data": result.data.model_dump(mode="json"),
@@ -100,24 +105,27 @@ class RecordingStagehand:
         return getattr(self._stagehand, name)
 
 
-async def launch_browser(workflow: Workflow, local: bool, headless: bool):
+async def launch_browser(
+    workflow: Workflow, settings: Settings, local: bool, headless: bool
+) -> tuple[StagehandBrowser, Callable[[], dict[str, Any]]]:
     """Browserbase if its credentials are set (and not `local`), otherwise local Chrome.
 
     Returns (browser, describe), where describe() gives the Browserbase session details for session.json.
     """
-    bb_api_key, bb_project_id = os.getenv("BROWSERBASE_API_KEY"), os.getenv("BROWSERBASE_PROJECT_ID")
-    if bb_api_key and bb_project_id and not local:
-        client = Browserbase(api_key=bb_api_key)
-        session_id = client.sessions.create(project_id=bb_project_id).id
-        browser = await stagehand_browserbase.connect(api_key=bb_api_key, session_id=session_id)
+    if settings.use_browserbase and not local:
+        client = Browserbase(api_key=settings.browserbase_api_key)
+        session_id = client.sessions.create(project_id=settings.browserbase_project_id or "").id
+        browser = await stagehand_browserbase.connect(api_key=settings.browserbase_api_key, session_id=session_id)
 
-        def describe() -> dict:
+        def describe() -> dict[str, Any]:
             info = client.sessions.retrieve(session_id)
             return {"browserbase_session": {"id": info.id, "status": info.status, "region": info.region}}
 
         return browser, describe
 
-    options: dict = {"headless": headless}
+    options: dict[str, Any] = {"headless": headless}
+    if settings.chrome_path:
+        options["executable_path"] = str(settings.chrome_path)
     if workflow.persistent_profile:
         CHROME_PROFILE_DIR.mkdir(parents=True, exist_ok=True)
         options["user_data_dir"] = str(CHROME_PROFILE_DIR.resolve())
@@ -164,11 +172,9 @@ async def audit_site(workflow: Workflow, stagehand: Stagehand, page: Page, brows
     return result
 
 
-async def run(workflow: Workflow, args: argparse.Namespace) -> None:
-    api_key = os.getenv("GOOGLE_GENERATIVE_AI_API_KEY")
-    if not api_key:
-        raise SystemExit("GOOGLE_GENERATIVE_AI_API_KEY is not set (copy .env.example to .env and fill it in)")
-    model = "google/" + os.getenv("GEMINI_MODEL", "gemini-3.8-flash").removeprefix("google/")
+async def run(workflow: Workflow, args: argparse.Namespace, settings: Settings) -> None:
+    """Audit every target of `workflow` in one browser session."""
+    api_key, model = settings.require_api_key(), settings.model
     targets = [url if url.startswith("http") else f"https://{url}" for url in workflow.targets()]
 
     install_noise_filter()
@@ -178,13 +184,11 @@ async def run(workflow: Workflow, args: argparse.Namespace) -> None:
         if is_noise(getattr(log, "message", "") or ""):
             return
         entry = log.model_dump(mode="json")
-        entry["timestamp"] = datetime.now(timezone.utc).isoformat()
+        entry["timestamp"] = datetime.now(UTC).isoformat()
         history.append(entry)
 
     browser, describe_browser = await launch_browser(
-        workflow,
-        local=args.local or args.login,
-        headless=not args.login and os.getenv("HEADLESS") == "true",
+        workflow, settings, local=args.local or args.login, headless=settings.headless and not args.login
     )
     monitor = ResourceMonitor()
     monitor_task = monitor.start()
@@ -205,7 +209,7 @@ async def run(workflow: Workflow, args: argparse.Namespace) -> None:
                 print(f"\n=== Preloading a login for {targets[0]} into {CHROME_PROFILE_DIR.resolve()} ===")
                 await page.goto(targets[0])
                 await settle(page, 2000)
-                if await pause_for_login(page, "Sign in to the site in the open browser window."):
+                if await pause_for_login(page, "Sign in to the site in the open browser window.", interactive=True):
                     print(f"  Login session saved to {CHROME_PROFILE_DIR.resolve()}")
                 else:
                     print("  --login needs an interactive terminal and a visible browser (unset HEADLESS).")

@@ -40,7 +40,9 @@ class StoreCard(BaseModel):
     )
     service_fee_display: str | None = Field(description="Service fee if stated on the card; otherwise null")
     eta: str | None = Field(description="Estimated delivery time, e.g. '20-30 min'")
-    available: bool = Field(description="True if the restaurant is currently open for delivery (not closed/unavailable)")
+    available: bool = Field(
+        description="True if the restaurant is currently open for delivery (not closed/unavailable)"
+    )
     is_restaurant: bool = Field(
         description="True for prepared-food restaurants/cafes/takeaway; False for supermarkets, grocery, convenience or liquor stores (e.g. Coles, Woolworths, 7-Eleven, BWS)"
     )
@@ -85,7 +87,9 @@ class Offer(BaseModel):
     label: str = Field(
         description="Name of the extra, fee, upsell or delivery tier, e.g. 'Priority delivery', 'Service Fee', 'Add Bacon'"
     )
-    price: str | None = Field(description="Price or rate as displayed, e.g. '$2.99', '+$3.00', '10%'; null if not shown")
+    price: str | None = Field(
+        description="Price or rate as displayed, e.g. '$2.99', '+$3.00', '10%'; null if not shown"
+    )
     price_basis: str | None = Field(description="e.g. 'per item', 'per order', 'monthly subscription', if stated")
     selected: bool = Field(description="True if currently ticked/selected/included in the order total")
     mandatory: bool = Field(description="True if required to complete the item or order and cannot be removed/declined")
@@ -138,7 +142,9 @@ class CartAndCheckoutState(BaseModel):
     priority_delivery_fee: str | None = Field(
         description="Extra fee advertised for 'Priority' / faster delivery option if shown, e.g. '+$2.99'; otherwise null"
     )
-    service_fee: str | None = Field(description="Service fee shown in the fare breakdown, e.g. '$4.00'; null if not yet shown")
+    service_fee: str | None = Field(
+        description="Service fee shown in the fare breakdown, e.g. '$4.00'; null if not yet shown"
+    )
     small_order_fee: str | None = Field(description="Small order / minimum basket fee if shown; otherwise null")
     other_fees: list[Fee] = Field(
         description="Any other fees or charges shown (e.g. bag fee, delivery adjustment, regulatory fee, tip) excluding Subtotal, Delivery Fee, Service Fee and Small Order Fee"
