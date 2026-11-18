@@ -1,0 +1,43 @@
+step,step_type,step_heading,category,label,price_display,price,price_basis,selected_by_default,mandatory
+2,item_modal,Super Supreme,item_modifier_paid,Garlic Olive Oil Drizzle,+$0.65,0.65,per item,False,False
+2,item_modal,Super Supreme,item_modifier_paid,Chopped Chilli Olive Oil Mini Dip,+$1.30,1.3,per item,False,False
+2,item_modal,Super Supreme,item_modifier_paid,Hot Honey Mini Dip,+$1.30,1.3,per item,False,False
+2,item_modal,Super Supreme,item_modifier_paid,Gluten Free Base,+$6.43,6.43,per item,False,False
+2,item_modal,Super Supreme,item_modifier_paid,Anchovies,+$3.25,3.25,per item,False,False
+2,item_modal,Super Supreme,item_modifier_paid,Baby Spinach,+$1.30,1.3,per item,False,False
+2,item_modal,Super Supreme,item_modifier_paid,Beef (Tender and Pulled),+$3.90,3.9,per item,False,False
+2,item_modal,Super Supreme,item_modifier_paid,Capsicum (Green),+$1.30,1.3,per item,False,False
+2,item_modal,Super Supreme,item_modifier_paid,Capsicum (Roasted),+$1.30,1.3,per item,False,False
+2,item_modal,Super Supreme,item_modifier_paid,Chicken Breast (Oven Roasted),+$3.90,3.9,per item,False,False
+1,cart_drawer,cart_drawer,uber_one_membership,Save an extra $4.99 on this order with a free trial of Uber One,,,free trial,False,False
+1,cart_drawer,cart_drawer,checkout_upsell,Halal Pepperoni Burst,$20.00,20.0,per item,False,False
+1,cart_drawer,cart_drawer,checkout_upsell,OOSH BBQ,$23.20,23.2,per item,False,False
+1,cart_drawer,cart_drawer,checkout_upsell,Premium Pistachio Gelato - 1L,$12.00,12.0,per item,False,False
+1,cart_drawer,cart_drawer,checkout_upsell,Lebo Fries,$10.80,10.8,per item,False,False
+1,cart_drawer,cart_drawer,checkout_upsell,Premium Chocolate Gelato - 1L,$12.00,12.0,per item,False,False
+1,cart_drawer,cart_drawer,checkout_upsell,Spicy Prawns & Chorizo,$24.00,24.0,per item,False,False
+1,cart_drawer,cart_drawer,checkout_upsell,Premium Vanilla Gelato - 1L,$12.00,12.0,per item,False,False
+1,cart_drawer,cart_drawer,checkout_upsell,OOSH Garlic,$23.20,23.2,per item,False,False
+2,upsell_modal,upsell_modal,checkout_upsell,Pepsi Max 600ml,$6.00,6.0,per item,False,False
+2,upsell_modal,upsell_modal,checkout_upsell,Lebo Fries,$10.80,10.8,per item,False,False
+2,upsell_modal,upsell_modal,checkout_upsell,Rustic Garlic Bread - Garlic Butter,$8.50,8.5,per item,False,False
+2,upsell_modal,upsell_modal,checkout_upsell,OOSH Fries Large,$9.50,9.5,per item,False,False
+2,upsell_modal,upsell_modal,checkout_upsell,OOSH Fries Regular,$7.00,7.0,per item,False,False
+2,upsell_modal,upsell_modal,checkout_upsell,Pepsi 600ml,$6.00,6.0,per item,False,False
+2,upsell_modal,upsell_modal,checkout_upsell,Mini Dip (Garlic Mini Dip),$1.30,1.3,per item,False,False
+2,upsell_modal,upsell_modal,checkout_upsell,Passiona 600ml,$6.00,6.0,per item,False,False
+2,upsell_modal,upsell_modal,checkout_upsell,Mini Dip (Hot Honey Mini Dip),$1.30,1.3,per item,False,False
+2,upsell_modal,upsell_modal,checkout_upsell,Local Salad,$9.50,9.5,per item,False,False
+2,upsell_modal,upsell_modal,checkout_upsell,Solo 600ml,$6.00,6.0,per item,False,False
+2,upsell_modal,upsell_modal,checkout_upsell,Sunkist Zero Sugar 600ml,$6.00,6.0,per item,False,False
+2,upsell_modal,upsell_modal,checkout_upsell,Schweppes Raspberry 600ml,$6.00,6.0,per item,False,False
+2,upsell_modal,upsell_modal,checkout_upsell,Southern Fried Chicken Tenders (Three Pack),$14.00,14.0,per item,False,False
+2,upsell_modal,upsell_modal,checkout_upsell,Deluxe Garlic Bread,$11.00,11.0,per item,False,False
+2,upsell_modal,upsell_modal,checkout_upsell,Lemonade 600ml,$6.00,6.0,per item,False,False
+2,upsell_modal,upsell_modal,checkout_upsell,Creaming Mud Cake,$13.50,13.5,per item,False,False
+2,upsell_modal,upsell_modal,checkout_upsell,Crispy Chicken,$17.50,17.5,per item,False,False
+2,upsell_modal,upsell_modal,checkout_upsell,Mini Dip (Chopped Chilli Oil Mini Dip),$1.30,1.3,per item,False,False
+2,upsell_modal,upsell_modal,checkout_upsell,Lipton Ice Tea Peach,$6.00,6.0,per item,False,False
+3,checkout,checkout,priority_delivery,Priority,+$5.99,5.99,per order,False,False
+3,checkout,checkout,delivery_fee,Standard,$4.99,4.99,per order,True,False
+3,checkout,Checkout Breakdown,service_fee,Service Fee (12.0% of subtotal),$8.48,8.48,per order,True,True

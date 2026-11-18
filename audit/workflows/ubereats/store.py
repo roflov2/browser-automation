@@ -1,6 +1,7 @@
 """The Uber Eats side of the audit: delivery address, store, menu items, cart and checkout."""
 
 import base64
+import contextlib
 import functools
 import json
 import logging
@@ -10,8 +11,20 @@ from urllib.parse import parse_qs, quote_plus, unquote, urljoin, urlparse
 from stagehand import Page, Stagehand
 
 from ... import page as page_helpers
-from ...core import Blocked, ElementNotFound, Item, new_item, parse_price, record_offers, select_price, slug
-from ...page import is_sso_redirect, pause_for_login, settle, shot, wait_out_sso
+from ...core import (
+    BROWSER_ERRORS,
+    Blocked,
+    ElementNotFound,
+    ExtractFailed,
+    Item,
+    StepTimeout,
+    new_item,
+    parse_price,
+    record_offers,
+    select_price,
+    slug,
+)
+from ...page import is_sso_redirect, pause_for_login, settle, shot, wait_for_render, wait_out_sso
 from ...safety import Mode, current_guard, safe_act, try_act
 from .models import (
     AddressAndFeedState,
@@ -181,10 +194,22 @@ JS_SET_ADDRESS = r"""({ target, tokens }) => {
         }
     }
 
-    // 2. A visible address input: clear stale text and fill it
+    // 2. A 'Save and continue' / 'Done' / 'Save' confirmation button in the dropoff-options dialog
+    const openDialogs = dialogs().filter(d => vis(d, 200, 150));
+    for (const d of openDialogs) {
+        const confirmBtn = Array.from(d.querySelectorAll('button')).find(
+            b => vis(b, 60, 25) && /^(save( and continue)?|done|update|confirm( address)?)$/i.test(clean(txt(b))) && guardAllows(b));
+        if (confirmBtn) {
+            safeClick(confirmBtn);
+            return 'Clicked address confirmation button: ' + clean(txt(confirmBtn));
+        }
+    }
+
+    // 3. A visible address input: clear stale text and fill it
     for (const inp of document.querySelectorAll(
         'input[placeholder*="address" i], input[aria-label*="address" i], input[placeholder*="Deliver" i], [role="dialog"] input[type="text"], [role="dialog"] input:not([type])')) {
         if (!vis(inp, 100, 20)) continue;
+        if (hasTokens(inp.value || '')) return 'Waiting for autocomplete suggestions...';
         if (inp.value && !hasTokens(inp.value)) {
             const box = inp.closest('[role="dialog"], [aria-modal="true"]') || inp.parentElement?.parentElement;
             const clear = box?.querySelector('button[aria-label*="clear" i], button[aria-label*="reset" i]');
@@ -194,7 +219,13 @@ JS_SET_ADDRESS = r"""({ target, tokens }) => {
         return 'Typed target address into input: ' + target;
     }
 
-    // 3. The header delivery-address button, to open the address modal
+    // If the location-manager dialog is already open (e.g. 'Choose your building' or dropoff options),
+    // return null so Stagehand can handle the dialog instead of re-clicking the header button behind it
+    if (openDialogs.length > 0 || location.href.includes('mod=locationManager')) {
+        return null;
+    }
+
+    // 4. The header delivery-address button, to open the address modal
     for (const btn of document.querySelectorAll(
         'header button, header a, [data-testid*="location" i], [data-testid*="address" i], button[aria-label*="deliver" i]')) {
         const label = (txt(btn) + ' ' + (btn.getAttribute('aria-label') || '')).trim();
@@ -293,11 +324,17 @@ JS_CLICK_CHECKOUT = r"""() => {
 }"""
 
 JS_DECLINE_UPSELL = r"""() => {
-    // Only buttons inside an open dialog, and only ones that decline / move on (never add, never place the order)
+    // Only buttons inside an open dialog, and only ones that decline / move on (never add, never place the order,
+    // and never submit a <form> on a checkout page)
     const DECLINE = /^(skip|no,? thanks?|not now|maybe later|continue( to checkout)?|go to checkout|next|done)$/i;
     for (const d of dialogs().filter(d => vis(d, 200, 150)).reverse()) {
+        const closeBtn = d.querySelector('button[aria-label*="close" i]');
+        if (closeBtn && vis(closeBtn, 20, 20) && !closeBtn.form && guardAllows(closeBtn)) {
+            safeClick(closeBtn);
+            return 'Close (X)';
+        }
         const btn = Array.from(d.querySelectorAll('button, a')).find(
-            b => vis(b, 30, 20) && DECLINE.test(clean(txt(b))) && guardAllows(b));
+            b => vis(b, 30, 20) && !b.form && DECLINE.test(clean(txt(b))) && guardAllows(b));
         if (btn) { safeClick(btn); return clean(txt(btn)); }
     }
     return null;
@@ -313,7 +350,14 @@ JS_FIND_STORE = r"""({ preferred, excluded }) => {
         const low = name.toLowerCase();
         if (!name || !vis(a, 40, 20)) continue;
         if (excluded.some(bad => low.includes(bad) || a.href.toLowerCase().includes('/store/' + bad))) continue;
-        found.push({ name, url: a.href, match: !!pref && norm(name).includes(pref) });
+        const cardText = (a.closest('li, [data-testid*="store-card" i], div')?.innerText || a.innerText || '');
+        const feeMatch = cardText.match(/(A?\$[\d.]+\s*Delivery\s*Fee|Free\s*Delivery)/i);
+        found.push({
+            name,
+            url: a.href,
+            deliveryFee: feeMatch ? feeMatch[1] : null,
+            match: !!pref && norm(name).includes(pref)
+        });
     }
     return found.find(c => c.match) || found[0] || null;
 }"""
@@ -386,7 +430,7 @@ ADDRESS_QUESTION = (
     "whether autocomplete suggestions are visible (`address_suggestions_open`), and any `blocked_reason`."
 )
 FEED_QUESTION = (
-    "Extract the prepared-food restaurants visible on this page with their advertised delivery fee, "
+    "Extract up to 8 prepared-food restaurants visible near the top of this page with their advertised delivery fee, "
     "service fee, ETA, availability, and `/store/...` link. "
     "Exclude supermarkets, grocery stores, convenience stores, and liquor stores (e.g. Coles, Woolworths, 7-Eleven, BWS)."
 )
@@ -397,7 +441,11 @@ def address_instruction(state: AddressAndFeedState, address: str) -> str:
     if state.address_suggestions_open:
         return f"Click the first autocomplete address suggestion matching '{address}' (or click 'Done' / 'Save')."
     if state.address_modal_or_input_open:
-        return f"Clear any existing text in the delivery address input box and type '{address}'."
+        return (
+            f"In the open address dialog: if an address input box is visible, clear it and type '{address}'; "
+            "if a 'Choose your building' or dropoff-options step is shown, select the first building/option or "
+            "click 'Save and continue' / 'Save' / 'Done'."
+        )
     return (
         f"Click the current delivery address button ('{state.displayed_address or 'Enter delivery address'}') "
         f"in the top header so we can change the delivery address to '{address}'."
@@ -453,12 +501,17 @@ async def store_url(page: Page, chosen: StoreCard | None, result: UberResult) ->
     if not dom_store:
         return None
     result.store_name = result.store_name or dom_store["name"]
+    if dom_store.get("deliveryFee") and not result.advertised_delivery_fee_display:
+        result.advertised_delivery_fee_display = dom_store["deliveryFee"]
+        result.advertised_delivery_fee = parse_price(dom_store["deliveryFee"])
     return dom_store["url"]
 
 
 async def open_store_from_feed(stagehand: Stagehand, page: Page, result: UberResult) -> None:
     """Pick a restaurant from the feed or search results and open its page."""
-    chosen = choose_store((await stagehand.extract(FEED_QUESTION, StoreFeed)).data.stores)
+    chosen: StoreCard | None = None
+    with contextlib.suppress(ExtractFailed, StepTimeout):
+        chosen = choose_store((await stagehand.extract(FEED_QUESTION, StoreFeed, timeout=25_000)).data.stores)
     if chosen:
         note_advertised_fees(result, chosen)
 
@@ -707,12 +760,29 @@ async def read_checkout_step(
 async def decline_upsell(stagehand: Stagehand, page: Page, declines: int) -> None:
     """Dismiss an upsell popup without adding anything: DOM first, then the LLM, then just close the dialog.
 
-    On a checkout URL the purchase guard only lets dismiss controls through, so the LLM step is skipped there.
+    On a checkout URL, avoid in-page JS clicks (Uber Eats' checkout page submits background forms on load
+    that trip the checkout submit guard); instead dismiss via Escape / stripping `mod=magicUpsell`.
     """
+    curr_url = await page.url()
+    if "/checkout" in curr_url:
+        with contextlib.suppress(*BROWSER_ERRORS):
+            await page.key_press("Escape")
+        await page.wait_for_timeout(1500)
+        curr_url = await page.url()
+        if "mod=magicUpsell" in curr_url:
+            clean_url = re.sub(r"([?&])mod=magicUpsell(&|$)", r"\1", curr_url).rstrip("?&")
+            log.info("    Declining upsell: navigating to checkout without magicUpsell...")
+            await page.goto(clean_url)
+            await wait_for_render(page, 10)
+            await page.wait_for_timeout(2000)
+        else:
+            log.info("    Declining upsell: dismissed checkout modal via Escape")
+        return
+
     clicked = await js(page, JS_DECLINE_UPSELL)
     if clicked:
         log.info(f"    Declining upsell: clicked '{clicked}'")
-    elif declines <= 2 and current_guard().mode_for(await page.url()) is Mode.NORMAL:
+    elif declines <= 2 and current_guard().mode_for(curr_url) is Mode.NORMAL:
         act_res = await safe_act(
             stagehand,
             page,
@@ -727,7 +797,8 @@ async def decline_upsell(stagehand: Stagehand, page: Page, declines: int) -> Non
     await settle(page, 2000)
     if "/checkout" not in await page.url() and declines >= 2:
         await page.goto(CHECKOUT_URL)  # popup closed back to the menu: go straight to checkout
-        await settle(page, 3000)
+        await wait_for_render(page, 10)
+        await page.wait_for_timeout(2000)
 
 
 async def open_cart_or_checkout(stagehand: Stagehand, page: Page, cart_visible: bool) -> None:
@@ -754,7 +825,8 @@ async def open_cart_or_checkout(stagehand: Stagehand, page: Page, cart_visible: 
             "Click the 'Go to checkout' / 'Checkout' button in the cart drawer. Never click 'Place order' or 'Pay'.",
         )
         log.info(f"    Proceeding to checkout: {act_res.description}")
-    await settle(page, 3000)
+    await wait_for_render(page, 15)
+    await page.wait_for_timeout(2500)
 
 
 async def walk_to_checkout(
@@ -790,7 +862,7 @@ async def walk_to_checkout(
 
         state, step_type = await read_checkout_step(stagehand, page, result, step_idx, curr_url)
 
-        if await is_item_modal_open(page):
+        if "/checkout" not in curr_url and await is_item_modal_open(page):
             await close_item_modal(stagehand, page)
             await open_cart_drawer(page)
             await settle(page, 1800)

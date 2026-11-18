@@ -134,7 +134,7 @@ class UberEatsWorkflow(Workflow):
             menu = (
                 await stagehand.extract(
                     "Extract the restaurant name, street/suburb location (if shown), advertised delivery fee and service fee "
-                    "shown in the store header/banner, and extract the menu items listed on this page with their category, "
+                    "shown in the store header/banner, and extract up to 25 menu items listed on this page with their category, "
                     "price, availability, and whether each is food/drink.",
                     StoreMenu,
                 )

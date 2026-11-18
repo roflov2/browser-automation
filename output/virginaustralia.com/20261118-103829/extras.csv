@@ -1,0 +1,14 @@
+step,step_type,step_heading,category,label,price_display,price,price_basis,selected_by_default,mandatory
+1,review,Review your flight selection,flexibility,Cancel For Any Reason - 100% of airfare refundable,AUD 89,89.0,total,False,False
+1,review,Review your flight selection,flexibility,Cancel For Any Reason - 80% of airfare refundable,AUD 58,58.0,total,False,False
+1,review,Review your flight selection,fare_upgrade,Upgrade to Choice (seat selection and checked baggage),,,,False,False
+3,passenger_details,Who will be travelling?,seat_selection,Economy X,,,,False,False
+4,seats,See if your favourite seats are available,seat_selection,Economy X seat (Rows 3-4),$84,84.0,per passenger,False,False
+4,seats,See if your favourite seats are available,seat_selection,Economy X seat - Exit row (Rows 14-15),$35,35.0,per passenger,False,False
+4,seats,See if your favourite seats are available,seat_selection,Preferred seat (Rows 5-8),$15,15.0,per passenger,False,False
+4,seats,See if your favourite seats are available,seat_selection,Preferred seat (Rows 9-13),$11,11.0,per passenger,False,False
+4,seats,See if your favourite seats are available,seat_selection,Standard seat (Rows 16-31),$12.00,12.0,per passenger,False,False
+6,extras,Would you like to customise your trip?,checked_baggage,Add checked baggage,,,,False,False
+6,extras,Would you like to customise your trip?,travel_insurance,Protect your trip with Cover-More,$17.50,17.5,Per guest from,False,False
+6,extras,Would you like to customise your trip?,carbon_offset,Help protect the places you love to explore,$11.11,11.11,Per guest from,False,False
+7,payment,Let’s do one final check!,lounge,Amex Velocity Platinum Card - Virgin Australia Lounge access,$440 Annual Card Fee,440.0,per year,False,False

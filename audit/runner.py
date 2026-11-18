@@ -185,14 +185,28 @@ class RecordingStagehand:
         options.setdefault("timeout", safety.LLM_TIMEOUT_MS)
         if self._page is not None and "locator" not in options:
             options.setdefault("ignore_locators", [self._page.locator(selector) for selector in EXTRACT_IGNORE])
-        try:
-            result = await self._stagehand.extract(instruction, schema, **options)
-        except ValidationError as error:
-            raise ExtractFailed(f"{schema.__name__} did not fit the schema: {error.error_count()} error(s)") from error
-        except Exception as error:
-            if is_timeout(error):
-                raise StepTimeout(f"extract({schema.__name__}) timed out: {error}") from error
-            raise ExtractFailed(f"extract({schema.__name__}) failed: {error}") from error
+        for attempt in range(2):
+            try:
+                result = await self._stagehand.extract(instruction, schema, **options)
+                break
+            except ValidationError as error:
+                raise ExtractFailed(
+                    f"{schema.__name__} did not fit the schema: {error.error_count()} error(s)"
+                ) from error
+            except Exception as error:
+                msg = str(error)
+                if attempt == 0 and "locator must belong to the target page" in msg:
+                    options.pop("ignore_locators", None)
+                    continue
+                if attempt == 0 and "Session with given id not found" in msg:
+                    await asyncio.sleep(1.0)
+                    continue
+                if is_timeout(error):
+                    if attempt == 0:
+                        log.warning("  extract(%s) timed out; retrying once...", schema.__name__)
+                        continue
+                    raise StepTimeout(f"extract({schema.__name__}) timed out: {error}") from error
+                raise ExtractFailed(f"extract({schema.__name__}) failed: {error}") from error
         self._log.extraction(instruction, schema, result)
         return result
 
