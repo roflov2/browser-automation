@@ -82,6 +82,9 @@ def test_options_are_stable():
     defaults = parser.parse_args(["ubereats", "--products", "3"])
     assert defaults.items == 3  # alias kept
     assert defaults.address == "9 Default St"  # UBEREATS_ADDRESS is the default for --address
+    prelogin = parser.parse_args(["ticketek", "--prelogin"])
+    assert prelogin.login is True
+    assert prelogin.workflow_class(prelogin, Settings()).login_url() == "https://premier.ticketek.com.au/membership/login.aspx"
 
 
 def test_virgin_rejects_past_dates():

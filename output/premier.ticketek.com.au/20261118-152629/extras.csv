@@ -1,0 +1,13 @@
+step,step_type,step_heading,category,label,price_display,price,price_basis,selected_by_default,mandatory
+1,review,Your Tickets,delivery_fee,Mobile Ticket,,,,True,True
+1,review,Your Tickets,handling_fee,Handling Fee,$8.90,8.9,per transaction,True,True
+2,extras,Add to order,merchandise,Official Evanescence Event Collectable!,$22.00,22.0,,False,False
+2,extras,Add to order,donation,$2 Donation (Support Act – AusMusic T-Shirt Day),$2.00,2.0,,False,False
+2,extras,Add to order,donation,$5 Donation (Support Act – AusMusic T-Shirt Day),$5.00,5.0,,False,False
+2,extras,Add to order,donation,$10 Donation (Support Act – AusMusic T-Shirt Day),$10.00,10.0,,False,False
+2,extras,Add to order,handling_fee,Handling Fee,$8.90,8.9,per transaction,True,True
+4,payment,Payment,handling_fee,Handling Fee,$8.90,8.9,per transaction,True,True
+4,payment,Payment,refund_protection,Make my ticket refundable,$30.02,30.02,,False,False
+4,payment,Payment,delivery_fee,Mobile Ticket,Free,0.0,,True,False
+4,payment,Payment,delivery_fee,Print-At-Home (PDF),Free,0.0,,False,False
+4,payment,Payment,delivery_fee,Venue / Pre-Paid Collection Outlet,$3.35,3.35,,False,False

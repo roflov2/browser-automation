@@ -1,0 +1,634 @@
+{
+  "site": "https://premier.ticketek.com.au/",
+  "workflow": "ticketek",
+  "status": "ok",
+  "message": "",
+  "failure_reason": null,
+  "execution_time_ms": 460176,
+  "tokens_used": 243366.0,
+  "metrics": {
+    "act_prompt_tokens": 0.0,
+    "act_completion_tokens": 0.0,
+    "act_reasoning_tokens": 0.0,
+    "act_cached_input_tokens": 0.0,
+    "act_inference_time_ms": 0.0,
+    "extract_prompt_tokens": 125648.0,
+    "extract_completion_tokens": 26552.0,
+    "extract_reasoning_tokens": 0.0,
+    "extract_cached_input_tokens": 0.0,
+    "extract_inference_time_ms": 268198.0,
+    "observe_prompt_tokens": 83101.0,
+    "observe_completion_tokens": 8065.0,
+    "observe_reasoning_tokens": 0.0,
+    "observe_cached_input_tokens": 0.0,
+    "observe_inference_time_ms": 83233.0,
+    "total_prompt_tokens": 208749.0,
+    "total_completion_tokens": 34617.0,
+    "total_reasoning_tokens": 0.0,
+    "total_cached_input_tokens": 0.0,
+    "total_inference_time_ms": 351431.0
+  },
+  "metrics_cumulative": {
+    "act_prompt_tokens": 0.0,
+    "act_completion_tokens": 0.0,
+    "act_reasoning_tokens": 0.0,
+    "act_cached_input_tokens": 0.0,
+    "act_inference_time_ms": 0.0,
+    "extract_prompt_tokens": 125648.0,
+    "extract_completion_tokens": 26552.0,
+    "extract_reasoning_tokens": 0.0,
+    "extract_cached_input_tokens": 0.0,
+    "extract_inference_time_ms": 268198.0,
+    "observe_prompt_tokens": 83101.0,
+    "observe_completion_tokens": 8065.0,
+    "observe_reasoning_tokens": 0.0,
+    "observe_cached_input_tokens": 0.0,
+    "observe_inference_time_ms": 83233.0,
+    "total_prompt_tokens": 208749.0,
+    "total_completion_tokens": 34617.0,
+    "total_reasoning_tokens": 0.0,
+    "total_cached_input_tokens": 0.0,
+    "total_inference_time_ms": 351431.0
+  },
+  "resource_usage": {
+    "avg_memory_mb": 67.65,
+    "peak_memory_mb": 68.93,
+    "avg_cpu_percent": 0.07,
+    "data_points": 459
+  },
+  "history": [
+    {
+      "level": "info",
+      "message": "Starting observation",
+      "data": {
+        "category": "observation",
+        "instruction": "Find the close, accept, dismiss, 'No thanks', 'Maybe later' or 'Skip' button of any visible cookie banner, newsletter/sign-up popup, app-install banner or location selector. Do NOT click 'Sign in', 'Find tickets', 'Buy tickets' or anything that adds tickets. Return nothing if there is none."
+      },
+      "timestamp": "2026-11-18T04:26:35.443688+00:00"
+    },
+    {
+      "level": "info",
+      "message": "Observation completed",
+      "data": {
+        "category": "observation",
+        "promptTokens": 4095,
+        "completionTokens": 135,
+        "reasoningTokens": 0,
+        "cachedInputTokens": 0,
+        "inferenceTimeMs": 6178,
+        "resultCount": 0
+      },
+      "timestamp": "2026-11-18T04:26:41.738889+00:00"
+    },
+    {
+      "level": "info",
+      "message": "Starting extraction using an accessibility snapshot",
+      "data": {
+        "category": "extraction",
+        "instruction": "We are looking for an on-sale event matching 'Evanescence' at 'RAC Arena'. What kind of page is this, and which matching on-sale events are listed? Report anything blocking progress."
+      },
+      "timestamp": "2026-11-18T04:26:41.833690+00:00"
+    },
+    {
+      "level": "info",
+      "message": "Extraction completed successfully",
+      "data": {
+        "category": "extraction",
+        "promptTokens": 3126,
+        "completionTokens": 445,
+        "inferenceTimeMs": 7479
+      },
+      "timestamp": "2026-11-18T04:26:49.313027+00:00"
+    },
+    {
+      "level": "info",
+      "message": "Starting observation",
+      "data": {
+        "category": "observation",
+        "instruction": "Search the site for 'Evanescence': type it into the search box (open the search first if only a search icon is visible) and press Enter."
+      },
+      "timestamp": "2026-11-18T04:26:49.325420+00:00"
+    },
+    {
+      "level": "info",
+      "message": "Observation completed",
+      "data": {
+        "category": "observation",
+        "promptTokens": 4150,
+        "completionTokens": 2300,
+        "reasoningTokens": 0,
+        "cachedInputTokens": 0,
+        "inferenceTimeMs": 19183,
+        "resultCount": 2
+      },
+      "timestamp": "2026-11-18T04:27:08.565072+00:00"
+    },
+    {
+      "level": "info",
+      "message": "Starting extraction using an accessibility snapshot",
+      "data": {
+        "category": "extraction",
+        "instruction": "We are looking for an on-sale event matching 'Evanescence' at 'RAC Arena'. What kind of page is this, and which matching on-sale events are listed? Report anything blocking progress."
+      },
+      "timestamp": "2026-11-18T04:27:09.315214+00:00"
+    },
+    {
+      "level": "info",
+      "message": "Extraction completed successfully",
+      "data": {
+        "category": "extraction",
+        "promptTokens": 3242,
+        "completionTokens": 864,
+        "inferenceTimeMs": 10105
+      },
+      "timestamp": "2026-11-18T04:27:19.421420+00:00"
+    },
+    {
+      "level": "info",
+      "message": "Starting observation",
+      "data": {
+        "category": "observation",
+        "instruction": "Search the site for 'Evanescence': type it into the search box (open the search first if only a search icon is visible) and press Enter."
+      },
+      "timestamp": "2026-11-18T04:27:19.431919+00:00"
+    },
+    {
+      "level": "info",
+      "message": "Observation completed",
+      "data": {
+        "category": "observation",
+        "promptTokens": 5739,
+        "completionTokens": 832,
+        "reasoningTokens": 0,
+        "cachedInputTokens": 0,
+        "inferenceTimeMs": 8937,
+        "resultCount": 1
+      },
+      "timestamp": "2026-11-18T04:27:28.430156+00:00"
+    },
+    {
+      "level": "info",
+      "message": "Starting extraction using an accessibility snapshot",
+      "data": {
+        "category": "extraction",
+        "instruction": "We are looking for an on-sale event matching 'Evanescence' at 'RAC Arena'. What kind of page is this, and which matching on-sale events are listed? Report anything blocking progress."
+      },
+      "timestamp": "2026-11-18T04:27:32.021546+00:00"
+    },
+    {
+      "level": "info",
+      "message": "Extraction completed successfully",
+      "data": {
+        "category": "extraction",
+        "promptTokens": 3897,
+        "completionTokens": 1553,
+        "inferenceTimeMs": 16482
+      },
+      "timestamp": "2026-11-18T04:27:48.503779+00:00"
+    },
+    {
+      "level": "info",
+      "message": "Starting observation",
+      "data": {
+        "category": "observation",
+        "instruction": "Open the event page of 'Evanescence' at 'RAC Arena' by clicking its 'Find tickets' / 'Buy tickets' / 'More info' button or title for RAC Arena."
+      },
+      "timestamp": "2026-11-18T04:27:48.510079+00:00"
+    },
+    {
+      "level": "info",
+      "message": "Observation completed",
+      "data": {
+        "category": "observation",
+        "promptTokens": 5058,
+        "completionTokens": 559,
+        "reasoningTokens": 0,
+        "cachedInputTokens": 0,
+        "inferenceTimeMs": 5884,
+        "resultCount": 1
+      },
+      "timestamp": "2026-11-18T04:27:54.446859+00:00"
+    },
+    {
+      "level": "info",
+      "message": "Starting extraction using an accessibility snapshot",
+      "data": {
+        "category": "extraction",
+        "instruction": "We are looking for an on-sale event matching 'Evanescence' at 'RAC Arena'. What kind of page is this, and which matching on-sale events are listed? Report anything blocking progress."
+      },
+      "timestamp": "2026-11-18T04:27:59.645752+00:00"
+    },
+    {
+      "level": "info",
+      "message": "Extraction completed successfully",
+      "data": {
+        "category": "extraction",
+        "promptTokens": 3264,
+        "completionTokens": 688,
+        "inferenceTimeMs": 9130
+      },
+      "timestamp": "2026-11-18T04:28:08.776774+00:00"
+    },
+    {
+      "level": "info",
+      "message": "Starting extraction using an accessibility snapshot",
+      "data": {
+        "category": "extraction",
+        "instruction": "Extract the event name, the headline 'from' price advertised for the event, what the advertised prices are said to cover (quote any note about booking, service or transaction fees), and every session/performance listed with its date, venue, availability and lowest price. Do not interact with the page."
+      },
+      "timestamp": "2026-11-18T04:28:08.894834+00:00"
+    },
+    {
+      "level": "info",
+      "message": "Extraction completed successfully",
+      "data": {
+        "category": "extraction",
+        "promptTokens": 3399,
+        "completionTokens": 1477,
+        "inferenceTimeMs": 14218
+      },
+      "timestamp": "2026-11-18T04:28:23.113431+00:00"
+    },
+    {
+      "level": "info",
+      "message": "Starting extraction using an accessibility snapshot",
+      "data": {
+        "category": "extraction",
+        "instruction": "List the distinct ticket areas/tiers and price types with their price per ticket and availability (summarise per tier, not per seat on the map), what the prices cover, and anything blocking progress. Do not interact with the page."
+      },
+      "timestamp": "2026-11-18T04:28:24.855654+00:00"
+    },
+    {
+      "level": "info",
+      "message": "Extraction completed successfully",
+      "data": {
+        "category": "extraction",
+        "promptTokens": 15123,
+        "completionTokens": 1504,
+        "inferenceTimeMs": 14645
+      },
+      "timestamp": "2026-11-18T04:28:39.500946+00:00"
+    },
+    {
+      "level": "info",
+      "message": "Starting observation",
+      "data": {
+        "category": "observation",
+        "instruction": "Take the single next action to get 2 x 'Standard' in 'C Reserve Seating' tickets (priced around $145.65). In order: 1) If 'C Reserve Seating' is not yet selected/expanded (look at the price/area pills above the seat map or in the category list), click the 'C Reserve Seating' ($145.65) button/option (scroll the price bar or click its arrow if needed), or click 'Find Best available' to show the category list; 2) Once quantity +/- buttons or a quantity dropdown are visible for 'Standard' (or Adult / Standard), increase/set the quantity to 2 (leave every other ticket type at 0); 3) Once the quantity is set, click the 'Next' / 'Get tickets' / 'Find tickets' / 'Continue' button to reserve the tickets. Do NOT click 'Choose your own' or 'Find Best available' if ticket categories or quantity controls are already open. Never add parking, merchandise, packages or upgrades."
+      },
+      "timestamp": "2026-11-18T04:28:39.947082+00:00"
+    },
+    {
+      "level": "info",
+      "message": "Observation completed",
+      "data": {
+        "category": "observation",
+        "promptTokens": 14308,
+        "completionTokens": 375,
+        "reasoningTokens": 0,
+        "cachedInputTokens": 0,
+        "inferenceTimeMs": 4572,
+        "resultCount": 1
+      },
+      "timestamp": "2026-11-18T04:28:44.635611+00:00"
+    },
+    {
+      "level": "info",
+      "message": "Starting extraction using an accessibility snapshot",
+      "data": {
+        "category": "extraction",
+        "instruction": "We want 2 x 'Standard' in 'C Reserve Seating' tickets. Are tickets now held/reserved (a cart, basket, order summary or countdown timer)? Report the area, seats, ticket type, quantity, price per ticket and total."
+      },
+      "timestamp": "2026-11-18T04:28:45.709574+00:00"
+    },
+    {
+      "level": "info",
+      "message": "Extraction completed successfully",
+      "data": {
+        "category": "extraction",
+        "promptTokens": 12753,
+        "completionTokens": 789,
+        "inferenceTimeMs": 10850
+      },
+      "timestamp": "2026-11-18T04:28:56.560439+00:00"
+    },
+    {
+      "level": "info",
+      "message": "Starting observation",
+      "data": {
+        "category": "observation",
+        "instruction": "Take the single next action to get 2 x 'Standard' in 'C Reserve Seating' tickets (priced around $145.65). In order: 1) If 'C Reserve Seating' is not yet selected/expanded (look at the price/area pills above the seat map or in the category list), click the 'C Reserve Seating' ($145.65) button/option (scroll the price bar or click its arrow if needed), or click 'Find Best available' to show the category list; 2) Once quantity +/- buttons or a quantity dropdown are visible for 'Standard' (or Adult / Standard), increase/set the quantity to 2 (leave every other ticket type at 0); 3) Once the quantity is set, click the 'Next' / 'Get tickets' / 'Find tickets' / 'Continue' button to reserve the tickets. Do NOT click 'Choose your own' or 'Find Best available' if ticket categories or quantity controls are already open. Never add parking, merchandise, packages or upgrades."
+      },
+      "timestamp": "2026-11-18T04:28:56.568648+00:00"
+    },
+    {
+      "level": "info",
+      "message": "Observation completed",
+      "data": {
+        "category": "observation",
+        "promptTokens": 12774,
+        "completionTokens": 455,
+        "reasoningTokens": 0,
+        "cachedInputTokens": 0,
+        "inferenceTimeMs": 5758,
+        "resultCount": 1
+      },
+      "timestamp": "2026-11-18T04:29:02.435122+00:00"
+    },
+    {
+      "level": "info",
+      "message": "Starting extraction using an accessibility snapshot",
+      "data": {
+        "category": "extraction",
+        "instruction": "We want 2 x 'Standard' in 'C Reserve Seating' tickets. Are tickets now held/reserved (a cart, basket, order summary or countdown timer)? Report the area, seats, ticket type, quantity, price per ticket and total."
+      },
+      "timestamp": "2026-11-18T04:29:03.142676+00:00"
+    },
+    {
+      "level": "info",
+      "message": "Extraction completed successfully",
+      "data": {
+        "category": "extraction",
+        "promptTokens": 13003,
+        "completionTokens": 827,
+        "inferenceTimeMs": 11989
+      },
+      "timestamp": "2026-11-18T04:29:15.132524+00:00"
+    },
+    {
+      "level": "info",
+      "message": "Starting observation",
+      "data": {
+        "category": "observation",
+        "instruction": "Take the single next action to get 2 x 'Standard' in 'C Reserve Seating' tickets (priced around $145.65). In order: 1) If 'C Reserve Seating' is not yet selected/expanded (look at the price/area pills above the seat map or in the category list), click the 'C Reserve Seating' ($145.65) button/option (scroll the price bar or click its arrow if needed), or click 'Find Best available' to show the category list; 2) Once quantity +/- buttons or a quantity dropdown are visible for 'Standard' (or Adult / Standard), increase/set the quantity to 2 (leave every other ticket type at 0); 3) Once the quantity is set, click the 'Next' / 'Get tickets' / 'Find tickets' / 'Continue' button to reserve the tickets. Do NOT click 'Choose your own' or 'Find Best available' if ticket categories or quantity controls are already open. Never add parking, merchandise, packages or upgrades."
+      },
+      "timestamp": "2026-11-18T04:29:15.142930+00:00"
+    },
+    {
+      "level": "info",
+      "message": "Observation completed",
+      "data": {
+        "category": "observation",
+        "promptTokens": 13001,
+        "completionTokens": 371,
+        "reasoningTokens": 0,
+        "cachedInputTokens": 0,
+        "inferenceTimeMs": 4381,
+        "resultCount": 1
+      },
+      "timestamp": "2026-11-18T04:29:19.638223+00:00"
+    },
+    {
+      "level": "info",
+      "message": "Starting extraction using an accessibility snapshot",
+      "data": {
+        "category": "extraction",
+        "instruction": "We want 2 x 'Standard' in 'C Reserve Seating' tickets. Are tickets now held/reserved (a cart, basket, order summary or countdown timer)? Report the area, seats, ticket type, quantity, price per ticket and total."
+      },
+      "timestamp": "2026-11-18T04:29:20.335238+00:00"
+    },
+    {
+      "level": "info",
+      "message": "Extraction completed successfully",
+      "data": {
+        "category": "extraction",
+        "promptTokens": 13001,
+        "completionTokens": 4145,
+        "inferenceTimeMs": 39033
+      },
+      "timestamp": "2026-11-18T04:29:59.369167+00:00"
+    },
+    {
+      "level": "info",
+      "message": "Starting observation",
+      "data": {
+        "category": "observation",
+        "instruction": "Take the single next action to get 2 x 'Standard' in 'C Reserve Seating' tickets (priced around $145.65). In order: 1) If 'C Reserve Seating' is not yet selected/expanded (look at the price/area pills above the seat map or in the category list), click the 'C Reserve Seating' ($145.65) button/option (scroll the price bar or click its arrow if needed), or click 'Find Best available' to show the category list; 2) Once quantity +/- buttons or a quantity dropdown are visible for 'Standard' (or Adult / Standard), increase/set the quantity to 2 (leave every other ticket type at 0); 3) Once the quantity is set, click the 'Next' / 'Get tickets' / 'Find tickets' / 'Continue' button to reserve the tickets. Do NOT click 'Choose your own' or 'Find Best available' if ticket categories or quantity controls are already open. Never add parking, merchandise, packages or upgrades."
+      },
+      "timestamp": "2026-11-18T04:29:59.379490+00:00"
+    },
+    {
+      "level": "info",
+      "message": "Observation completed",
+      "data": {
+        "category": "observation",
+        "promptTokens": 13001,
+        "completionTokens": 379,
+        "reasoningTokens": 0,
+        "cachedInputTokens": 0,
+        "inferenceTimeMs": 5282,
+        "resultCount": 1
+      },
+      "timestamp": "2026-11-18T04:30:04.771576+00:00"
+    },
+    {
+      "level": "info",
+      "message": "Starting extraction using an accessibility snapshot",
+      "data": {
+        "category": "extraction",
+        "instruction": "We want 2 x 'Standard' in 'C Reserve Seating' tickets. Are tickets now held/reserved (a cart, basket, order summary or countdown timer)? Report the area, seats, ticket type, quantity, price per ticket and total."
+      },
+      "timestamp": "2026-11-18T04:30:06.164357+00:00"
+    },
+    {
+      "level": "info",
+      "message": "Extraction completed successfully",
+      "data": {
+        "category": "extraction",
+        "promptTokens": 13024,
+        "completionTokens": 5713,
+        "inferenceTimeMs": 48092
+      },
+      "timestamp": "2026-11-18T04:30:54.256927+00:00"
+    },
+    {
+      "level": "info",
+      "message": "Starting observation",
+      "data": {
+        "category": "observation",
+        "instruction": "Take the single next action to get 2 x 'Standard' in 'C Reserve Seating' tickets (priced around $145.65). In order: 1) If 'C Reserve Seating' is not yet selected/expanded (look at the price/area pills above the seat map or in the category list), click the 'C Reserve Seating' ($145.65) button/option (scroll the price bar or click its arrow if needed), or click 'Find Best available' to show the category list; 2) Once quantity +/- buttons or a quantity dropdown are visible for 'Standard' (or Adult / Standard), increase/set the quantity to 2 (leave every other ticket type at 0); 3) Once the quantity is set, click the 'Next' / 'Get tickets' / 'Find tickets' / 'Continue' button to reserve the tickets. Do NOT click 'Choose your own' or 'Find Best available' if ticket categories or quantity controls are already open. Never add parking, merchandise, packages or upgrades."
+      },
+      "timestamp": "2026-11-18T04:30:54.267930+00:00"
+    },
+    {
+      "level": "info",
+      "message": "Observation completed",
+      "data": {
+        "category": "observation",
+        "promptTokens": 3461,
+        "completionTokens": 1936,
+        "reasoningTokens": 0,
+        "cachedInputTokens": 0,
+        "inferenceTimeMs": 12622,
+        "resultCount": 0
+      },
+      "timestamp": "2026-11-18T04:31:06.954677+00:00"
+    },
+    {
+      "level": "info",
+      "message": "Starting extraction using an accessibility snapshot",
+      "data": {
+        "category": "extraction",
+        "instruction": "We want 2 x 'Standard' in 'C Reserve Seating' tickets. Are tickets now held/reserved (a cart, basket, order summary or countdown timer)? Report the area, seats, ticket type, quantity, price per ticket and total."
+      },
+      "timestamp": "2026-11-18T04:31:07.537317+00:00"
+    },
+    {
+      "level": "info",
+      "message": "Extraction completed successfully",
+      "data": {
+        "category": "extraction",
+        "promptTokens": 3488,
+        "completionTokens": 2618,
+        "inferenceTimeMs": 28395
+      },
+      "timestamp": "2026-11-18T04:31:35.932895+00:00"
+    },
+    {
+      "level": "info",
+      "message": "Starting extraction using an accessibility snapshot",
+      "data": {
+        "category": "extraction",
+        "instruction": "We hold tickets and want to reach the payment page without buying any optional extras. Identify the current step, list every fee, delivery option, add-on, upsell or surcharge offered on it with prices (including in any open popup), and report the order summary lines, total, validation errors, whether a sign-in or queue is in the way, and anything else blocking progress."
+      },
+      "timestamp": "2026-11-18T04:31:36.576561+00:00"
+    },
+    {
+      "level": "info",
+      "message": "Extraction completed successfully",
+      "data": {
+        "category": "extraction",
+        "promptTokens": 3755,
+        "completionTokens": 1168,
+        "inferenceTimeMs": 11541
+      },
+      "timestamp": "2026-11-18T04:31:48.118898+00:00"
+    },
+    {
+      "level": "info",
+      "message": "Starting observation",
+      "data": {
+        "category": "observation",
+        "instruction": "Do not add any optional extra (no refund protection, insurance, parking, merchandise, upgrades or donations). If the page requires an explicit choice, choose the decline option. Otherwise click the button that continues towards payment (e.g. 'Continue', 'Next', 'Proceed to payment'). Never click a button that pays or completes the purchase, and never sign up for anything."
+      },
+      "timestamp": "2026-11-18T04:31:48.464602+00:00"
+    },
+    {
+      "level": "info",
+      "message": "Observation completed",
+      "data": {
+        "category": "observation",
+        "promptTokens": 3315,
+        "completionTokens": 311,
+        "reasoningTokens": 0,
+        "cachedInputTokens": 0,
+        "inferenceTimeMs": 4307,
+        "resultCount": 1
+      },
+      "timestamp": "2026-11-18T04:31:52.830073+00:00"
+    },
+    {
+      "level": "info",
+      "message": "Starting extraction using an accessibility snapshot",
+      "data": {
+        "category": "extraction",
+        "instruction": "We hold tickets and want to reach the payment page without buying any optional extras. Identify the current step, list every fee, delivery option, add-on, upsell or surcharge offered on it with prices (including in any open popup), and report the order summary lines, total, validation errors, whether a sign-in or queue is in the way, and anything else blocking progress."
+      },
+      "timestamp": "2026-11-18T04:31:57.455051+00:00"
+    },
+    {
+      "level": "info",
+      "message": "Extraction completed successfully",
+      "data": {
+        "category": "extraction",
+        "promptTokens": 4899,
+        "completionTokens": 1459,
+        "inferenceTimeMs": 12485
+      },
+      "timestamp": "2026-11-18T04:32:09.940449+00:00"
+    },
+    {
+      "level": "info",
+      "message": "Starting observation",
+      "data": {
+        "category": "observation",
+        "instruction": "Do not add any extra (no refund protection, insurance, parking, merchandise or donation). If an explicit choice is required, choose the decline option (e.g. 'No thanks', 'I don't want ...'), then continue."
+      },
+      "timestamp": "2026-11-18T04:32:10.445707+00:00"
+    },
+    {
+      "level": "info",
+      "message": "Observation completed",
+      "data": {
+        "category": "observation",
+        "promptTokens": 4199,
+        "completionTokens": 412,
+        "reasoningTokens": 0,
+        "cachedInputTokens": 0,
+        "inferenceTimeMs": 6129,
+        "resultCount": 1
+      },
+      "timestamp": "2026-11-18T04:32:16.626445+00:00"
+    },
+    {
+      "level": "info",
+      "message": "Starting extraction using an accessibility snapshot",
+      "data": {
+        "category": "extraction",
+        "instruction": "We hold tickets and want to reach the payment page without buying any optional extras. Identify the current step, list every fee, delivery option, add-on, upsell or surcharge offered on it with prices (including in any open popup), and report the order summary lines, total, validation errors, whether a sign-in or queue is in the way, and anything else blocking progress."
+      },
+      "timestamp": "2026-11-18T04:32:20.407484+00:00"
+    },
+    {
+      "level": "info",
+      "message": "Extraction completed successfully",
+      "data": {
+        "category": "extraction",
+        "promptTokens": 1588,
+        "completionTokens": 506,
+        "inferenceTimeMs": 8957
+      },
+      "timestamp": "2026-11-18T04:32:29.365563+00:00"
+    },
+    {
+      "level": "info",
+      "message": "Starting extraction using an accessibility snapshot",
+      "data": {
+        "category": "extraction",
+        "instruction": "We hold tickets and want to reach the payment page without buying any optional extras. Identify the current step, list every fee, delivery option, add-on, upsell or surcharge offered on it with prices (including in any open popup), and report the order summary lines, total, validation errors, whether a sign-in or queue is in the way, and anything else blocking progress."
+      },
+      "timestamp": "2026-11-18T04:33:44.001131+00:00"
+    },
+    {
+      "level": "info",
+      "message": "Extraction completed successfully",
+      "data": {
+        "category": "extraction",
+        "promptTokens": 14157,
+        "completionTokens": 1512,
+        "inferenceTimeMs": 13552
+      },
+      "timestamp": "2026-11-18T04:33:57.553918+00:00"
+    },
+    {
+      "level": "info",
+      "message": "Starting extraction using an accessibility snapshot",
+      "data": {
+        "category": "extraction",
+        "instruction": "Extract the order's price summary from this payment page: each ticket line with its quantity and line total, the ticket subtotal, any per-ticket booking fees and per-transaction service/handling fees, the delivery method and its charge, optional extras included, the total due and currency. Also list every card or payment-method surcharge advertised, and report if a login, CAPTCHA or bot check is blocking the page. Do not interact with the page."
+      },
+      "timestamp": "2026-11-18T04:33:58.391272+00:00"
+    },
+    {
+      "level": "info",
+      "message": "Extraction completed successfully",
+      "data": {
+        "category": "extraction",
+        "promptTokens": 13929,
+        "completionTokens": 1284,
+        "inferenceTimeMs": 11245
+      },
+      "timestamp": "2026-11-18T04:34:09.637357+00:00"
+    }
+  ]
+}

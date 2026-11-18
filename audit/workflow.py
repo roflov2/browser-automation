@@ -46,6 +46,12 @@ class Workflow(ABC):
     def targets(self) -> list[str]:
         """Start URLs to audit, one run each."""
 
+    def login_url(self) -> str:
+        """URL to open when priming a login session (`--login` / `--prelogin`)."""
+        urls = self.targets()
+        url = urls[0] if urls else ""
+        return url if url.startswith("http") else f"https://{url}"
+
     def output_folder(self, url: str) -> str:
         """Folder under output/ that holds this URL's runs."""
         return urlparse(url).netloc.removeprefix("www.")

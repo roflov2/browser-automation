@@ -2,3 +2,4 @@ run_at,site,status,message,items_added,expected_subtotal,checkout_subtotal,check
 2026-11-17T22:52:07+00:00,https://onacoffee.com.au,ok,,3,59.0,59.0,59.0,AUD,0.0,not calculated (address required),False,output/onacoffee.com.au/20261118-094848,coffee,https://onacoffee.com.au,
 2026-11-17T23:47:28+00:00,https://www.virginaustralia.com/au/en/,ok,,1,385.0,385.0,385.0,AUD,0.0,n/a (flight booking),False,output/virginaustralia.com/20261118-103829,virgin,https://www.virginaustralia.com/au/en/ BNE-PER,
 2026-11-18T01:09:13+00:00,https://www.ubereats.com/au,ok,,1,25.0,70.65,84.12,AUD,8.48,$4.99,True,output/ubereats.com/20261118-120410,ubereats,/store/ooshman-belconnen/ARt4Fx0qVZqWd3Welvaeeg,
+2026-11-18T04:34:09+00:00,https://premier.ticketek.com.au/,ok,,1,291.3,291.3,300.2,AUD,8.9,0.0,True,output/premier.ticketek.com.au/20261118-152629,ticketek,Evanescence | Fri 05 Mar 2027 8:00PM,

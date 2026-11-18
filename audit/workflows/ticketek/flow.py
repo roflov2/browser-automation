@@ -6,9 +6,20 @@ import time
 
 from stagehand import Page, Stagehand
 
-from ...core import Blocked, FlowChanged, Item, SiteResult, new_item, parse_price, record_offers, select_price, slug
-from ...page import dismiss_popups, fingerprint, pause_for_login, settle, shot, wait_for_render
-from ...safety import current_guard, safe_act
+from ...core import (
+    BROWSER_ERRORS,
+    Blocked,
+    FlowChanged,
+    Item,
+    SiteResult,
+    new_item,
+    parse_price,
+    record_offers,
+    select_price,
+    slug,
+)
+from ...page import dismiss_popups, fingerprint, js, pause_for_login, settle, shot, wait_for_render
+from ...safety import current_guard, safe_act, try_act
 from .models import (
     EventPage,
     FindState,
@@ -23,6 +34,7 @@ from .models import (
 log = logging.getLogger(__name__)
 
 SITE_URL = "https://premier.ticketek.com.au/"
+LOGIN_URL = "https://premier.ticketek.com.au/membership/login.aspx"
 SETTLE_MS = 2500
 MAX_FIND_STEPS = 6
 MAX_SELECT_STEPS = 5
@@ -52,34 +64,95 @@ async def dismiss_ticketek_popups(stagehand: Stagehand, page: Page) -> None:
 # ---------------------------------------------------------------------------
 # 1. Event
 # ---------------------------------------------------------------------------
-async def find_event(stagehand: Stagehand, page: Page, query: str | None) -> None:
+JS_SEARCH_EVENT = r"""query => {
+    for (const inp of document.querySelectorAll('input[type="search"], input[placeholder*="search" i], input[aria-label*="search" i], header input[type="text"]')) {
+        if (!vis(inp, 80, 20)) continue;
+        if (!safeFill(inp, query)) continue;
+        return 'typed';
+    }
+    for (const btn of document.querySelectorAll('header button, header a, [aria-label*="search" i]')) {
+        const label = ((btn.getAttribute('aria-label') || '') + ' ' + txt(btn)).trim();
+        if (vis(btn, 18, 18) && /search/i.test(label) && safeClick(btn)) return 'opened';
+    }
+    return null;
+}"""
+
+
+JS_DISMISS_ALERT = r"""() => {
+    for (const d of dialogs()) {
+        if (!vis(d, 150, 80)) continue;
+        const okBtn = Array.from(d.querySelectorAll('button')).find(
+            b => vis(b, 30, 20) && /^(ok|okay|got it|close|dismiss|i understand)$/i.test(clean(txt(b))) && guardAllows(b));
+        if (okBtn && safeClick(okBtn)) return clean(txt(okBtn));
+    }
+    for (const b of document.querySelectorAll('button')) {
+        if (vis(b, 40, 24) && /^ok$/i.test(clean(txt(b))) && guardAllows(b) && safeClick(b)) return 'OK';
+    }
+    return null;
+}"""
+
+
+async def dismiss_ticketek_alert(page: Page) -> None:
+    clicked = await js(page, JS_DISMISS_ALERT)
+    if clicked:
+        log.info(f"  Dismissed informational alert dialog ('{clicked}')")
+        await settle(page, 1000)
+
+
+async def find_event(
+    stagehand: Stagehand, page: Page, query: str | None, session_hint: str | None = None
+) -> None:
     """From the homepage or a search page, reach the event page of an on-sale event matching `query`."""
-    wanted = f"an on-sale event matching '{query}'" if query else "the first on-sale event featured on the page"
+    venue_clause = f" at '{session_hint}'" if session_hint else ""
+    wanted = f"an on-sale event matching '{query}'{venue_clause}" if query else "the first on-sale event featured on the page"
     question = (
         f"We are looking for {wanted}. What kind of page is this, and which matching on-sale events are listed? "
         "Report anything blocking progress."
     )
     for _ in range(MAX_FIND_STEPS):
+        await dismiss_ticketek_alert(page)
         state = (await stagehand.extract(question, FindState)).data
         if state.blocked_reason:
             raise Blocked(state.blocked_reason)
-        if state.page_type in ("event", "ticket_selection"):
+        if state.page_type in ("event", "ticket_selection", "seat_map"):
             log.info(f"  Event page: {state.event_name or '?'}")
             return
         if state.page_type == "search_results" and state.matching_events:
             instruction = (
-                f"Open the event page of '{state.matching_events[0]}' by clicking its title or its 'Find tickets' / "
-                "'More info' link."
+                f"Open the event page of '{state.matching_events[0]}'{venue_clause} by clicking its 'Find tickets' / "
+                f"'Buy tickets' / 'More info' button or title{(' for ' + session_hint) if session_hint else ''}."
             )
         elif query:
+            dom_search = await js(page, JS_SEARCH_EVENT, query)
+            if dom_search == "typed":
+                await page.key_press("Enter")
+                log.info(f"  Searched for '{query}' via search box -> {state.reason}")
+                await settle(page, SETTLE_MS)
+                await wait_for_render(page)
+                continue
+            if dom_search == "opened":
+                await settle(page, 1000)
+                if await js(page, JS_SEARCH_EVENT, query) == "typed":
+                    await page.key_press("Enter")
+                    log.info(f"  Opened search and searched for '{query}' -> {state.reason}")
+                    await settle(page, SETTLE_MS)
+                    await wait_for_render(page)
+                    continue
             instruction = (
                 f"Search the site for '{query}': type it into the search box (open the search first if only a "
                 "search icon is visible) and press Enter."
             )
         else:
             instruction = "Open the event page of the first on-sale event featured on the page."
-        step = await safe_act(stagehand, page, instruction)
-        log.info(f"  {step.description} -> {state.reason}")
+        before_url = await page.url()
+        try:
+            step = await safe_act(stagehand, page, instruction)
+            log.info(f"  {step.description} -> {state.reason}")
+        except BROWSER_ERRORS as error:
+            await settle(page, SETTLE_MS)
+            if await page.url() == before_url:
+                raise
+            log.info(f"  Navigated to {await page.url()} ({error}) -> {state.reason}")
         await settle(page, SETTLE_MS)
         await wait_for_render(page)
     raise FlowChanged(f"Couldn't reach the event page for {wanted}")
@@ -95,27 +168,58 @@ def choose_session(sessions: list[Session], hint: str | None) -> Session | None:
     return bookable[0] if bookable else None
 
 
+JS_SWITCH_BEST_AVAILABLE = r"""() => {
+    for (const el of document.querySelectorAll('button, a, [role="tab"], [role="button"]')) {
+        if (!vis(el, 50, 20)) continue;
+        const label = clean(txt(el));
+        if (/^(find\s+)?best\s+available$/i.test(label) && guardAllows(el)) {
+            if (el.getAttribute('aria-selected') === 'true' || /\bactive\b|\bselected\b/i.test(el.className || '')) return null;
+            if (safeClick(el)) return label;
+        }
+    }
+    return null;
+}"""
+
+
 async def open_session(stagehand: Stagehand, page: Page, session: Session) -> TicketOptions:
     """Click through to the ticket selection page of `session` and read its prices."""
     described = f"the session on {session.date}" + (f" at {session.venue}" if session.venue else "")
     question = (
-        "List every ticket area and price type with its price per ticket and availability, what the prices cover, "
-        "and anything blocking progress. Do not interact with the page."
+        "List the distinct ticket areas/tiers and price types with their price per ticket and availability "
+        "(summarise per tier, not per seat on the map), what the prices cover, and anything blocking progress. "
+        "Do not interact with the page."
     )
     for _ in range(MAX_SELECT_STEPS):
+        await dismiss_ticketek_alert(page)
+        switched = await js(page, JS_SWITCH_BEST_AVAILABLE)
+        if switched:
+            log.info(f"    Switched to '{switched}' view")
+            await settle(page, SETTLE_MS)
+            await wait_for_render(page)
         options = (await stagehand.extract(question, TicketOptions)).data
         if options.blocked_reason:
             raise Blocked(options.blocked_reason)
         if options.is_ticket_selection and options.options:
             return options
-        step = await safe_act(
-            stagehand,
-            page,
-            f"Take the single next action to see ticket prices for {described}: click its 'Find tickets', "
-            "'Buy tickets' or 'Get tickets' button (expand the session list or choose the date first if needed). "
-            "Do not choose resale tickets.",
-        )
-        log.info(f"    Session: {step.description}")
+        before_url = await page.url()
+        try:
+            step = await safe_act(
+                stagehand,
+                page,
+                f"Take the single next action to see ticket prices and quantity controls for {described}: if an "
+                "informational alert popup with an 'OK' button is covering the page, click 'OK'; if a "
+                "'Find Best available' or 'Best available' tab/button is visible on a seat map, click it; otherwise "
+                "click the session's 'Find tickets', 'Buy tickets' or 'Get tickets' button (expand the session list "
+                "or choose the date first if needed). Do not choose resale tickets.",
+            )
+            log.info(f"    Session: {step.description}")
+            if not step.success and options.options:
+                return options
+        except BROWSER_ERRORS as error:
+            await settle(page, SETTLE_MS)
+            if await page.url() == before_url:
+                raise
+            log.info(f"    Session navigated to {await page.url()} ({error})")
         await settle(page, SETTLE_MS)
         await wait_for_render(page)
     raise FlowChanged(f"Couldn't reach the ticket selection page for {described}")
@@ -129,7 +233,9 @@ def choose_option(options: list[PriceOption]) -> PriceOption | None:
     """The cheapest available ticket an ordinary adult can buy; any cheapest ticket if none is plainly adult."""
     priced = [o for o in options if o.available and parse_price(o.price) is not None]
     standard = [o for o in priced if not RESTRICTED_TYPES.search(o.price_type)]
-    return min(standard or priced, key=lambda o: parse_price(o.price) or 0.0, default=None)
+    candidates = standard or priced
+    specific = [o for o in candidates if not re.search(r"any\s+price", o.area or "", re.IGNORECASE)]
+    return min(specific or candidates, key=lambda o: parse_price(o.price) or 0.0, default=None)
 
 
 def cheapest_offered(options: list[PriceOption]) -> float | None:
@@ -146,16 +252,21 @@ async def hold_tickets(stagehand: Stagehand, page: Page, option: PriceOption, qu
         "timer)? Report the area, seats, ticket type, quantity, price per ticket and total."
     )
     held = None
-    for _ in range(MAX_SELECT_STEPS):
+    for _ in range(MAX_SELECT_STEPS + 2):
+        await dismiss_ticketek_alert(page)
         step = await safe_act(
             stagehand,
             page,
-            f"Take the single next action to get {described} tickets. In order: choose the '{option.area or 'cheapest'}' "
-            f"area or price band if a choice is needed; set the quantity of '{option.price_type}' to {quantity} "
-            "(leave every other ticket type at 0); choose 'Best available' rather than picking seats on a map; then "
-            "click the button that finds or reserves the tickets (e.g. 'Find tickets', 'Get tickets', 'Add to cart', "
-            "'Continue'). Never add parking, merchandise, packages or upgrades.",
-            follow_up=True,  # a quantity dropdown is opened, then the number is picked
+            f"Take the single next action to get {described} tickets (priced around {option.price}). "
+            f"In order: 1) If '{option.area or 'Best available'}' is not yet selected/expanded (look at the price/area "
+            f"pills above the seat map or in the category list), click the '{option.area or 'Best available'}' "
+            f"({option.price}) button/option (scroll the price bar or click its arrow if needed), or click 'Find Best "
+            "available' to show the category list; "
+            f"2) Once quantity +/- buttons or a quantity dropdown are visible for '{option.price_type}' (or Adult / Standard), "
+            f"increase/set the quantity to {quantity} (leave every other ticket type at 0); "
+            "3) Once the quantity is set, click the 'Next' / 'Get tickets' / 'Find tickets' / 'Continue' button "
+            "to reserve the tickets. Do NOT click 'Choose your own' or 'Find Best available' if ticket categories or "
+            "quantity controls are already open. Never add parking, merchandise, packages or upgrades.",
         )
         log.info(f"    Tickets: {step.description}")
         await settle(page, SETTLE_MS)
@@ -309,7 +420,31 @@ async def walk_to_payment(stagehand: Stagehand, page: Page, result: SiteResult, 
     return False
 
 
-async def read_event(stagehand: Stagehand, page: Page, result: TicketekResult) -> EventPage:
+JS_SELECT_VENUE = r"""hint => {
+    const words = (hint || '').toLowerCase().split(/\s+/).filter(Boolean);
+    for (const sel of document.querySelectorAll('select')) {
+        if (!vis(sel, 80, 20)) continue;
+        const cur = sel.options[sel.selectedIndex];
+        if (!cur || /select\s+(venue|city|state|location)/i.test(cur.text || '')) {
+            const opts = Array.from(sel.options).filter(o => o.value && !/select\s+(venue|city|state|location)/i.test(o.text || ''));
+            const match = words.length ? opts.find(o => words.some(w => (o.text || '').toLowerCase().includes(w))) : null;
+            const opt = match || opts[0];
+            if (opt && safeSelect(sel, opt.value)) return clean(opt.text);
+        }
+    }
+    return null;
+}"""
+
+
+async def read_event(
+    stagehand: Stagehand, page: Page, result: TicketekResult, session_hint: str | None = None
+) -> EventPage:
+    await dismiss_ticketek_alert(page)
+    venue_picked = await js(page, JS_SELECT_VENUE, session_hint)
+    if venue_picked:
+        log.info(f"  Selected venue from dropdown: {venue_picked}")
+        await settle(page, SETTLE_MS)
+        await wait_for_render(page)
     event = (
         await stagehand.extract(
             "Extract the event name, the headline 'from' price advertised for the event, what the advertised prices "
@@ -318,6 +453,26 @@ async def read_event(stagehand: Stagehand, page: Page, result: TicketekResult) -
             EventPage,
         )
     ).data
+    if not event.sessions and not event.is_ticket_selection:
+        wanted = f"matching '{session_hint}'" if session_hint else "the first venue"
+        step = await try_act(
+            stagehand,
+            page,
+            f"If a 'Select venue' or city/venue dropdown is shown with no venue selected, open it and select {wanted}.",
+            follow_up=True,
+        )
+        if step and step.success:
+            log.info(f"  Venue dropdown: {step.description}")
+            await settle(page, SETTLE_MS)
+            await wait_for_render(page)
+            event = (
+                await stagehand.extract(
+                    "Extract the event name, the headline 'from' price advertised for the event, what the advertised prices "
+                    "are said to cover (quote any note about booking, service or transaction fees), and every session/"
+                    "performance listed with its date, venue, availability and lowest price. Do not interact with the page.",
+                    EventPage,
+                )
+            ).data
     result.event_name = event.event_name
     result.advertised_from_price_display = event.advertised_from_price
     result.advertised_price_note = event.price_note

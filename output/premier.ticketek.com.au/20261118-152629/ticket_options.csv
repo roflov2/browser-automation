@@ -1,0 +1,16 @@
+area,price_type,price,available,price_note
+Best available (Any price),Standard,$145.65 - $431.10,True,
+Premium Reserve Seating,Standard,$349.55,True,
+General Admission Standing,Standard,$206.85,True,
+A Reserve Aisle Seating,Standard,$227.20,True,Limited availability
+A Reserve Seating,Standard,$206.85,True,
+B Reserve Aisle Seating,Standard,$196.65,True,
+B Reserve Seating,Standard,$176.25,True,
+C Reserve Aisle Seating,Standard,$166.05,True,Limited availability
+C Reserve Seating,Standard,$145.65,True,
+D Reserve Aisle Seating,Standard,,False,Allocation Exhausted
+D Reserve Seating,Standard,,False,Allocation Exhausted
+Evanescence Premium Ticket Package - Seated,Package,,False,Allocation Exhausted
+Evanescence Premium Ticket Package - GA,Package,,False,Allocation Exhausted
+Evanescence Tour Package - Seated,Package,$431.10,True,Single seats only
+Evanescence Tour Package - GA,Package,$369.95,True,Limited availability

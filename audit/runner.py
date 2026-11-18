@@ -198,7 +198,14 @@ class RecordingStagehand:
                 if attempt == 0 and "locator must belong to the target page" in msg:
                     options.pop("ignore_locators", None)
                     continue
-                if attempt == 0 and "Session with given id not found" in msg:
+                if attempt == 0 and any(
+                    p in msg
+                    for p in (
+                        "Session with given id not found",
+                        "Cannot find context with specified id",
+                        "Execution context was destroyed",
+                    )
+                ):
                     await asyncio.sleep(1.0)
                     continue
                 if is_timeout(error):
@@ -412,9 +419,12 @@ async def run(
             ),
             open_stagehand(browser, workflow, settings, session_log, llm) as client,
         ):
-            page = (await browser.context.pages())[0]
+            pages = await browser.context.pages()
+            page = pages[-1]
+            if len(pages) > 1:
+                await browser.context.set_active_page(page)
             if args.login:
-                await preload_login(page, targets[0])
+                await preload_login(page, workflow.login_url())
                 return
             # The in-page purchase blocker, on every page from here on (not for --login, where a person signs in).
             await safety.install(browser.context, page)

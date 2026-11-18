@@ -27,7 +27,7 @@ def build_parser(settings: Settings) -> argparse.ArgumentParser:
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument("--local", action="store_true",
                         help="Use local Chrome even if BROWSERBASE_API_KEY is set in .env")  # fmt: skip
-    common.add_argument("--login", action="store_true",
+    common.add_argument("--login", "--prelogin", dest="login", action="store_true",
                         help="Open the site in the persistent local Chrome profile so you can sign in manually, then exit")  # fmt: skip
 
     volume = common.add_mutually_exclusive_group()

@@ -24,6 +24,7 @@ from ...page import settle, shot, wait_for_render
 from ...workflow import Workflow
 from . import pricing
 from .flow import (
+    LOGIN_URL,
     SETTLE_MS,
     SITE_URL,
     cheapest_offered,
@@ -103,6 +104,10 @@ class TicketekWorkflow(Workflow):
     def targets(self) -> list[str]:
         return self.args.urls
 
+    def login_url(self) -> str:
+        """Open My Ticketek sign-in directly when priming the browser profile."""
+        return LOGIN_URL if self.args.urls == [SITE_URL] else super().login_url()
+
     def output_folder(self, url: str) -> str:
         """One folder per event when started from an event page."""
         folder = super().output_folder(url)
@@ -122,10 +127,10 @@ class TicketekWorkflow(Workflow):
             await settle(page, SETTLE_MS)
             await dismiss_ticketek_popups(stagehand, page)
 
-            await find_event(stagehand, page, args.query)
+            await find_event(stagehand, page, args.query, args.session)
             await wait_for_render(page)
             result.shop_url = await page.url()
-            event = await read_event(stagehand, page, result)
+            event = await read_event(stagehand, page, result, args.session)
             write_csv(out / "products.csv", ["date", "venue", "status", "from_price"],
                       [s.model_dump() for s in event.sessions])  # fmt: skip
             await shot(page, out / "event.png")

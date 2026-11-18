@@ -74,9 +74,11 @@ class PriceOption(BaseModel):
 
 class TicketOptions(BaseModel):
     is_ticket_selection: bool = Field(
-        description="True if ticket types/areas with prices and a quantity control are shown"
+        description="True if ticket types/areas with prices are shown (either with quantity controls OR on a seat map / 'Choose your own' / 'Find Best available' view)"
     )
-    options: list[PriceOption] = Field(description="Every ticket area / price type combination shown with its price")
+    options: list[PriceOption] = Field(
+        description="Distinct ticket area / price type combinations shown with their price (summarise per seating tier/area, never per individual seat on the map; at most 15)"
+    )
     price_basis: str | None = Field(
         description="What the prices cover, if stated, e.g. 'per ticket incl. booking fee', 'plus service fee'"
     )
