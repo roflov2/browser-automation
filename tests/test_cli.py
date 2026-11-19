@@ -84,9 +84,18 @@ def test_options_are_stable():
     assert defaults.address == "9 Default St"  # UBEREATS_ADDRESS is the default for --address
     prelogin = parser.parse_args(["ticketek", "--prelogin"])
     assert prelogin.login is True
-    assert prelogin.workflow_class(prelogin, Settings()).login_url() == "https://premier.ticketek.com.au/membership/login.aspx"
+    assert (
+        prelogin.workflow_class(prelogin, Settings()).login_url()
+        == "https://premier.ticketek.com.au/membership/login.aspx"
+    )
 
 
 def test_virgin_rejects_past_dates():
     with pytest.raises(SystemExit):
         build_parser(Settings()).parse_args(["virgin", "--date", "2020-01-01"])
+
+
+def test_usage_report_runs_without_a_browser(tmp_path):
+    done = run_main("usage", cwd=tmp_path)
+    assert done.returncode == 0, done.stderr
+    assert "No runs" in done.stdout

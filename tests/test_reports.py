@@ -23,6 +23,12 @@ SUMMARY_COLUMNS = [
     "shipping",
     "drip_detected",
     "output_dir",
+    "duration_seconds",
+    "llm_time_seconds",
+    "llm_calls",
+    "prompt_tokens",
+    "completion_tokens",
+    "total_tokens",
 ]
 ITEM_COLUMNS = [
     "name",
@@ -178,3 +184,66 @@ def test_writes_are_atomic(output_root, monkeypatch):
         update_summary(make_result(output_root, "https://b.test", "b.test/1"), "coffee")
     assert (output_root / "summary.csv").read_text(encoding="utf-8") == before
     assert [p.name for p in output_root.iterdir() if p.name.endswith(".tmp")] == []
+
+
+# --- time and token usage per run ---------------------------------------------------------------------
+METRICS = {
+    "total_prompt_tokens": 95045.0,
+    "total_completion_tokens": 9139.0,
+    "total_reasoning_tokens": 0.0,
+    "total_cached_input_tokens": 0.0,
+    "total_inference_time_ms": 113953.0,
+}
+
+
+def test_usage_columns_are_written(output_root):
+    usage = core.RunUsage.from_metrics(199321, METRICS, llm_calls=14)
+    update_summary(make_result(output_root), "coffee", usage=usage)
+    (run,) = read_csv(output_root / "runs.csv")
+    assert {k: run[k] for k in core.USAGE_FIELDS} == {
+        "duration_seconds": "199.3",
+        "llm_time_seconds": "114.0",
+        "llm_calls": "14",
+        "prompt_tokens": "95045",
+        "completion_tokens": "9139",
+        "total_tokens": "104184",
+    }
+    assert read_csv(output_root / "summary.csv")[0]["total_tokens"] == "104184"
+
+
+def test_unknown_usage_is_left_empty_not_zero(output_root):
+    update_summary(make_result(output_root), "coffee", usage=core.RunUsage.from_metrics(5000, None))
+    (run,) = read_csv(output_root / "runs.csv")
+    assert run["duration_seconds"] == "5.0"
+    assert (run["total_tokens"], run["llm_time_seconds"], run["llm_calls"]) == ("", "", "")
+
+
+def test_usage_describe_and_sum():
+    usage = core.RunUsage.from_metrics(199321, METRICS, llm_calls=14)
+    assert usage.describe() == "Time 3m 19s (LLM 1m 54s, 14 calls) | Tokens 104,184 (95,045 in / 9,139 out)"
+    assert core.RunUsage(duration_ms=1500).describe() == "Time 1.5s | Tokens unknown"
+    total = usage + core.RunUsage(duration_ms=1000) + usage
+    assert (total.duration_ms, total.total_tokens, total.llm_calls) == (399642, 208368.0, 28)
+
+
+def test_format_duration():
+    assert [core.format_duration(s) for s in (4.25, 59.94, 61, 3599, 3720)] == [
+        "4.2s", "59.9s", "1m 01s", "59m 59s", "1h 02m",
+    ]  # fmt: skip
+
+
+def test_usage_report_backfills_old_runs_from_session_json(output_root):
+    old = make_result(output_root, "https://old.test", "old.test/1")
+    update_summary(old, "coffee")  # recorded before the usage columns existed
+    core.write_json(old.out_dir / "session.json", {"execution_time_ms": 199321, "metrics": METRICS})
+    update_summary(make_result(output_root, "https://new.test", "new.test/1"), "virgin",
+                   usage=core.RunUsage.from_metrics(60000, {**METRICS, "total_prompt_tokens": 1000.0}, 3))  # fmt: skip
+    runs = core.with_session_usage(read_csv(output_root / "runs.csv"))
+    assert [r["total_tokens"] for r in runs] == ["104184", "10139"]
+    report = core.usage_report(runs)
+    assert "coffee" in report and "104,184" in report and "3m 19s" in report
+    assert "virgin" in report and "10,139" in report and "1m 00s" in report
+
+
+def test_usage_report_without_measured_runs():
+    assert "No runs" in core.usage_report([{"workflow": "coffee", "duration_seconds": ""}])

@@ -35,8 +35,110 @@ EXTRA_FIELDS = [
 SUMMARY_FIELDS = [
     "run_at", "site", "status", "message", "items_added", "expected_subtotal", "checkout_subtotal",
     "checkout_total", "currency", "other_fees_total", "shipping", "drip_detected", "output_dir",
+    "duration_seconds", "llm_time_seconds", "llm_calls", "prompt_tokens", "completion_tokens", "total_tokens",
 ]  # fmt: skip
+USAGE_FIELDS = SUMMARY_FIELDS[SUMMARY_FIELDS.index("duration_seconds") :]  # filled from RunUsage
 RUN_FIELDS = [*SUMMARY_FIELDS, "workflow", "target", "failure_reason"]  # runs.csv: the summary columns plus the key
+
+
+@dataclass
+class RunUsage:
+    """How long one run took and how much of the model it used.
+
+    Tokens and model time come from Stagehand's metrics (this run's share of the session's counters);
+    None means they could not be read, which is not the same as zero. `llm_calls` counts the
+    observe/extract/act calls made through the recording wrapper.
+    """
+
+    duration_ms: int
+    prompt_tokens: float | None = None
+    completion_tokens: float | None = None
+    reasoning_tokens: float | None = None
+    cached_input_tokens: float | None = None
+    llm_time_ms: float | None = None
+    llm_calls: int | None = None
+
+    @classmethod
+    def from_metrics(cls, duration_ms: int, delta: dict[str, float] | None, llm_calls: int | None = None) -> RunUsage:
+        """From the per-run delta of Stagehand's metrics (see runner.metrics_delta); None leaves the LLM figures unknown."""
+        if delta is None:
+            return cls(duration_ms=duration_ms, llm_calls=llm_calls)
+        return cls(
+            duration_ms=duration_ms,
+            prompt_tokens=delta.get("total_prompt_tokens", 0.0),
+            completion_tokens=delta.get("total_completion_tokens", 0.0),
+            reasoning_tokens=delta.get("total_reasoning_tokens", 0.0),
+            cached_input_tokens=delta.get("total_cached_input_tokens", 0.0),
+            llm_time_ms=delta.get("total_inference_time_ms", 0.0),
+            llm_calls=llm_calls,
+        )
+
+    @property
+    def total_tokens(self) -> float | None:
+        if self.prompt_tokens is None or self.completion_tokens is None:
+            return None
+        return self.prompt_tokens + self.completion_tokens
+
+    def __add__(self, other: RunUsage) -> RunUsage:
+        def add(a: float | None, b: float | None) -> float | None:
+            return None if a is None and b is None else (a or 0) + (b or 0)
+
+        return RunUsage(
+            duration_ms=self.duration_ms + other.duration_ms,
+            prompt_tokens=add(self.prompt_tokens, other.prompt_tokens),
+            completion_tokens=add(self.completion_tokens, other.completion_tokens),
+            reasoning_tokens=add(self.reasoning_tokens, other.reasoning_tokens),
+            cached_input_tokens=add(self.cached_input_tokens, other.cached_input_tokens),
+            llm_time_ms=add(self.llm_time_ms, other.llm_time_ms),
+            llm_calls=_as_int(add(self.llm_calls, other.llm_calls)),
+        )
+
+    def row(self) -> dict[str, Any]:
+        """The usage columns of runs.csv and summary.csv."""
+
+        def whole(value: float | None) -> int | None:
+            return None if value is None else round(value)
+
+        return {
+            "duration_seconds": round(self.duration_ms / 1000, 1),
+            "llm_time_seconds": None if self.llm_time_ms is None else round(self.llm_time_ms / 1000, 1),
+            "llm_calls": self.llm_calls,
+            "prompt_tokens": whole(self.prompt_tokens),
+            "completion_tokens": whole(self.completion_tokens),
+            "total_tokens": whole(self.total_tokens),
+        }
+
+    def describe(self) -> str:
+        """One line for the log, e.g. 'Time 3m 19s (LLM 1m 54s, 12 calls) | Tokens 104,184 (95,045 in / 9,139 out)'."""
+        time = format_duration(self.duration_ms / 1000)
+        details = []
+        if self.llm_time_ms is not None:
+            details.append(f"LLM {format_duration(self.llm_time_ms / 1000)}")
+        if self.llm_calls is not None:
+            details.append(f"{self.llm_calls} call{'' if self.llm_calls == 1 else 's'}")
+        if details:
+            time += f" ({', '.join(details)})"
+        if self.total_tokens is None:
+            return f"Time {time} | Tokens unknown"
+        return (
+            f"Time {time} | Tokens {self.total_tokens:,.0f} "
+            f"({self.prompt_tokens or 0:,.0f} in / {self.completion_tokens or 0:,.0f} out)"
+        )
+
+
+def _as_int(value: float | None) -> int | None:
+    return None if value is None else int(value)
+
+
+def format_duration(seconds: float) -> str:
+    """'45.2s', '3m 19s', '1h 02m'."""
+    if seconds < 60:
+        return f"{seconds:.1f}s"
+    minutes, secs = divmod(round(seconds), 60)
+    if minutes < 60:
+        return f"{minutes}m {secs:02d}s"
+    hours, minutes = divmod(minutes, 60)
+    return f"{hours}h {minutes:02d}m"
 
 
 # ---------------------------------------------------------------------------
@@ -540,12 +642,15 @@ def latest_per_target(runs: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
     return list(latest.values())
 
 
-def update_summary(result: SiteResult, workflow: str = "", target: str | None = None) -> None:
+def update_summary(
+    result: SiteResult, workflow: str = "", target: str | None = None, usage: RunUsage | None = None
+) -> None:
     """Append this run to output/runs.csv (the full history) and rebuild output/summary.csv from it.
 
     summary.csv keeps its columns and holds the latest run of each (workflow, target). `target`
     identifies what was audited more precisely than the start URL, so that two restaurants or two
-    routes audited from the same start page do not replace each other.
+    routes audited from the same start page do not replace each other. `usage` fills the time and
+    token columns; they are left empty without it.
     """
     runs_path, summary_path = OUTPUT_ROOT / "runs.csv", OUTPUT_ROOT / "summary.csv"
     c = result.comparison
@@ -566,9 +671,78 @@ def update_summary(result: SiteResult, workflow: str = "", target: str | None = 
         "workflow": workflow,
         "target": target or result.site,
         "failure_reason": result.failure_reason or "",
+        **(usage.row() if usage else {}),
     }
     OUTPUT_ROOT.mkdir(parents=True, exist_ok=True)
     history: list[dict[str, Any]] = read_csv(runs_path) if runs_path.exists() else _seed_runs(read_csv(summary_path))
     history.append(row)
     write_csv(runs_path, RUN_FIELDS, history)
     write_csv(summary_path, SUMMARY_FIELDS, latest_per_target(history))
+
+
+def _number(value: str | None) -> float | None:
+    try:
+        return float(value) if value not in (None, "") else None
+    except ValueError:
+        return None
+
+
+def with_session_usage(runs: Iterable[dict[str, str]]) -> list[dict[str, str]]:
+    """Runs recorded before runs.csv had usage columns, filled in from their session.json where it is still there."""
+    filled = []
+    for original in runs:
+        row = original
+        session_path = Path(row.get("output_dir") or "") / "session.json"
+        if _number(row.get("duration_seconds")) is None and row.get("output_dir") and session_path.is_file():
+            try:
+                session = json.loads(session_path.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                session = None
+            if isinstance(session, dict) and session.get("execution_time_ms") is not None:
+                usage = RunUsage.from_metrics(int(session["execution_time_ms"]), session.get("metrics"))
+                row = {**row, **{k: "" if v is None else str(v) for k, v in usage.row().items()}}
+        filled.append(row)
+    return filled
+
+
+def usage_report(runs: Sequence[dict[str, str]], last: int = 10) -> str:
+    """Time and token usage from runs.csv: totals and averages per workflow, then the most recent runs.
+
+    Runs recorded before the usage columns existed have no figures and are left out of the averages.
+    """
+    measured = [r for r in runs if _number(r.get("duration_seconds")) is not None]
+    if not measured:
+        return "No runs with time and token usage recorded yet (output/runs.csv)."
+
+    def mean(values: list[float]) -> str:
+        return f"{sum(values) / len(values):,.0f}" if values else "-"
+
+    lines = [
+        f"{'workflow':<10} {'runs':>5} {'avg time':>9} {'avg LLM':>9} {'avg calls':>9} {'avg tokens':>11} {'total tokens':>13}"
+    ]
+    for name in dict.fromkeys(r.get("workflow", "") for r in measured):
+        rows = [r for r in measured if r.get("workflow", "") == name]
+        durations = [_number(r["duration_seconds"]) or 0.0 for r in rows]
+        llm = [v for r in rows if (v := _number(r.get("llm_time_seconds"))) is not None]
+        calls = [v for r in rows if (v := _number(r.get("llm_calls"))) is not None]
+        tokens = [v for r in rows if (v := _number(r.get("total_tokens"))) is not None]
+        lines.append(
+            f"{name or '-':<10} {len(rows):>5} {format_duration(sum(durations) / len(durations)):>9} "
+            f"{format_duration(sum(llm) / len(llm)) if llm else '-':>9} {mean(calls):>9} {mean(tokens):>11} "
+            f"{sum(tokens):>13,.0f}"
+        )
+
+    lines += ["", f"Last {min(last, len(measured))} runs:"]
+    lines.append(
+        f"{'run_at':<25} {'workflow':<10} {'status':<12} {'time':>9} {'LLM':>9} {'calls':>5} {'tokens':>10}  target"
+    )
+    for r in measured[-last:]:
+        llm_time, n_calls, n_tokens = (_number(r.get(k)) for k in ("llm_time_seconds", "llm_calls", "total_tokens"))
+        lines.append(
+            f"{r.get('run_at', ''):<25} {r.get('workflow', ''):<10} {r.get('status', ''):<12} "
+            f"{format_duration(_number(r['duration_seconds']) or 0.0):>9} "
+            f"{format_duration(llm_time) if llm_time is not None else '-':>9} "
+            f"{f'{n_calls:.0f}' if n_calls is not None else '-':>5} "
+            f"{f'{n_tokens:,.0f}' if n_tokens is not None else '-':>10}  {r.get('target') or r.get('site', '')}"
+        )
+    return "\n".join(lines)
