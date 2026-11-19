@@ -125,6 +125,71 @@ def parse_json(text: str) -> Any:
         raise ValueError(f"Azure OpenAI did not return valid JSON: {text[:200]!r}") from error
 
 
+def _resolve(schema: Any, root: dict[str, Any]) -> Any:
+    """Follows a local `$ref` (`#/$defs/...` or `#/definitions/...`); other schemas come back as they are."""
+    seen = 0
+    while isinstance(schema, dict) and isinstance(schema.get("$ref"), str) and schema["$ref"].startswith("#/"):
+        target: Any = root
+        for part in schema["$ref"][2:].split("/"):
+            target = target.get(part) if isinstance(target, dict) else None
+        if target is None or (seen := seen + 1) > 32:
+            return schema
+        schema = target
+    return schema
+
+
+def _variants(schema: Any, root: dict[str, Any]) -> list[dict[str, Any]]:
+    """The schema and, through anyOf/oneOf/allOf, every alternative it allows (refs resolved)."""
+    schema = _resolve(schema, root)
+    if not isinstance(schema, dict):
+        return []
+    found = [schema]
+    for key in ("anyOf", "oneOf", "allOf"):
+        for option in schema.get(key) or []:
+            found.extend(_variants(option, root))
+    return found
+
+
+def _allows_null(schema: Any, root: dict[str, Any]) -> bool:
+    for variant in _variants(schema, root):
+        kind = variant.get("type")
+        if kind == "null" or (isinstance(kind, list) and "null" in kind) or variant.get("nullable") is True:
+            return True
+        if "const" in variant and variant["const"] is None:
+            return True
+        if None in (variant.get("enum") or []):
+            return True
+    return False
+
+
+def fill_missing_nulls(value: Any, schema: Any, root: dict[str, Any] | None = None) -> Any:
+    """Sets every required-but-nullable key the model left out to null, at any depth; changes `value` in place.
+
+    The schema is sent without strict mode, so the model may drop a key it has nothing for instead of answering null,
+    and Stagehand's check of the answer then fails on `undefined`. Keys that cannot be null are left alone, so a real
+    gap still fails that check.
+    """
+    root = root if root is not None else (schema if isinstance(schema, dict) else {})
+    for variant in _variants(schema, root):
+        if isinstance(value, dict):
+            properties = variant.get("properties") or {}
+            for key in variant.get("required") or []:
+                if key not in value and key in properties and _allows_null(properties[key], root):
+                    value[key] = None
+            for key, child in properties.items():
+                if key in value:
+                    fill_missing_nulls(value[key], child, root)
+        elif isinstance(value, list):
+            items = variant.get("items")
+            if isinstance(items, list):  # tuple form
+                for element, child in zip(value, items, strict=False):
+                    fill_missing_nulls(element, child, root)
+            elif items is not None:
+                for element in value:
+                    fill_missing_nulls(element, items, root)
+    return value
+
+
 def _usage(usage: Any) -> dict[str, int] | None:
     if usage is None:
         return None
@@ -142,8 +207,8 @@ def _usage(usage: Any) -> dict[str, int] | None:
     return result
 
 
-def stagehand_result(response: Any, structured: bool) -> dict[str, Any]:
-    """A chat completion as Stagehand's LLM result."""
+def stagehand_result(response: Any, structured: bool, schema: Any = None) -> dict[str, Any]:
+    """A chat completion as Stagehand's LLM result; a structured answer gets the nulls it left out (see above)."""
     choice = response.choices[0]
     if getattr(choice.message, "refusal", None):
         raise ValueError(f"Azure OpenAI refused the request: {choice.message.refusal}")
@@ -155,7 +220,10 @@ def stagehand_result(response: Any, structured: bool) -> dict[str, Any]:
     if usage:
         result["usage"] = usage
     if structured:
-        return {**result, "output_format": "json_schema", "structured_content": parse_json(text)}
+        answer = parse_json(text)
+        if schema is not None:
+            fill_missing_nulls(answer, schema)
+        return {**result, "output_format": "json_schema", "structured_content": answer}
     return {**result, "output_format": "text"}
 
 
@@ -172,7 +240,9 @@ class AzureLLM:
         response = await self.client.chat.completions.create(
             model=self.deployment, messages=chat_messages(request), **options
         )
-        return stagehand_result(response, structured="response_format" in options)
+        format_ = options.get("response_format")
+        schema = format_["json_schema"]["schema"] if format_ else None
+        return stagehand_result(response, structured=format_ is not None, schema=schema)
 
 
 @contextlib.asynccontextmanager

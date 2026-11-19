@@ -14,7 +14,15 @@ import pytest
 from pydantic import BaseModel
 from stagehand._generated import models as wire
 
-from audit.azure import AzureLLM, EntraToken, UnsupportedRequest, chat_messages, completion_options, open_azure_llm
+from audit.azure import (
+    AzureLLM,
+    EntraToken,
+    UnsupportedRequest,
+    chat_messages,
+    completion_options,
+    fill_missing_nulls,
+    open_azure_llm,
+)
 from audit.config import ConfigError, Settings
 
 from .browser_support import StubModel, find_chrome, launch_args, serve
@@ -110,6 +118,48 @@ def test_fenced_json_is_accepted_and_bad_json_or_refusal_fails():
         asyncio.run(AzureLLM(FakeAzure(lambda _: completion("not json")), "d")(STRUCTURED))
     with pytest.raises(ValueError, match="refused"):
         asyncio.run(AzureLLM(FakeAzure(lambda _: completion("", refusal="no")), "d")(STRUCTURED))
+
+
+def test_left_out_nullable_keys_are_answered_as_null():
+    """GPT-4o without strict mode drops keys it has nothing for; Stagehand rejects `undefined` but accepts null."""
+    from audit.workflows.ubereats.models import Offer
+
+    nullable = {"type": ["string", "null"]}
+    schema = {  # the shape Stagehand sends (nested objects inlined, nullable as a type list)
+        "type": "object",
+        "properties": {
+            "total": nullable,
+            "offers": {"type": "array", "items": {
+                "type": "object",
+                "properties": {"label": {"type": "string"}, "price": nullable, "price_basis": nullable},
+                "required": ["label", "price", "price_basis"],
+            }},
+        },
+        "required": ["total", "offers"],
+    }  # fmt: skip
+    answer = {"offers": [{"label": "Service Fee", "price": "$4.00", "price_basis": "per order"},
+                         {"label": "Priority delivery", "price": "+$2.99"},
+                         {"price": "$1"}]}  # fmt: skip
+    request = {**STRUCTURED, "response_format": {"type": "json_schema", "name": "Cart", "schema": schema}}
+
+    result = asyncio.run(AzureLLM(FakeAzure(lambda _: completion(json.dumps(answer))), "d")(request))
+
+    assert result["structured_content"] == {
+        "total": None,
+        "offers": [{"label": "Service Fee", "price": "$4.00", "price_basis": "per order"},
+                   {"label": "Priority delivery", "price": "+$2.99", "price_basis": None},
+                   {"price": "$1", "price_basis": None}],  # a missing non-nullable key is left for Stagehand to reject
+    }  # fmt: skip
+
+    # pydantic's own schema shape: $defs/$ref, anyOf with null, and the real Offer model
+    class Cart(BaseModel):
+        offers: list[Offer]
+        note: Offer | None
+
+    filled = fill_missing_nulls({"offers": [{"category": "fee", "label": "Bag", "selected": True, "mandatory": False}]},
+                                Cart.model_json_schema())  # fmt: skip
+    assert filled == {"note": None, "offers": [{"category": "fee", "label": "Bag", "price": None, "price_basis": None,
+                                                "selected": True, "mandatory": False}]}  # fmt: skip
 
 
 def test_tool_calls_are_refused_clearly():
