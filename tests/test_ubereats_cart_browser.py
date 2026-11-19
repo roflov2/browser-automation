@@ -1,16 +1,20 @@
 """Uber Eats page steps in a real browser, against local copies of the cart drawer and the search results."""
 
 import asyncio
+import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 from audit import safety
 from audit.page import js
-from audit.workflows.ubereats.models import StoreCard, UberResult
+from audit.workflows.ubereats.models import ItemModalState, MenuItem, StoreCard, UberResult
 from audit.workflows.ubereats.store import (
     JS_ITEM_DIALOG_BLOCKER,
+    add_menu_item_to_cart,
     clear_existing_cart,
+    close_cart_drawer,
     first_open_store_card,
     get_cart_count,
     is_item_modal_open,
@@ -29,7 +33,10 @@ CASES = {
     "confirm": "?confirm=1",
     "carts_by_store": "?carts=1",
     "more_menu": "?more=1",
+    "div_rows": "?divrows=1",
+    "no_synthetic_escape": "?noesc=1",
 }
+ITEMS_BEFORE = {"div_rows": 2, "no_synthetic_escape": 2}  # every other case starts with 4
 STORES = {  # case: (the model's card, or None when its extraction failed)
     "model_failed": None,
     "model_gave_element_id": StoreCard(
@@ -58,7 +65,17 @@ class NoModel:
         raise RuntimeError("no model in this test")
 
 
-async def clear_carts(chrome: str, port: int) -> dict:
+class ModalModel(NoModel):
+    """Reads every item popup as having no required choice left, so the DOM steps click Add."""
+
+    async def extract(self, instruction: str, schema: type, **_: object) -> SimpleNamespace:
+        return SimpleNamespace(data=ItemModalState(
+            has_unmet_required_choices=False, next_required_group=None, cheapest_option_in_required_group=None,
+            button_price_display=None, paid_modifier_offers=[], reason="test",
+        ))  # fmt: skip
+
+
+async def clear_carts(chrome: str, port: int, out_dir: Path) -> dict:
     from stagehand import Stagehand, local_browser
 
     seen: dict = {}
@@ -72,13 +89,23 @@ async def clear_carts(chrome: str, port: int) -> dict:
                 await page.goto(f"http://127.0.0.1:{port}/uber-cart.html{query}")
                 model = NoModel()
                 before = await get_cart_count(page)
-                await clear_existing_cart(model, page)  # type: ignore[arg-type]
+                left = await clear_existing_cart(model, page, out_dir / case)  # type: ignore[arg-type]
                 seen[case] = {
                     "before": before,
                     "after": await get_cart_count(page),
+                    "left": left,
                     "plus_clicks": await js(page, "() => window.plusClicks"),
                     "llm": model.instructions,
+                    "drawer_open": await js(page, "() => !!document.getElementById('drawer')"),
                 }
+            # A cart that cannot be cleared: the run folder says what was tried and what the drawer held
+            await page.goto(f"http://127.0.0.1:{port}/uber-cart.html?divrows=1&stuck=1")
+            seen["stuck"] = {"left": await clear_existing_cart(NoModel(), page, out_dir / "stuck")}  # type: ignore[arg-type]
+            await page.goto(f"http://127.0.0.1:{port}/uber-cart.html?noesc=1")
+            await js(page, "() => document.getElementById('cart').dispatchEvent(new Event('click'))")
+            await js(page, "() => document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))")
+            seen["synthetic_escape_ignored"] = await js(page, "() => !!document.getElementById('drawer')")
+            seen["closed_by_key"] = await close_cart_drawer(page)
             await page.goto(f"http://127.0.0.1:{port}/uber-search.html")
             for case, card in STORES.items():
                 result = UberResult(site="ubereats", out_dir=Path())
@@ -86,6 +113,11 @@ async def clear_carts(chrome: str, port: int) -> dict:
                 seen[case] = (url.split("/store/")[-1] if url else None, result.advertised_delivery_fee_display)
             card = await first_open_store_card(page, frozenset({"/au/store/ooshman-belconnen/bbb"}))
             seen["skipping_ooshman"] = card["url"].split("/store/")[-1]
+            await page.goto(f"http://127.0.0.1:{port}/uber-store.html?other=1")
+            result = UberResult(site="ubereats", out_dir=out_dir)
+            dish = MenuItem(name="Super Supreme", category=None, price="$10.00", sold_out=False, is_food_or_drink=True)
+            seen["new_order"] = await add_menu_item_to_cart(ModalModel(), page, dish, result, 1)  # type: ignore[arg-type]
+            seen["new_order_cart"] = await get_cart_count(page)
             for case, query in (("open", ""), ("closed", "?closed=1")):
                 await page.goto(f"http://127.0.0.1:{port}/uber-store.html{query}")
                 why = await store_closed_reason(page)
@@ -101,20 +133,48 @@ async def clear_carts(chrome: str, port: int) -> dict:
 
 
 @pytest.fixture(scope="module")
-def seen() -> dict:
+def out_dir(tmp_path_factory) -> Path:
+    return tmp_path_factory.mktemp("ubereats-run")
+
+
+@pytest.fixture(scope="module")
+def seen(out_dir) -> dict:
     chrome = find_chrome()
     if chrome is None:
         pytest.skip("no Chrome/Chromium found (set CHROME_PATH to run the browser tests)")
     with serve(FIXTURE) as port:
-        return asyncio.run(clear_carts(chrome, port))
+        return asyncio.run(clear_carts(chrome, port, out_dir))
 
 
 @pytest.mark.parametrize("case", list(CASES))
-def test_leftover_cart_items_are_all_removed_without_the_model(seen, case):
-    assert seen[case]["before"] == 4
+def test_leftover_cart_items_are_all_removed_without_the_model(seen, out_dir, case):
+    assert seen[case]["before"] == ITEMS_BEFORE.get(case, 4)
     assert seen[case]["after"] == 0
+    assert seen[case]["left"] == (0, None)
     assert seen[case]["plus_clicks"] == 0
     assert seen[case]["llm"] == []
+    assert not seen[case]["drawer_open"]  # the drawer is closed afterwards, so it cannot cover the menu
+    assert not (out_dir / case / "cart_clear.json").exists()  # only a cart that could not be cleared is recorded
+
+
+def test_a_drawer_that_ignores_a_synthetic_escape_is_closed_with_a_real_key_press(seen):
+    assert seen["synthetic_escape_ignored"]
+    assert seen["closed_by_key"]
+
+
+def test_a_cart_that_cannot_be_cleared_is_named_and_recorded_in_the_run_folder(seen, out_dir):
+    assert seen["stuck"]["left"] == (2, "OOSHMAN")  # the badge counts, even where the rows give nothing to click
+    report = json.loads((out_dir / "stuck" / "cart_clear.json").read_text(encoding="utf-8"))
+    assert report["items_left"] == 2
+    assert report["store"] == "OOSHMAN"
+    assert {"step": "stepper_button", "left": 2} in report["steps"]  # each step and the count it left
+    assert "Super Supreme" in report["drawer_html"]
+    assert "Super Supreme" in report["panels_text"]
+
+
+def test_another_stores_cart_is_replaced_by_confirming_the_new_order_prompt(seen):
+    assert seen["new_order"]["status"] == "added"
+    assert seen["new_order_cart"] == 1  # this store's item, in place of the other store's
 
 
 @pytest.mark.parametrize(

@@ -129,6 +129,48 @@ def test_target_keys():
     assert uber.target_key(home, uber_models.UberResult(site=home, out_dir=Path())) == home
 
 
+def test_ubereats_empties_the_cart_after_the_run_unless_checkout_froze_the_site(monkeypatch):
+    import audit.workflows.ubereats as uber_package
+    from audit import safety
+
+    cleared: list[str] = []
+
+    async def clear(stagehand, page, out_dir=None, report_name="cart_clear.json"):
+        cleared.append(report_name)
+        return uber_store.CartLeft(0, None)
+
+    class FakePage:
+        def __init__(self) -> None:
+            self.visited: list[str] = []
+
+        async def goto(self, url: str) -> None:
+            self.visited.append(url)
+
+        async def evaluate(self, expression: str) -> object:
+            return True
+
+        async def url(self) -> str:
+            return shop
+
+    async def settled(page, ms=0):
+        return None
+
+    monkeypatch.setattr(uber_package, "clear_existing_cart", clear)
+    monkeypatch.setattr(uber_package, "settle", settled)
+    shop = "https://www.ubereats.com/au/store/ooshman-belconnen/abc"
+    uber = UberEatsWorkflow(argparse.Namespace(), Settings())
+    run = uber_models.UberResult(site="ubereats", out_dir=Path(), shop_url=shop)
+    with safety.active_guard() as guard:
+        page = FakePage()
+        asyncio.run(uber.empty_cart_after_run(None, page, run))  # type: ignore[arg-type]
+        assert page.visited == [shop]
+        assert cleared == ["cart_clear-after.json"]
+        guard.frozen.add("www.ubereats.com")  # the checkout page was identified: no more clicks on Uber Eats
+        asyncio.run(uber.empty_cart_after_run(None, page, run))  # type: ignore[arg-type]
+        assert page.visited == [shop]
+        assert cleared == ["cart_clear-after.json"]
+
+
 def test_ubereats_output_folder():
     uber = UberEatsWorkflow(argparse.Namespace(), Settings())
     assert uber.output_folder("https://www.ubereats.com/au") == "ubereats.com"
