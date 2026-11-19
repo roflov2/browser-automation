@@ -1,0 +1,7 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Self-submitting page</title></head>
+<body>
+<!-- An ordinary page whose own script submits its form through a 'Buy now' button, which is denied everywhere -->
+<form id="f" action="/static.html" method="get"><button id="buy" type="submit">Buy now</button></form>
+<script>window.addEventListener('load', () => document.getElementById('f').requestSubmit(document.getElementById('buy')));</script>
+</body></html>

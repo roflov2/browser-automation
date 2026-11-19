@@ -383,3 +383,24 @@ def test_dismiss_popups_skips_subscribe_and_presses_escape(monkeypatch):
     asyncio.run(page_helpers.dismiss_popups(stagehand, page, "newsletter popup"))  # must not raise
     assert stagehand.acted == []
     assert page.keys == ["Escape"]
+
+
+def test_a_submit_the_checkout_page_makes_itself_is_logged_not_fatal(caplog):
+    blocked = [{"why": "form submit on a checkout page", "kind": "submit"}]
+    with safety.active_guard(), caplog.at_level("INFO"):
+        safety.raise_if_page_refused("https://shop.example/checkouts/cn/abc", blocked)
+        safety.raise_if_page_refused("https://shop.example/anything", [])  # nothing cancelled, nothing to do
+    assert "nothing was sent" in caplog.text
+
+
+def test_a_page_side_block_on_an_ordinary_page_still_ends_the_run():
+    blocked = [{"why": "purchase, payment or membership control: Buy now", "kind": "click"}]
+    with safety.active_guard(), pytest.raises(UnsafeActionRefused, match="Buy now"):
+        safety.raise_if_page_refused("https://shop.example/products/kenya", blocked)
+
+
+def test_a_page_side_block_on_a_frozen_host_is_not_fatal():
+    blocked = [{"why": safety.FROZEN_REASON, "kind": "submit"}]
+    with safety.active_guard() as guard:
+        guard.frozen.add("pay.example")
+        safety.raise_if_page_refused("https://pay.example/summary", blocked)
