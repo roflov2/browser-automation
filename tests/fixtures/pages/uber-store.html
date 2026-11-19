@@ -1,0 +1,62 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Uber store</title></head>
+<body>
+<!-- An Uber Eats store page as the item and cart steps meet it: the delivery address in the header, a long
+     menu of cards (title, price and a '+' quick-add button each), the item modal over the menu, and the cart
+     drawer. ?upsell=1 also opens an upsell popup beside the drawer. -->
+<header>
+  <a href="/au">Uber Eats</a>
+  <button data-testid="edit-delivery-location-button" style="width:220px;height:40px">1 Jeffcott Pl • Now</button>
+  <button id="cart" data-testid="view-carts-btn" style="width:80px;height:40px">Cart</button>
+</header>
+<main>
+  <h1>OOSHMAN - Belconnen</h1>
+  <ul id="menu"></ul>
+</main>
+<script>
+const params = new URLSearchParams(location.search);
+window.cartCount = 0;
+window.quickAdds = 0;
+const menu = document.getElementById('menu');
+const names = ['Super Supreme', 'Garlic Bread', 'Margherita'];
+for (let i = 0; i < 60; i++) names.push(`Filler dish number ${i} with a long description of its toppings`);
+names.forEach((name, i) => {
+  const li = document.createElement('li');
+  li.style.cssText = 'height:80px';
+  li.innerHTML = `<div role="button" class="card" style="width:400px;height:70px"><h3>${name}</h3>` +
+    `<span>$${(10 + i).toFixed(2)}</span><p>Tasty ${name.toLowerCase()} made fresh daily.</p></div>` +
+    `<button class="plus" aria-label="Quick add" style="width:30px;height:30px">+</button>`;
+  li.querySelector('.card').onclick = () => openModal(name, 10 + i);
+  li.querySelector('.plus').onclick = () => { window.quickAdds++; };
+  menu.append(li);
+});
+
+function dialog(id, html, css) {
+  const d = document.createElement('div');
+  d.id = id;
+  d.setAttribute('role', 'dialog');
+  d.style.cssText = 'position:fixed;background:#fff;' + css;
+  d.innerHTML = html;
+  document.body.append(d);
+  return d;
+}
+
+function openModal(name, price) {
+  window.openedItem = name;
+  dialog('modal', `<h2>${name}</h2><p>Required: Choose a base</p>` +
+    `<label><input type="radio" name="base"> Classic</label><label><input type="radio" name="base"> Gluten free +$3.00</label>` +
+    `<button id="add" style="width:300px;height:40px">Add 1 to order • $${price.toFixed(2)}</button>`,
+    'top:50px;left:200px;width:600px;height:500px');
+}
+
+function openDrawer() {
+  dialog('drawer', '<h2>Your cart</h2><ul><li>Super Supreme $22.40</li></ul><p>Subtotal $22.40</p>' +
+    '<button style="width:200px;height:40px">Go to checkout</button>', 'top:0;right:0;width:400px;height:600px');
+  if (params.get('upsell')) {
+    dialog('upsell', '<h2>Complete your meal</h2><button style="width:100px;height:30px">Skip</button>',
+      'top:100px;left:100px;width:400px;height:300px');
+  }
+}
+document.getElementById('cart').onclick = openDrawer;
+</script>
+</body></html>

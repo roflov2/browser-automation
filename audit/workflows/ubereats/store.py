@@ -6,8 +6,10 @@ import functools
 import json
 import logging
 import re
+from typing import TypeVar
 from urllib.parse import parse_qs, quote_plus, unquote, urljoin, urlparse
 
+from pydantic import BaseModel
 from stagehand import Page, Stagehand
 
 from ... import page as page_helpers
@@ -38,6 +40,7 @@ from .models import (
 )
 
 log = logging.getLogger(__name__)
+ModelT = TypeVar("ModelT", bound=BaseModel)
 
 SITE_URL = "https://www.ubereats.com/au"
 CHECKOUT_URL = f"{SITE_URL}/checkout"
@@ -64,6 +67,16 @@ NON_RESTAURANT_NAMES = (
     "bp ",
     "caltex",
     "officeworks",
+    # Kinds of shop rather than chains: the feed card is picked from the page, without the model's judgement
+    "supermarket",
+    "grocer",
+    "liquor",
+    "cellars",
+    "bottle shop",
+    "pharmacy",
+    "chemist",
+    "convenience",
+    "petrol",
 )
 STREET_TYPES = {
     "st",
@@ -157,6 +170,13 @@ const addButton = () => Array.from(document.querySelectorAll('button')).find(
     b => /^(Add\s+\d*\s*to\s+(order|cart)|Update\s+order)/i.test(txt(b)) && vis(b, 80, 25));
 const cartButtons = () => Array.from(document.querySelectorAll(
     '[data-testid*="cart" i], button[aria-label*="cart" i], button[aria-label*="bag" i]'));
+// Tag the one element an extraction should be limited to (see SCOPE); null clears the tag
+const markScope = el => {
+    document.querySelectorAll('[data-audit-scope]').forEach(n => n.removeAttribute('data-audit-scope'));
+    if (!el) return false;
+    el.setAttribute('data-audit-scope', '1');
+    return true;
+};
 """
 
 
@@ -208,6 +228,8 @@ JS_SET_ADDRESS = r"""({ target, tokens }) => {
     for (const inp of document.querySelectorAll(
         'input[placeholder*="address" i], input[aria-label*="address" i], input[placeholder*="Deliver" i], [role="dialog"] input[type="text"], [role="dialog"] input:not([type])')) {
         if (!vis(inp, 100, 20)) continue;
+        if (inp.type === 'email' || inp.type === 'password'
+            || /e-?mail/i.test((inp.placeholder || '') + ' ' + (inp.getAttribute('aria-label') || ''))) continue;
         if (hasTokens(inp.value || '')) return 'Waiting for autocomplete suggestions...';
         if (inp.value && !hasTokens(inp.value)) {
             const box = inp.closest('[role="dialog"], [aria-modal="true"]') || inp.parentElement?.parentElement;
@@ -234,6 +256,51 @@ JS_SET_ADDRESS = r"""({ target, tokens }) => {
         }
     }
     return null;
+}"""
+
+# Labels of the header's delivery-address control(s), so the address can be checked without the model
+JS_HEADER_ADDRESS = r"""() => {
+    const out = [];
+    for (const el of document.querySelectorAll(
+        'header button, header a, [data-testid*="location" i], [data-testid*="address" i], button[aria-label*="deliver" i]')) {
+        if (el.closest('[role="dialog"], [aria-modal="true"], [role="listbox"]') || !vis(el, 50, 20)) continue;
+        const label = clean(txt(el) + ' ' + (el.getAttribute('aria-label') || ''));
+        if (label && label.length < 160 && !/cart|bag|sign\s*in|log\s*in|search/i.test(label)) out.push(label);
+    }
+    return out;
+}"""
+
+# The open item modal: the dialog holding the 'Add to order' button
+JS_MARK_ITEM_MODAL = r"""() => {
+    const btn = addButton();
+    return markScope(btn && btn.closest('[role="dialog"], [aria-modal="true"]'));
+}"""
+
+# The open cart drawer, but only when nothing else is open beside it (an upsell or item modal must be seen)
+JS_MARK_CART_DRAWER = r"""() => {
+    const drawer = cartDrawer();
+    if (!drawer || addButton()) return markScope(null);
+    const others = dialogs().filter(d => vis(d, 120, 80) && !drawer.contains(d) && !d.contains(drawer));
+    return markScope(others.length ? null : drawer);
+}"""
+
+# Open a menu item's modal by clicking the card whose title is exactly the item's name (never a '+' quick-add)
+JS_CLICK_MENU_ITEM = r"""({ name, price }) => {
+    const norm = s => clean(s).toLowerCase();
+    const want = norm(name);
+    const cents = (price || '').replace(/[^\d.]/g, '');
+    const firstLine = el => norm(txt(el).split('\n')[0]);
+    const cards = [];
+    for (const el of (document.querySelector('main') || document.body).querySelectorAll('h1, h2, h3, h4, h5, h6, span, p, div')) {
+        if (el.closest('[role="dialog"], [aria-modal="true"], header, footer') || !vis(el, 20, 8)) continue;
+        if (firstLine(el) !== want || Array.from(el.children).some(c => firstLine(c) === want)) continue;
+        const card = el.closest('a[href], button, [role="button"]') || el.closest('li');
+        if (card && vis(card, 40, 20) && !cards.includes(card)) cards.push(card);
+    }
+    const card = cards.find(c => cents && txt(c).includes(cents)) || cards[0];
+    if (!card) return null;
+    card.scrollIntoView({ block: 'center', behavior: 'instant' });
+    return safeClick(card) ? clean(txt(card)).slice(0, 80) : null;
 }"""
 
 JS_CART_COUNT = r"""() => {
@@ -409,19 +476,40 @@ JS_FIND_STORE = r"""({ preferred, excluded }) => {
         const low = name.toLowerCase();
         if (!name || !vis(a, 40, 20)) continue;
         if (excluded.some(bad => low.includes(bad) || a.href.toLowerCase().includes('/store/' + bad))) continue;
-        const feeMatch = clean(cardOf(a).innerText).match(FEE);
+        const cardText = clean(cardOf(a).innerText);
+        const feeMatch = cardText.match(FEE);
         found.push({
             name,
             url: a.href,
             deliveryFee: feeMatch ? feeMatch[1] : null,
+            closed: /\b(closed|currently unavailable|unavailable|opens (at|in|tomorrow|on)|not accepting orders)\b/i.test(cardText),
             match: !!pref && norm(name).includes(pref)
         });
     }
-    return found.find(c => c.match) || found[0] || null;
+    return found.find(c => c.match) || found.find(c => !c.closed) || found[0] || null;
 }"""
 
 
 js = functools.partial(page_helpers.js, lib=UBER_JS + CART_DRAWER_JS)
+
+# The element markScope() tagged. An extraction limited to it reads that dialog or drawer, not the whole
+# store page behind it (a full menu is tens of thousands of tokens; a modal is a few thousand).
+SCOPE = '[data-audit-scope="1"]'
+
+
+async def scoped_extract(
+    stagehand: Stagehand, page: Page, mark_js: str, instruction: str, schema: type[ModelT], scope_note: str
+) -> ModelT:
+    """extract() limited to the element `mark_js` tags, or of the whole page when it tags nothing.
+
+    A scoped extraction that fails (the element went away mid-call) is asked again of the whole page.
+    """
+    if await js(page, mark_js, default=False):
+        try:
+            return (await stagehand.extract(f"{instruction} {scope_note}", schema, locator=page.locator(SCOPE))).data
+        except ExtractFailed as error:
+            log.debug("Scoped %s extraction failed (%s); reading the whole page", schema.__name__, error)
+    return (await stagehand.extract(instruction, schema)).data
 
 
 async def is_item_modal_open(page: Page) -> bool:
@@ -538,26 +626,38 @@ def address_instruction(state: AddressAndFeedState, address: str) -> str:
 
 
 async def confirm_address_step(stagehand: Stagehand, page: Page, address: str, url: str, step_no: int) -> bool:
-    """One round of making the header show `address`: True once it does, otherwise one step towards it."""
+    """One round of making the header show `address`: True once it does, otherwise one step towards it.
+
+    The header and the `pl=` URL parameter are read from the page first; the model is only asked to read
+    the screen (the whole feed page, the costliest extraction of the run) when the page snippets can
+    neither confirm the address nor move it forward.
+    """
+    pl_addr = extract_pl_address_from_url(url)
+    shown = next(
+        (label for label in await js(page, JS_HEADER_ADDRESS, default=[]) if addresses_match(label, address)), None
+    )
+    if shown or addresses_match(pl_addr, address):
+        log.info(f"  Delivery address confirmed: {shown or pl_addr}")
+        return True
+
+    dom_step = await js(page, JS_SET_ADDRESS, {"target": address, "tokens": street_tokens(address)})
+    if dom_step:
+        log.info(f"  Address step {step_no} (DOM): {dom_step}")
+        await settle(page, 2200)
+        return False
+
     state = (await stagehand.extract(ADDRESS_QUESTION, AddressAndFeedState)).data
     if state.blocked_reason:
         raise Blocked(state.blocked_reason)
-
-    pl_addr = extract_pl_address_from_url(url)
-    if addresses_match(state.displayed_address, address) or addresses_match(pl_addr, address):
-        log.info(f"  Delivery address confirmed: {state.displayed_address or pl_addr}")
+    if addresses_match(state.displayed_address, address):
+        log.info(f"  Delivery address confirmed: {state.displayed_address}")
         return True
-
     if state.displayed_address and not state.address_modal_or_input_open:
         log.info(
             f"  Header shows previous address '{state.displayed_address}' (expected '{address}'); updating delivery address..."
         )
-    dom_step = await js(page, JS_SET_ADDRESS, {"target": address, "tokens": street_tokens(address)})
-    if dom_step:
-        log.info(f"  Address step {step_no} (DOM): {dom_step}")
-    else:
-        act_res = await safe_act(stagehand, page, address_instruction(state, address))
-        log.info(f"  Address step {step_no}: {act_res.description}")
+    act_res = await safe_act(stagehand, page, address_instruction(state, address))
+    log.info(f"  Address step {step_no}: {act_res.description}")
     await settle(page, 2200)
     return False
 
@@ -599,17 +699,35 @@ async def store_url(page: Page, chosen: StoreCard | None, result: UberResult) ->
     return model_url or dom_store["url"]
 
 
-async def open_store_from_feed(stagehand: Stagehand, page: Page, result: UberResult) -> None:
-    """Pick a restaurant from the feed or search results and open its page."""
-    chosen: StoreCard | None = None
-    try:
-        chosen = choose_store((await stagehand.extract(FEED_QUESTION, StoreFeed, timeout=25_000)).data.stores)
-    except (ExtractFailed, StepTimeout) as error:
-        log.info(f"  Could not read the store cards ({error}); picking the first store link on the page")
-    if chosen:
-        note_advertised_fees(result, chosen)
+async def first_open_store_card(page: Page) -> dict | None:
+    """The first open store card on the page that is not a supermarket, liquor store or the like, else None."""
+    card = await js(page, JS_FIND_STORE, {"preferred": "", "excluded": list(NON_RESTAURANT_NAMES)})
+    return card if card and not card.get("closed") and is_valid_restaurant_name(card.get("name")) else None
 
-    target_url = await store_url(page, chosen, result)
+
+async def open_store_from_feed(stagehand: Stagehand, page: Page, result: UberResult) -> None:
+    """Pick a restaurant from the feed or search results and open its page.
+
+    The store cards are read from the page (name, link, the fee printed on the card, closed or not); the
+    model reads the whole feed only when no open restaurant card is found that way.
+    """
+    chosen: StoreCard | None = None
+    card = await first_open_store_card(page)
+    if card:
+        result.store_name = card["name"]
+        result.store_location = result.store_location or extract_suburb_hint(card["name"])
+        if card.get("deliveryFee"):
+            result.advertised_delivery_fee_display = card["deliveryFee"]
+            result.advertised_delivery_fee = parse_price(card["deliveryFee"])
+        target_url: str | None = card["url"]
+    else:
+        try:
+            chosen = choose_store((await stagehand.extract(FEED_QUESTION, StoreFeed, timeout=25_000)).data.stores)
+        except (ExtractFailed, StepTimeout) as error:
+            log.info(f"  Could not read the store cards ({error}); picking the first store link on the page")
+        if chosen:
+            note_advertised_fees(result, chosen)
+        target_url = await store_url(page, chosen, result)
     if target_url:
         log.info(
             f"  Picking store: {result.store_name or target_url} "
@@ -694,7 +812,20 @@ def order_item(menu_item: MenuItem, **extra: object) -> Item:
 
 async def open_item_modal(stagehand: Stagehand, page: Page, menu_item: MenuItem, cart_count_before: int) -> bool | None:
     """Open the item's customisation modal. True if it is open, None if the item was quick-added
-    without a modal, False if it could not be opened."""
+    without a modal, False if it could not be opened.
+
+    The item's card is clicked from the page first; the model (which reads the whole menu) only looks
+    for it when that click does not open the modal.
+    """
+    clicked = await js(page, JS_CLICK_MENU_ITEM, {"name": menu_item.name, "price": menu_item.price})
+    if clicked:
+        log.info(f"    Open item (DOM): {clicked}")
+        await settle(page, 1800)
+        if await is_item_modal_open(page):
+            return True
+        if await get_cart_count(page) > cart_count_before:
+            return None
+
     step = await safe_act(
         stagehand,
         page,
@@ -728,14 +859,16 @@ async def modal_round(
         log.info(f"    Auto-selected required option(s): {', '.join(picked)}")
         await settle(page, 800)
 
-    modal_state = (
-        await stagehand.extract(
-            f"We are inside the item modal for '{menu_item.name}' (menu price {menu_item.price}). "
-            "Check if any section marked 'Required' (or 'Choose 1') still has NO option selected. "
-            "Also extract the price on the bottom 'Add to order' button and up to 10 paid modifier options.",
-            ItemModalState,
-        )
-    ).data
+    modal_state = await scoped_extract(
+        stagehand,
+        page,
+        JS_MARK_ITEM_MODAL,
+        f"We are inside the item modal for '{menu_item.name}' (menu price {menu_item.price}). "
+        "Check if any section marked 'Required' (or 'Choose 1') still has NO option selected. "
+        "Also extract the price on the bottom 'Add to order' button and up to 10 paid modifier options.",
+        ItemModalState,
+        "Only the item modal is shown.",
+    )
     record_offers(result, item_idx, "item_modal", menu_item.name, modal_state.paid_modifier_offers)
     if modal_state.button_price_display:
         select_price(item, modal_state.button_price_display)
@@ -825,7 +958,17 @@ async def read_checkout_step(
     stagehand: Stagehand, page: Page, result: UberResult, step_idx: int, url: str
 ) -> tuple[CartAndCheckoutState, str]:
     """Extract the current screen of the ordering flow and record it as a step. Returns (state, step type)."""
-    state = (await stagehand.extract(CHECKOUT_QUESTION, CartAndCheckoutState)).data
+    if "/checkout" in url:
+        state = (await stagehand.extract(CHECKOUT_QUESTION, CartAndCheckoutState)).data
+    else:
+        state = await scoped_extract(
+            stagehand,
+            page,
+            JS_MARK_CART_DRAWER,
+            CHECKOUT_QUESTION,
+            CartAndCheckoutState,
+            "Only the open cart drawer is shown (nothing else is open over the store page).",
+        )
     step_type = "checkout" if state.is_checkout_page else state.step_type
     log.info(
         f"  Step {step_idx}: {step_type} | subtotal={state.subtotal} | "

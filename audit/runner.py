@@ -233,7 +233,12 @@ class RecordingStagehand:
 
         async def counted(*args: Any, **kwargs: Any) -> Any:
             self.llm_calls += 1
-            return await attribute(*args, **kwargs)
+            result = await attribute(*args, **kwargs)
+            usage = getattr(getattr(result, "metadata", None), "usage", None)
+            if usage is not None:  # observe/act are not in extractions.jsonl, so -v is where their cost shows
+                instruction = str(args[0] if args else kwargs.get("instruction", ""))
+                log.debug("%s: %s tokens in (%.70s)", name, getattr(usage, "input_tokens", "?"), instruction)
+            return result
 
         return counted
 

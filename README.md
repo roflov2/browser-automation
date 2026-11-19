@@ -124,6 +124,8 @@ python main.py ubereats https://www.ubereats.com/au/store/... --restaurant-url h
 
 Sets the delivery address, records the delivery and service fees advertised on the feed card and store banner, clears any leftover cart, adds 1–5 menu items (cheapest required modifiers, no paid add-ons), and walks the cart to the checkout screen to read every fee. It then finds the restaurant's own website (by search, or `--restaurant-url`), walks Menu → Order online → Pickup → nearest store until prices are on screen, and reports the Uber Eats markup per item. `--skip-direct-site` skips that last part.
 
+To keep the token count down, the steps the page can answer itself never go to the model: the header's delivery address, the first open restaurant card on the feed (its link and printed fee), and the click that opens a menu item. Each falls back to the model when the page does not give the answer. The item modal and the cart drawer are read on their own rather than with the whole menu behind them; when another popup is open beside the drawer, the whole page is read so the popup is seen. Run with `-v` to see the input tokens of every observe and act call (extractions are in `extractions.jsonl`).
+
 ### Ticketek
 
 ```bash
