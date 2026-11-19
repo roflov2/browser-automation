@@ -146,7 +146,7 @@ def format_duration(seconds: float) -> str:
 # ---------------------------------------------------------------------------
 class Fee(BaseModel):
     label: str
-    amount: str
+    amount: str | None = Field(description="Amount as displayed, e.g. '$1.50'; null if no amount is shown")
 
 
 class LineItem(BaseModel):
