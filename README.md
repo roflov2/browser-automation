@@ -62,7 +62,11 @@ python main.py <workflow> --help   # a workflow's options
 Options shared by every workflow:
 
 - `--local`: use local Chrome even if Browserbase credentials are set.
-- `--login`: open the site in the persistent local Chrome profile (`.chrome-profile/`) so you can sign in by hand, then exit. Later local runs reuse that login. Not available for `virgin`, which always starts from a fresh browser.
+- `--login`: open the site in the local Chrome profile (`.chrome-profile/`) so you can sign in by hand, then exit. Later local runs reuse that login.
+
+Every workflow's local runs share the one `.chrome-profile/`, so a sign-in done for one workflow holds for the others. Each run opens a new tab and closes any tabs the profile had open. A workflow with `clear_cookies = "domain"` clears only that site's own cookies (its domain and subdomains) before each run; other sites' sign-ins stay.
+
+If your network requires a Microsoft (Azure) sign-in before the browser can reach the internet, a headed run opens the first site, sees the sign-in page and waits: sign in in the browser window, then press Enter in the terminal. A site that ends on that sign-in page partway through a run pauses the same way and is then run again once. The sign-in is kept in the profile for later runs. A headless run, or one without an interactive terminal, cannot pause, so those sites are recorded as `blocked`.
 - `-v` / `--verbose`: also show debug detail (waits, errors that were handled). `-q` / `--quiet`: warnings and errors only.
 
 ## Safety
@@ -163,7 +167,7 @@ A workflow holds only what is particular to its site: CLI options, prompts, sche
 
 ### Adding a workflow
 
-1. Create `audit/workflows/<name>.py` with a `Workflow` subclass. Set `name` and `help`, and implement `add_arguments`, `targets`, `run` and `summarise`. Class attributes choose the session behaviour (`system_prompt`, `persistent_profile`, `viewport`, `clear_cookies`).
+1. Create `audit/workflows/<name>.py` with a `Workflow` subclass. Set `name` and `help`, and implement `add_arguments`, `targets`, `run` and `summarise`. Class attributes choose the session behaviour (`system_prompt`, `viewport`, `clear_cookies`).
 2. In `run`, fill in the `SiteResult` (`status`, `items`, `extras`, `steps`, `comparison`). Use `safe_act()` for every LLM action and `safeClick`/`safeSelect`/`safeFill` in page scripts. Raise `Blocked` for login walls and bot checks, or another `AuditError` (`ElementNotFound`, `FlowChanged`, ...) for a specific failure. Build the verdict with `drip_outcome()`, so that a run that never read the final price reports `drip_detected: null`. Override `target_key()` if one start URL can lead to different things.
 3. Add the class to `WORKFLOWS` in `audit/workflows/__init__.py`.
 

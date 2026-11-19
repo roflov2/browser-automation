@@ -28,9 +28,10 @@ class Workflow(ABC):
     log_level: ClassVar[Literal["off", "error", "warn", "info", "debug"]] = (
         "warn"  # Stagehand log level recorded in session.json
     )
-    persistent_profile: ClassVar[bool] = True  # keep cookies/logins in .chrome-profile between local runs
     viewport: ClassVar[tuple[int, int] | None] = None  # local browser window size; None for Chrome's default
-    clear_cookies: ClassVar[str | None] = None  # before each site: "domain" (that site's only), "all" or None
+    # "domain": before each site, clear that site's own cookies (and its subdomains'). Never everything: every
+    # workflow shares the .chrome-profile, which also holds the corporate SSO login and other sites' sign-ins.
+    clear_cookies: ClassVar[Literal["domain"] | None] = None
     result_class: ClassVar[type[SiteResult]] = SiteResult
     item_fields: ClassVar[Sequence[str]] = ITEM_FIELDS  # columns of price_comparison.csv
 

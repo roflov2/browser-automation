@@ -114,15 +114,88 @@ def test_run_folder_and_cookie_scope(output_root):
     browser = FakeBrowser()
     result, _ = audit(workflow_that(lambda r: None, clear_cookies="domain"), browser=browser)
     assert result.out_dir.parent == output_root / "shop.test"
-    assert browser.cleared == [{"domain": "shop.test"}]
-    everything = FakeBrowser()
-    audit(workflow_that(lambda r: None, clear_cookies="all"), browser=everything)
-    assert everything.cleared == [{}]
+    [scope] = browser.cleared
+    domain = scope["domain"]  # the site and its subdomains, never the shared profile's other logins
+    assert all(domain.search(d) for d in ("shop.test", ".shop.test", "checkout.shop.test", "WWW.Shop.Test"))
+    assert not any(domain.search(d) for d in ("login.microsoftonline.com", "notshop.test", "shop.test.evil"))
+    untouched = FakeBrowser()
+    audit(workflow_that(lambda r: None), browser=untouched)
+    assert untouched.cleared == []
+
+
+class SsoPage(FakePage):
+    """A page that sits on the Microsoft sign-in page until `sign_in()` is called."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.location = "https://login.microsoftonline.com/common/oauth2/authorize"
+
+    def sign_in(self) -> None:
+        self.location = "https://www.shop.test/x"
+
+    async def url(self) -> str:
+        return self.location
+
+
+def test_a_network_sign_in_pauses_then_runs_the_site_again(output_root, monkeypatch):
+    page, runs, pauses = SsoPage(), [], []
+
+    async def no_wait(*args) -> None:
+        return None
+
+    async def user_signs_in(pg, message, interactive) -> bool:
+        pauses.append(interactive)
+        pg.sign_in()
+        return True
+
+    def outcome(result) -> None:
+        runs.append(page.location)
+        if "microsoftonline" in page.location:
+            raise Blocked("A Microsoft Sign-in page is displayed")
+        result.status = Status.OK
+
+    monkeypatch.setattr(runner, "wait_out_sso", no_wait)
+    monkeypatch.setattr(runner, "pause_for_login", user_signs_in)
+    workflow = workflow_that(outcome)
+    result = asyncio.run(audit_site(workflow, object(), page, FakeBrowser(), "https://www.shop.test/x", True))
+    assert result.status == "ok" and pauses == [True] and len(runs) == 2
+
+    headless = SsoPage()
+    page = headless
+    result = asyncio.run(audit_site(workflow, object(), headless, FakeBrowser(), "https://www.shop.test/x", False))
+    assert result.status == "blocked" and pauses == [True]  # no pause without a person to sign in
+
+
+def test_a_run_starts_in_one_fresh_tab():
+    class Tab:
+        def __init__(self, tabs: list) -> None:
+            self.tabs = tabs
+            tabs.append(self)
+
+        async def close(self) -> None:
+            self.tabs.remove(self)
+
+    tabs: list = []
+    restored = [Tab(tabs), Tab(tabs)]
+    active = []
+
+    async def pages() -> list:
+        return list(tabs)
+
+    async def new_page() -> Tab:
+        return Tab(tabs)
+
+    async def set_active_page(page) -> None:
+        active.append(page)
+
+    browser = SimpleNamespace(context=SimpleNamespace(pages=pages, new_page=new_page, set_active_page=set_active_page))
+    page = asyncio.run(runner.fresh_tab(browser))
+    assert tabs == [page] == active and page not in restored
 
 
 def test_failed_cookie_clearing_is_reported_not_hidden(output_root, caplog):
     with caplog.at_level(logging.WARNING, logger="audit"):
-        audit(workflow_that(lambda r: None, clear_cookies="all"), browser=FakeBrowser(fail_clear=True))
+        audit(workflow_that(lambda r: None, clear_cookies="domain"), browser=FakeBrowser(fail_clear=True))
     assert "Could not clear cookies" in caplog.text
 
 

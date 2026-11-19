@@ -689,9 +689,8 @@ class VirginWorkflow(Workflow):
     help = "Virgin Australia: book a one-way flight up to the payment page and record every extra and fee offered"
     system_prompt = SAFETY_PROMPT
     log_level = "info"
-    persistent_profile = False  # every booking starts from a fresh browser
     viewport = (1440, 1000)
-    clear_cookies = "all"
+    clear_cookies = "domain"  # every booking starts without Virgin's cookies from the last one
 
     @classmethod
     def add_arguments(cls, parser: argparse.ArgumentParser, settings: Settings) -> None:
