@@ -6,8 +6,10 @@ from time import perf_counter
 
 import pytest
 
-from audit.core import PageScriptError
+from audit import safety
+from audit.core import PageScriptError, UnsafeActionRefused
 from audit.page import js, settle, shot, try_goto, wait_for_render, wait_until
+from audit.workflows.coffee import Product, resolve_product_url
 
 from .browser_support import find_chrome, launch_args, serve
 
@@ -36,6 +38,32 @@ async def observe_page(chrome: str, port: int, tmp: Path) -> dict:
             except PageScriptError as error:
                 return str(error)
             return None
+
+        # The checkout page's own script submits a form as it loads: cancelled and logged, the run goes on.
+        # The same on an ordinary page may be the late effect of a click of ours, so it still ends the run.
+        await safety.install(browser.context, page)
+        with safety.active_guard():
+            for name, path in (("checkout", "/checkout/"), ("ordinary", "/self-submit.html")):
+                await page.goto(f"{base}{path}")
+                try:
+                    await settle(page, 1000)
+                    seen[f"self_submit_{name}"] = ("went on", await page.url())
+                except UnsafeActionRefused as refusal:
+                    seen[f"self_submit_{name}"] = ("refused", str(refusal))
+
+        # Which link a coffee product is opened from, whatever URL the model extracted for it
+        await page.goto(f"{base}/carousel.html")
+        shop = f"{base}/carousel.html"
+        for case, name, url in (
+            ("model_gave_section_link", "Lomaverde, Colombia", "/collections/single"),
+            ("model_gave_element_id", "Lomaverde, Colombia", "4-2475"),
+            ("model_gave_nothing", "Kamvara Estate AA, Kenya", None),
+            ("name_not_on_page_but_linked", "Mystery Blend", f"{base}/products/unnamed-card/"),
+            ("name_not_on_page_and_not_linked", "Mystery Blend", "/products/made-up"),
+        ):
+            product = Product(name=name, price="", sold_out=False, is_coffee=True, product_type="other", url=url)
+            found = await resolve_product_url(page, product, shop)
+            seen[f"resolve_{case}"] = found.removeprefix(base) if found else None
 
         await page.goto(f"{base}/static.html")
         seen["value"] = await js(page, "() => document.title")
@@ -131,3 +159,29 @@ def test_wait_for_render(seen):
 def test_screenshot_and_navigation_helpers(seen):
     assert seen["screenshot_bytes"] > 1000
     assert seen["goto_ok"] is True
+
+
+def test_a_checkout_page_submitting_its_own_form_does_not_end_the_run(seen):
+    outcome, url = seen["self_submit_checkout"]
+    assert outcome == "went on"
+    assert url.endswith("/checkout/")  # the submit was cancelled: the page did not navigate away
+
+
+def test_a_page_submitting_its_own_form_elsewhere_still_ends_the_run(seen):
+    outcome, why = seen["self_submit_ordinary"]
+    assert outcome == "refused"
+    assert "Buy now" in why and "requestSubmit" in why
+
+
+@pytest.mark.parametrize(
+    ("case", "expected"),
+    [
+        ("model_gave_section_link", "/products/lomaverde-colombia"),  # the redbrick.coffee skip
+        ("model_gave_element_id", "/products/lomaverde-colombia"),
+        ("model_gave_nothing", "/products/kamvara-estate-aa"),
+        ("name_not_on_page_but_linked", "/products/unnamed-card"),
+        ("name_not_on_page_and_not_linked", None),  # clicked by name instead
+    ],
+)
+def test_a_product_is_opened_from_the_link_the_page_gives_it(seen, case, expected):
+    assert seen[f"resolve_{case}"] == expected

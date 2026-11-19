@@ -412,7 +412,7 @@ def wrap_snippet(guard: Guard, body: str, call: str) -> str:
         "let value = null, error = null;\n"
         f"try {{ value = {call}; }} catch (e) {{ error = String(e); }}\n"
         "const G = window.__auditGuard;\n"
-        "return { value: value === undefined ? null : value, error, refused: auditRefused.concat(G ? G.drain() : []) }; })()"
+        "return { value: value === undefined ? null : value, error, refused: auditRefused, background: G ? G.drain() : [] }; })()"
     )
 
 
@@ -420,6 +420,22 @@ def raise_if_refused(refused: Sequence[Mapping[str, Any]] | None) -> None:
     """Turn refusals reported by the page (safeClick or the in-page blocker) into the run-ending exception."""
     if refused:
         raise UnsafeActionRefused("; ".join(f"{r.get('why')} [{r.get('kind')}]" for r in refused))
+
+
+def raise_if_page_refused(page_url: str, blocked: Sequence[Mapping[str, Any]] | None) -> None:
+    """Handle what the in-page blocker cancelled on its own while no action of ours was running.
+
+    On an ordinary page that still ends the run: it may be the late effect of an earlier click. On a
+    checkout page we only read, so a cancelled submit or click there is the checkout's own script at
+    work (Shopify's checkout submits a form as it loads). It was cancelled and nothing was sent, so it
+    is logged and the run goes on to read the page it came to read.
+    """
+    if not blocked:
+        return
+    if current_guard().mode_for(page_url) is Mode.NORMAL:
+        raise_if_refused(blocked)
+    for refusal in blocked:
+        log.info(f"  Guard cancelled the page's own {refusal.get('kind')} ({refusal.get('why')}); nothing was sent")
 
 
 async def push_state(page: _Evaluates, guard: Guard) -> None:
