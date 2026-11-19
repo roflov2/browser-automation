@@ -33,6 +33,7 @@ from .store import (
     add_menu_item_to_cart,
     choose_menu_items,
     clear_existing_cart,
+    dismiss_location_prompt,
     dismiss_uber_popups,
     ensure_address_and_open_store,
     order_item,
@@ -127,6 +128,7 @@ class UberEatsWorkflow(Workflow):
             await page.goto(url)
             await settle(page, SETTLE_MS)
             await dismiss_uber_popups(stagehand, page)
+            await dismiss_location_prompt(page, out)
 
             result.shop_url = await ensure_address_and_open_store(
                 stagehand, page, args.address, args.query, result, interactive=not self.settings.headless
