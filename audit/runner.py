@@ -13,7 +13,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from time import perf_counter
-from typing import Any
+from typing import Any, cast
 from urllib.parse import urlparse
 
 from browserbase import Browserbase
@@ -31,6 +31,7 @@ from stagehand import (
 )
 
 from . import safety
+from .azure import open_azure_llm
 from .config import Settings
 from .core import (
     BROWSER_ERRORS,
@@ -276,23 +277,31 @@ async def open_stagehand(
     session_log: SessionLog,
     llm: LLMGenerateCallback | None,
 ) -> AsyncIterator[Stagehand]:
-    """The Stagehand client for this session, closed on exit. `llm` replaces Gemini with a callback (tests)."""
-    model: dict[str, Any] = (
-        {"model": llm} if llm else {"model": settings.model, "model_api_key": settings.require_api_key()}
-    )
-    stagehand = await Stagehand.create(
-        browser=browser,
-        system_prompt=workflow.system_prompt,
-        logging=StagehandClientLoggingConfig(level=workflow.log_level, format="json", on_log=session_log.on_log),
-        **model,
-    )
-    try:
-        yield stagehand
-    finally:
+    """The Stagehand client for this session, closed on exit.
+
+    The model is Azure OpenAI when `AZURE_OPENAI_ENDPOINT` is set, else Gemini; `llm` replaces both (tests).
+    """
+    async with contextlib.AsyncExitStack() as stack:
+        if llm is None and settings.use_azure:
+            # AzureLLM returns plain dicts shaped like Stagehand's result TypedDicts; Stagehand validates them
+            llm = cast(LLMGenerateCallback, await stack.enter_async_context(open_azure_llm(settings)))
+            log.info(f"Model: Azure OpenAI deployment {settings.azure_openai_deployment}")
+        model: dict[str, Any] = (
+            {"model": llm} if llm else {"model": settings.model, "model_api_key": settings.require_api_key()}
+        )
+        stagehand = await Stagehand.create(
+            browser=browser,
+            system_prompt=workflow.system_prompt,
+            logging=StagehandClientLoggingConfig(level=workflow.log_level, format="json", on_log=session_log.on_log),
+            **model,
+        )
         try:
-            await stagehand.close()
-        except BROWSER_ERRORS as error:  # nothing useful can be done about a failed close
-            log.debug("Stagehand close failed: %s", error)
+            yield stagehand
+        finally:
+            try:
+                await stagehand.close()
+            except BROWSER_ERRORS as error:  # nothing useful can be done about a failed close
+                log.debug("Stagehand close failed: %s", error)
 
 
 async def clear_cookies(workflow: Workflow, browser: StagehandBrowser, domain: str) -> None:
@@ -404,10 +413,10 @@ async def run(
 ) -> None:
     """Audit every target of `workflow` in one browser session.
 
-    `llm` is a Stagehand LLM callback used instead of Gemini; the tests drive the whole runner with it.
+    `llm` is a Stagehand LLM callback used instead of Gemini or Azure; the tests drive the whole runner with it.
     """
     if llm is None:
-        settings.require_api_key()
+        settings.require_model()
     targets = [url if url.startswith("http") else f"https://{url}" for url in workflow.targets()]
     session_log = SessionLog(secrets=workflow.sensitive_values())
 
