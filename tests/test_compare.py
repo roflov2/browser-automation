@@ -179,6 +179,19 @@ def test_ubereats_zero_fees_and_missing_currency(saved_runs):
     assert (report["currency"], report["currency_assumed"]) == (None, "AUD")
 
 
+def test_ubereats_fee_without_amount(saved_runs):
+    """A fee row shown with no amount (an info-only 'Fees' line) is kept but adds nothing to the fee total."""
+    (run,) = runs_for(saved_runs, "ubereats")
+    c = {**run["checkout"], "other_fees": [{"label": "Fees", "amount": None}]}
+    result = uber_models.UberResult(site="https://example.test", out_dir=Path(), items=run["items"], **run["result"])
+    baseline = uber_pricing.compare_prices(
+        result, None, uber_state({**c, "other_fees": []}, checkout_page=True, subtotal=c["subtotal"])
+    )
+    report = uber_pricing.compare_prices(result, None, uber_state(c, checkout_page=True, subtotal=c["subtotal"]))
+    assert {"label": "Fees", "amount": None} in report["other_fees"]
+    assert report["other_fees_total"] == baseline["other_fees_total"]
+
+
 def coffee_inputs(run: dict, **checkout_overrides):
     c = {**run["checkout"], **checkout_overrides}
     cart = coffee.CartLines(

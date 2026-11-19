@@ -113,7 +113,7 @@ def fee_breakdown(
                 c.small_order, c.small_order, pct_of(c.small_order, base)),
         fee_row("priority_delivery", "Priority Delivery Upgrade (Optional)", "n/a",
                 shown("priority_delivery_fee") or "not offered", c.priority, None, None, mandatory=False),
-        *(fee_row("other_fee", fee.label, UNDISCLOSED, fee.amount, amount, amount, pct_of(amount, base))
+        *(fee_row("other_fee", fee.label, UNDISCLOSED, fee.amount or "not shown", amount, amount, pct_of(amount, base))
           for fee, amount in c.other),
     ]  # fmt: skip
 
