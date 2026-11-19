@@ -8,6 +8,8 @@ import contextlib
 import json
 import logging
 import os
+import re
+import sys
 from collections.abc import AsyncIterator, Callable, Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -48,7 +50,7 @@ from .core import (
     write_json,
     write_reports,
 )
-from .page import cdp_noise_filtered, is_noise, pause_for_login, settle, shot
+from .page import cdp_noise_filtered, is_noise, is_sso_redirect, pause_for_login, settle, shot, wait_out_sso
 from .workflow import Workflow
 
 try:
@@ -252,9 +254,9 @@ async def open_browser(
         options: dict[str, Any] = {"headless": headless}
         if settings.chrome_path:
             options["executable_path"] = str(settings.chrome_path)
-        if workflow.persistent_profile:
-            CHROME_PROFILE_DIR.mkdir(parents=True, exist_ok=True)
-            options["user_data_dir"] = str(CHROME_PROFILE_DIR.resolve())
+        # Every workflow shares one profile, so a sign-in (a site's, or the network's Microsoft one) is done once
+        CHROME_PROFILE_DIR.mkdir(parents=True, exist_ok=True)
+        options["user_data_dir"] = str(CHROME_PROFILE_DIR.resolve())
         if workflow.viewport:
             options["viewport_width"], options["viewport_height"] = workflow.viewport
         if hasattr(os, "geteuid") and os.geteuid() == 0:
@@ -304,28 +306,87 @@ async def open_stagehand(
                 log.debug("Stagehand close failed: %s", error)
 
 
-async def clear_cookies(workflow: Workflow, browser: StagehandBrowser, domain: str) -> None:
-    """Start the site from a clean session, as far as the workflow asks for."""
+async def clear_cookies(workflow: Workflow, browser: StagehandBrowser, host: str) -> None:
+    """Start the site from a clean session, as far as the workflow asks for.
+
+    Only the site's own cookies (its domain and subdomains) are cleared: the profile is shared, so the
+    corporate SSO login and other sites' sign-ins stay.
+    """
     if not workflow.clear_cookies:
         return
-    # "domain" clears only the storefront's cookies, so corporate SSO/proxy tokens persist
-    scope = {"domain": domain} if workflow.clear_cookies == "domain" else {}
+    domain = re.compile(rf"(^|\.){re.escape(host.removeprefix('www.'))}$", re.IGNORECASE)
     try:
-        await browser.context.clear_cookies(**scope)
+        await browser.context.clear_cookies(domain=domain)
     except BROWSER_ERRORS as error:  # the run can go on, but a stale cart may skew it: say so
+        log.warning("  Could not clear cookies for %s (%s); a previous session's cart may still be there", host, error)
+
+
+async def on_sso_page(page: Page) -> bool:
+    """True when the browser is (still) on a Microsoft sign-in page after any automatic SSO bounce."""
+    try:
+        if not is_sso_redirect(await page.url()):
+            return False
+        await wait_out_sso(page, 5000)
+        return is_sso_redirect(await page.url())
+    except BROWSER_ERRORS as error:
+        log.debug("Could not read the page URL: %s", error)
+        return False
+
+
+async def network_login(page: Page, interactive: bool) -> bool:
+    """Let the user complete a Microsoft sign-in the network demands. True once the browser has left it."""
+    if not await pause_for_login(
+        page,
+        "The network asks for a Microsoft (Azure) sign-in before the browser can reach the site. "
+        "It is kept in the shared Chrome profile for later runs.",
+        interactive,
+    ):
+        return False
+    return not await on_sso_page(page)
+
+
+async def check_network_login(page: Page, url: str, interactive: bool) -> None:
+    """Before the first site: open it and, if a Microsoft sign-in comes up instead, wait for the user."""
+    try:
+        await page.goto(url)
+        await settle(page, 2000)
+    except BROWSER_ERRORS as error:  # the site's own run will record what is wrong with it
+        log.debug("Network check could not open %s: %s", url, error)
+        return
+    if not await on_sso_page(page):
+        return
+    if await network_login(page, interactive):
+        log.info("  Network sign-in done")
+    else:
         log.warning(
-            "  Could not clear cookies for %s (%s); a previous session's cart may still be there", domain, error
+            "  The network wants a Microsoft sign-in and this run cannot pause for it "
+            "(it needs a visible browser and an interactive terminal); sites may be recorded as blocked."
         )
 
 
-async def audit_site(workflow: Workflow, stagehand: Any, page: Page, browser: StagehandBrowser, url: str) -> SiteResult:
-    """One run of the workflow against one URL. Never raises: the outcome is in the result's status."""
+async def audit_site(
+    workflow: Workflow, stagehand: Any, page: Page, browser: StagehandBrowser, url: str, interactive: bool = False
+) -> SiteResult:
+    """One run of the workflow against one URL. Never raises: the outcome is in the result's status.
+
+    A run that ends on a Microsoft sign-in page (the network's, not the site's) pauses for the user to
+    sign in, when `interactive`, and is then run again once.
+    """
+    result = await audit_once(workflow, stagehand, page, browser, url)
+    if result.status != Status.OK and interactive and await on_sso_page(page) and await network_login(page, True):
+        log.info(f"  Network sign-in done; running {url} again")
+        result = await audit_once(workflow, stagehand, page, browser, url)
+    return result
+
+
+async def audit_once(workflow: Workflow, stagehand: Any, page: Page, browser: StagehandBrowser, url: str) -> SiteResult:
+    """One attempt at the site, with its own output folder and reports."""
     out_dir = OUTPUT_ROOT / workflow.output_folder(url) / datetime.now().astimezone().strftime("%Y%m%d-%H%M%S")
     out_dir.mkdir(parents=True, exist_ok=True)
     result = workflow.result_class(site=url, out_dir=out_dir)
     if isinstance(stagehand, RecordingStagehand):
         stagehand.record_to(out_dir / "extractions.jsonl")
-    await clear_cookies(workflow, browser, urlparse(url).netloc.removeprefix("www."))
+    await clear_cookies(workflow, browser, urlparse(url).hostname or "")
 
     try:
         with safety.active_guard():
@@ -365,13 +426,13 @@ def metrics_delta(before: Any, after: Any) -> dict[str, float]:
 
 async def audit_and_record(
     workflow: Workflow, stagehand: Any, page: Page, browser: StagehandBrowser, url: str,
-    session_log: SessionLog, describe_browser: Callable[[], dict[str, Any]],
+    session_log: SessionLog, describe_browser: Callable[[], dict[str, Any]], interactive: bool = False,
 ) -> None:  # fmt: skip
     """Audit one site and write its session.json, runs.csv row and summary."""
     start = perf_counter()
     before = await stagehand.metrics()
     async with ResourceMonitor().running() as monitor:
-        result = await audit_site(workflow, stagehand, page, browser, url)
+        result = await audit_site(workflow, stagehand, page, browser, url, interactive)
     try:
         after = await stagehand.metrics()
     except BROWSER_ERRORS as error:  # the audit itself is already saved; say that the usage figures are not
@@ -395,6 +456,19 @@ async def audit_and_record(
     write_json(result.out_dir / "session.json", session)
     update_summary(result, workflow.name, workflow.target_key(url, result))
     log.info(f"  Status: {result.status} {result.message} -> {result.out_dir}")
+
+
+async def fresh_tab(browser: StagehandBrowser) -> Page:
+    """One new tab to work in, with every other tab closed (the shared profile can restore old ones)."""
+    old = await browser.context.pages()
+    page = await browser.context.new_page()
+    for tab in old:
+        try:
+            await tab.close()
+        except BROWSER_ERRORS as error:  # a tab that will not close is in the way, not fatal
+            log.debug("Could not close a leftover tab: %s", error)
+    await browser.context.set_active_page(page)
+    return page
 
 
 async def preload_login(page: Page, url: str) -> None:
@@ -428,18 +502,18 @@ async def run(
             ),
             open_stagehand(browser, workflow, settings, session_log, llm) as client,
         ):
-            pages = await browser.context.pages()
-            page = pages[-1]
-            if len(pages) > 1:
-                await browser.context.set_active_page(page)
+            page = await fresh_tab(browser)
             if args.login:
                 await preload_login(page, workflow.login_url())
                 return
+            interactive = not settings.headless and sys.stdin.isatty()
+            if targets:
+                await check_network_login(page, targets[0], interactive)
             # The in-page purchase blocker, on every page from here on (not for --login, where a person signs in).
             await safety.install(browser.context, page)
             stagehand = RecordingStagehand(client, session_log, page)
             for url in targets:
                 session_log.start_site()
-                await audit_and_record(workflow, stagehand, page, browser, url, session_log, describe)
+                await audit_and_record(workflow, stagehand, page, browser, url, session_log, describe, interactive)
 
     log.info(f"\nSummary written to {OUTPUT_ROOT / 'summary.csv'} (history in {OUTPUT_ROOT / 'runs.csv'})")

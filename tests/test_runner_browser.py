@@ -39,8 +39,7 @@ class FixtureWorkflow(Workflow):
     name = "fixture"
     help = "test workflow"
     system_prompt = "Never buy anything."
-    persistent_profile = False
-    clear_cookies = "all"
+    clear_cookies = "domain"
     base = ""
 
     def targets(self) -> list[str]:

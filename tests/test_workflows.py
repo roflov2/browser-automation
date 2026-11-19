@@ -199,7 +199,7 @@ def test_conclude_never_masks_the_run_s_own_failure():
 
 @pytest.mark.parametrize("workflow", WORKFLOWS, ids=lambda w: w.name)
 def test_workflows_declare_their_policy(workflow):
-    assert workflow.clear_cookies in (None, "domain", "all")
+    assert workflow.clear_cookies in (None, "domain")
     assert workflow.log_level in ("warn", "info")
 
 
