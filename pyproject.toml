@@ -18,6 +18,8 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest==9.2.0", "ruff==0.17.5", "mypy==2.4.1"]
+# Azure OpenAI with Microsoft Entra ID sign-in (AZURE_OPENAI_* settings, audit/azure.py)
+azure = ["openai==3.55.1", "azure-identity==1.27.0"]
 
 [project.scripts]
 drip-audit = "audit.cli:main"

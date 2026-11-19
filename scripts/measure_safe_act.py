@@ -10,8 +10,10 @@ Each instruction is run `--repeat` times both ways. Tokens come from stagehand.m
 
 import argparse
 import asyncio
+import contextlib
 import sys
 from pathlib import Path
+from typing import Any
 
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
@@ -19,7 +21,8 @@ sys.path.insert(0, str(REPO))
 from stagehand import Stagehand, local_browser  # noqa: E402
 
 from audit import safety  # noqa: E402
-from audit.config import load_settings  # noqa: E402
+from audit.azure import open_azure_llm  # noqa: E402
+from audit.config import Settings, load_settings  # noqa: E402
 from tests.browser_support import StubModel, find_chrome, launch_args, serve  # noqa: E402
 
 INSTRUCTIONS = (
@@ -38,10 +41,23 @@ async def measure(args: argparse.Namespace, port: int) -> None:
     settings = load_settings()
     chrome = settings.chrome_path or find_chrome()
     stub = StubModel() if args.stub else None
+    async with contextlib.AsyncExitStack() as stack:
+        model = stub or (await stack.enter_async_context(open_azure_llm(settings)) if settings.use_azure else None)
+        await run_measurement(args, port, settings, chrome, stub, model)
+
+
+async def run_measurement(
+    args: argparse.Namespace,
+    port: int,
+    settings: Settings,
+    chrome: Path | str | None,
+    stub: StubModel | None,
+    model: Any,
+) -> None:
     browser = await local_browser.launch(headless=True, executable_path=chrome, args=launch_args())
     stagehand = await Stagehand.create(
         browser=browser,
-        **({"model": stub} if stub else {"model": settings.model, "model_api_key": settings.require_api_key()}),
+        **({"model": model} if model else {"model": settings.model, "model_api_key": settings.require_api_key()}),
     )
     try:
         page = (await browser.context.pages())[0]
@@ -75,7 +91,9 @@ async def measure(args: argparse.Namespace, port: int) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--stub", action="store_true", help="Use a stub model instead of Gemini (no API key needed)")
+    parser.add_argument(
+        "--stub", action="store_true", help="Use a stub model instead of Gemini/Azure (no API key needed)"
+    )
     parser.add_argument("--repeat", type=int, default=3, help="Runs per instruction and method (default 3)")
     args = parser.parse_args()
     with serve(REPO / "tests" / "fixtures" / "guard") as port:

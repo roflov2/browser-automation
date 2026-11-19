@@ -17,7 +17,7 @@ No workflow ever pays: runs stop on the checkout / payment page, and a purchase 
 
 ## Setup
 
-Requires Python 3.11+ (the Stagehand 4 SDK needs it) and Google Chrome/Chromium. Uses Google Gemini via [Google AI Studio](https://aistudio.google.com/apikey).
+Requires Python 3.11+ (the Stagehand 4 SDK needs it) and Google Chrome/Chromium. Uses Google Gemini via [Google AI Studio](https://aistudio.google.com/apikey), or an Azure OpenAI deployment (see [Azure OpenAI](#azure-openai)).
 
 ```bash
 python3 -m venv .venv && source .venv/bin/activate
@@ -31,11 +31,26 @@ Open `.env` and set `GOOGLE_GENERATIVE_AI_API_KEY`. Settings are read once, from
 | --- | --- | --- |
 | `GOOGLE_GENERATIVE_AI_API_KEY` | (required) | Gemini API key |
 | `GEMINI_MODEL` | `gemini-3.8-flash` | Gemini model name (with or without `google/` prefix) |
+| `AZURE_OPENAI_ENDPOINT` | (optional) | Azure OpenAI resource URL; when set, Azure replaces Gemini and no Gemini key is needed |
+| `AZURE_OPENAI_DEPLOYMENT` | (required with the endpoint) | Deployment name, e.g. `gpt-4o` |
+| `AZURE_OPENAI_API_VERSION` | `2024-12-01-preview` | Azure OpenAI API version |
+| `AZURE_OPENAI_MANAGED_IDENTITY` | `false` | Let `DefaultAzureCredential` also try the host's managed identity |
 | `HEADLESS` | `false` | Run without a visible browser window when set to `true` |
 | `CHROME_PATH` | auto-detected | Path to the Chrome/Chromium executable used for local runs |
 | `BROWSERBASE_API_KEY`, `BROWSERBASE_PROJECT_ID` | (optional) | Run on Browserbase instead of local Chrome |
 | `PAX_TITLE`, `PAX_FIRST_NAME`, `PAX_LAST_NAME`, `PAX_GENDER`, `PAX_DATE_OF_BIRTH`, `PAX_EMAIL`, `PAX_PHONE`, `PAX_COUNTRY` | placeholder guest | Guest details typed into the airline booking form (`virgin` only). Names, date of birth, email and phone are passed to the page as Stagehand variables: they are not sent to the model and are replaced by `%name%` placeholders in `session.json` and `extractions.jsonl` |
 | `UBEREATS_ADDRESS` | `260 City Walk, Canberra ACT 2601` | Default delivery address (`ubereats` only) |
+
+### Azure OpenAI
+
+Stagehand 4.4 only accepts OpenAI, Anthropic, Google, Groq and Cerebras model names and has no setting for an Azure endpoint, so `audit/azure.py` plugs an Azure deployment in through Stagehand's LLM callback: each model request becomes a chat completion on the deployment, signed in with a Microsoft Entra ID token from `DefaultAzureCredential` (cached and refreshed before it expires). No API key is used.
+
+```bash
+pip install -e ".[azure]"
+az login                    # or set AZURE_CLIENT_ID, AZURE_TENANT_ID, AZURE_CLIENT_SECRET for a service principal
+```
+
+Then set `AZURE_OPENAI_ENDPOINT` and `AZURE_OPENAI_DEPLOYMENT` in `.env`. The signed-in identity needs the *Cognitive Services OpenAI User* role on the resource. The token is fetched before the first site is opened, so a sign-in problem stops the run with a message. The deployment must accept JSON-schema response formats (gpt-4o 2024-08-06 or later, and API version 2024-08-01-preview or later). Stagehand's agent mode, which uses tool calls, is not supported by the adapter; the workflows here do not use it.
 
 ## Usage
 
@@ -125,6 +140,7 @@ main.py                     # entry point: python main.py <workflow> ...
 audit/
 ├── cli.py                  # one subcommand per registered workflow; logging
 ├── config.py               # Settings: every environment variable, read and validated once
+├── azure.py                # Azure OpenAI (Entra ID sign-in) as Stagehand's LLM callback
 ├── safety.py               # the purchase guard
 ├── runner.py               # browser + Stagehand session, per-site loop, failure reasons, session.json
 ├── workflow.py             # Workflow base class: the contract between runner and workflows
@@ -162,7 +178,7 @@ mypy
 pytest                      # the browser tests are skipped if no Chrome/Chromium is found
 ```
 
-The tests never touch a real site or call a real model: browser tests run against local HTML fixtures with a stub model. `python scripts/measure_safe_act.py` compares the token cost of a vetted action with a plain `act()` on a fixture (it needs `GOOGLE_GENERATIVE_AI_API_KEY`; `--stub` runs without one).
+The tests never touch a real site or call a real model: browser tests run against local HTML fixtures with a stub model. `python scripts/measure_safe_act.py` compares the token cost of a vetted action with a plain `act()` on a fixture (it needs `GOOGLE_GENERATIVE_AI_API_KEY` or the Azure settings; `--stub` runs without either).
 
 ## Outputs
 
