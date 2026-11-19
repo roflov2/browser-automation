@@ -23,7 +23,13 @@ from .browser_support import find_chrome, launch_args, serve
 
 FIXTURE = Path(__file__).parent / "fixtures" / "pages"
 pytestmark = pytest.mark.browser
-CASES = {"icons": "", "labels": "?labels=1", "confirm": "?confirm=1"}
+CASES = {
+    "icons": "",
+    "labels": "?labels=1",
+    "confirm": "?confirm=1",
+    "carts_by_store": "?carts=1",
+    "more_menu": "?more=1",
+}
 STORES = {  # case: (the model's card, or None when its extraction failed)
     "model_failed": None,
     "model_gave_element_id": StoreCard(

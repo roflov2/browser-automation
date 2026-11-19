@@ -354,7 +354,14 @@ JS_OPEN_CART = r"""() => {
 CART_DRAWER_JS = r"""
 // The open cart drawer (never the item modal or a confirmation prompt), or null
 const cartDrawer = () => [...dialogs(), ...document.querySelectorAll('aside')].find(
-    d => vis(d, 220, 250) && /checkout|subtotal|clear cart|your (order|cart)/i.test(d.innerText || ''));
+    d => vis(d, 220, 250) && /checkout|subtotal|clear cart|your (order|cart)|^\s*carts\b|\bview cart\b/im.test(d.innerText || ''));
+// 'Clear cart' / 'Delete cart' and the like, exactly: a menu entry or button that empties a whole cart
+const CLEAR_CART = /^(clear|delete|remove|empty)( this| the)? (cart|order|basket)$|^(clear|remove|delete) all( items)?$/i;
+// The '...' button that opens a cart's menu (where Uber keeps 'Clear cart' / 'Delete cart')
+const MORE = /\b(more|options|actions|menu|overflow)\b|^\s*(…|\.\.\.|⋯|⋮)\s*$/i;
+// What the open cart panels show, for the log when the cart could not be cleared
+const JS_CART_PANELS_TEXT = () => [...dialogs(), ...document.querySelectorAll('aside')].filter(d => vis(d, 150, 100))
+    .map(d => clean(txt(d)).slice(0, 200)).join(' | ');
 const ctrlLabel = b => [b.getAttribute('aria-label'), b.getAttribute('title'), b.getAttribute('data-testid'),
     ...Array.from(b.querySelectorAll('svg title, [aria-label]'), n => n.textContent || n.getAttribute('aria-label'))]
     .filter(Boolean).join(' ');
@@ -386,6 +393,13 @@ JS_CLEAR_CART_STEP = r"""() => {
             b => vis(b, 30, 20) && /^(remove( item)?|delete( item)?|clear( cart)?|empty cart|yes,? (remove|clear|delete)\b.*)$/i.test(clean(txt(b))));
         if (yes) { safeClick(yes); return 'confirm'; }
     }
+
+    // 1b. An open cart menu (from the '...' button): its 'Clear cart' / 'Delete cart' entry
+    const entries = Array.from(document.querySelectorAll(
+        '[role="menu"] *, [role="menuitem"], [role="listbox"] *, [role="option"], [data-baseweb="popover"] *, [role="dialog"] li, [role="dialog"] button'));
+    const entry = entries.find(e => vis(e, 30, 12) && CLEAR_CART.test(clean(txt(e)))
+        && !Array.from(e.children).some(c => CLEAR_CART.test(clean(txt(c)))));
+    if (entry) { safeClick(entry.closest('button, [role="menuitem"], [role="option"], li') || entry); return 'menu_clear'; }
 
     // Scope strictly to the open cart drawer so page/header buttons are never clicked
     const drawer = cartDrawer();
@@ -419,6 +433,11 @@ JS_CLEAR_CART_STEP = r"""() => {
                 && !INCREASE.test(ctrlLabel(b)));
         if (icons.length) { safeClick(icons[0]); return 'stepper_button'; }
     }
+
+    // 6. The drawer's '...' menu, which holds 'Clear cart' (opened at most a few times per page)
+    window.__auditCartMenus = (window.__auditCartMenus || 0) + 1;
+    const more = window.__auditCartMenus <= 3 && buttons.find(b => MORE.test(ctrlLabel(b) + ' ' + clean(txt(b))));
+    if (more) { safeClick(more); return 'menu_open'; }
     return null;
 }"""
 
@@ -576,7 +595,14 @@ async def close_item_modal(stagehand: Stagehand, page: Page) -> None:
 
 
 MAX_CART_CLEAR_STEPS = 25
-MAX_CART_CLEAR_LLM_STEPS = 3
+MAX_CART_CLEAR_LLM_STEPS = 4
+CLEAR_CART_INSTRUCTION = (
+    "Empty the Uber Eats cart. If a cart drawer is open, click the trash-can / remove button (or '-' quantity "
+    "button) of its first item, or 'Clear cart' / 'Delete cart'. If a list of carts by store is shown, open the "
+    "'...' menu of the first cart and choose 'Delete cart' / 'Clear cart'; if that menu is already open, click "
+    "that entry. If no cart is open, click the cart button in the header. "
+    "Do NOT click 'Go to checkout', 'View cart', a store name or '+'."
+)
 
 
 async def items_left_in_cart(page: Page) -> int:
@@ -597,37 +623,41 @@ async def clear_existing_cart(stagehand: Stagehand, page: Page) -> None:
     log.info(f"  Detected {existing} leftover item(s) in cart from a previous session; clearing cart...")
 
     llm_steps = 0
+    unrecognised_opens = 0
     for _ in range(MAX_CART_CLEAR_STEPS):
         step = await js(page, JS_CLEAR_CART_STEP)
         if step == "no_drawer":
             if await get_cart_count(page) == 0:
                 break
-            if not await open_cart_drawer(page):
-                log.debug("Cart button not found while clearing the cart")
-                break
-            await settle(page, 1500)
-            continue
-        if step:
+            # The cart button was clicked but nothing the page steps know opened (a list of carts by store,
+            # say): the model reads the page and takes one step instead of the button being clicked again
+            if unrecognised_opens < 2:
+                if not await open_cart_drawer(page):
+                    log.debug("Cart button not found while clearing the cart")
+                    break
+                unrecognised_opens += 1
+                await settle(page, 1500)
+                continue
+        if step and step != "no_drawer":
             log.debug("Cart clear step: %s", step)
+            unrecognised_opens = 0  # the drawer was there; it may close again after this removal
         else:
-            if await items_left_in_cart(page) == 0:
+            if step is None and await items_left_in_cart(page) == 0:
                 break
             llm_steps += 1
             if llm_steps > MAX_CART_CLEAR_LLM_STEPS:
                 break
-            await try_act(
-                stagehand,
-                page,
-                "Inside the open cart drawer, click the trash-can / remove button (or '-' quantity button) of the "
-                "first item in the cart, or 'Clear cart' if shown. Do NOT click 'Go to checkout' or '+'.",
-            )
+            await try_act(stagehand, page, CLEAR_CART_INSTRUCTION)
         await settle(page, 1000)
 
+    panels = await js(page, "() => JS_CART_PANELS_TEXT()", default="")
     await js(page, "() => { if (cartDrawer()) closeDialog() || pressEsc(); }")
     await settle(page, 1200)
     left = await get_cart_count(page)
     if left:
-        log.warning(f"  {left} leftover item(s) could not be removed; the checkout subtotal will include them.")
+        log.warning(f"  {left} leftover item(s) could not be removed; the checkout subtotal may include them.")
+        if panels:
+            log.warning(f"  The cart showed: {panels}")
     else:
         log.info("  Cart cleared.")
 
