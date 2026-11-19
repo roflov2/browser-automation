@@ -253,16 +253,26 @@ JS_HAS_OVERLAY = r"""selectors => {
 
 
 async def dismiss_popups(stagehand: Stagehand, page: Page, targets: str, caution: str = "") -> None:
-    """Ask the LLM to close whichever of `targets` (e.g. 'cookie banner or newsletter popup') is visible."""
+    """Ask the LLM to close whichever of `targets` (e.g. 'cookie banner or newsletter popup') is visible.
+
+    A control the guard refuses (the model picked a popup's 'Subscribe' instead of its close button) is
+    skipped, not clicked; if that leaves the popup open, Escape is pressed so the journey can carry on.
+    """
     try:
         found = await stagehand.observe(
             "Find the close, accept, dismiss, 'No thanks', 'Maybe later' or 'Skip' button of any visible "
-            f"{targets}. {caution}Return nothing if there is none.",
+            f"{targets}. Prefer an 'X' or 'Close' icon. Never return a Subscribe, Sign up, Join, Submit or "
+            f"Reveal code button, and never an email field. {caution}Return nothing if there is none.",
             timeout=safety.LLM_TIMEOUT_MS,
         )
+        skipped = False
         for action in found.data[:2]:
             log.info(f"  Dismissing popup: {action.description}")
-            await safety.act_on(stagehand, page, action)
+            skipped |= await safety.dismiss_on(stagehand, page, action) is None
+        if skipped:
+            log.info("  Closing popup with Escape instead")
+            await page.key_press("Escape")
+            await settle(page, 500)
     except BROWSER_ERRORS as error:  # a popup that cannot be dismissed is not fatal; a guard refusal still is
         log.debug("Popup dismissal failed: %s", error)
 

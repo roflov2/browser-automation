@@ -3,6 +3,7 @@
 import asyncio
 import contextlib
 from types import SimpleNamespace
+from typing import ClassVar
 
 import pytest
 
@@ -341,3 +342,44 @@ def test_follow_up_takes_a_vetted_second_step():
     with pytest.raises(UnsafeActionRefused):
         asyncio.run(safe_act(refusing, page, "Select 'Mr' for the Title field", follow_up=True))
     assert [a for a, _ in refusing.acted] == [opener]
+
+
+def test_dismiss_on_skips_a_refused_popup_control_without_acting():
+    denied = {**CLEAN, "click": "purchase, payment or membership control: Subscribe"}
+    stagehand, page = FakeStagehand([]), FakePage(element=denied)
+    assert asyncio.run(safety.dismiss_on(stagehand, page, action("Subscription popup Subscribe button"))) is None
+    assert stagehand.acted == []
+
+
+def test_dismiss_on_acts_on_a_clean_close_button():
+    stagehand, page = FakeStagehand([]), FakePage(element=CLEAN)
+    done = asyncio.run(safety.dismiss_on(stagehand, page, action("Close")))
+    assert done == safety.Acted(True, "did: Close")
+
+
+def test_dismiss_on_still_raises_when_the_page_blocked_the_click():
+    blocked = [{"why": "purchase, payment or membership control: Subscribe", "kind": "click"}]
+    page = FakePage(element=CLEAN, blocked=blocked)
+    with pytest.raises(UnsafeActionRefused, match="Subscribe"):
+        asyncio.run(safety.dismiss_on(FakeStagehand([]), page, action("Close")))
+
+
+def test_dismiss_popups_skips_subscribe_and_presses_escape(monkeypatch):
+    from audit import page as page_helpers
+
+    async def no_settle(page, ms=0):
+        pass
+
+    monkeypatch.setattr(page_helpers, "settle", no_settle)
+
+    class EscPage(FakePage):
+        keys: ClassVar[list[str]] = []
+
+        async def key_press(self, key):
+            self.keys.append(key)
+
+    denied = {**CLEAN, "click": "purchase, payment or membership control: Subscribe"}
+    stagehand, page = FakeStagehand([action("Subscribe button")]), EscPage(element=denied)
+    asyncio.run(page_helpers.dismiss_popups(stagehand, page, "newsletter popup"))  # must not raise
+    assert stagehand.acted == []
+    assert page.keys == ["Escape"]

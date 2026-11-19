@@ -511,8 +511,8 @@ async def describe_element(page: _Evaluates, guard: Guard, selector: str) -> Map
     return found if isinstance(found, dict) else None
 
 
-async def act_on(stagehand: _Actions, page: _Evaluates, action: Any, **options: Any) -> Acted:
-    """Vet one action returned by observe(), then run it. The only place an action is executed."""
+async def vet(page: _Evaluates, action: Any) -> None:
+    """Raise UnsafeActionRefused unless `action` (from observe()) is safe to run. Never acts."""
     guard = current_guard()
     url = await page.url()
     element = await describe_element(page, guard, action.selector)
@@ -520,10 +520,31 @@ async def act_on(stagehand: _Actions, page: _Evaluates, action: Any, **options: 
         action.description, action.selector, action.method, list(action.arguments or []), element,
         url=url, mode=guard.mode_for(url),
     )  # fmt: skip
+
+
+async def act_on(stagehand: _Actions, page: _Evaluates, action: Any, **options: Any) -> Acted:
+    """Vet one action returned by observe(), then run it. The only place an action is executed."""
+    await vet(page, action)
     options.setdefault("timeout", LLM_TIMEOUT_MS)
     result = await stagehand.act(action, **options)
     await drain_blocked(page)
     return Acted(bool(result.data.success), result.data.action_description or action.description)
+
+
+async def dismiss_on(stagehand: _Actions, page: _Evaluates, action: Any, **options: Any) -> Acted | None:
+    """act_on() for a control proposed to close a popup; None, without acting, if vetting refuses it.
+
+    A popup's close button and its 'Subscribe' / 'Sign up' button sit side by side, and the model sometimes
+    proposes the wrong one. That is a misread of the popup, not a site steering us into a purchase, and
+    nothing has been clicked yet, so the control is skipped and the caller tries another way to close it.
+    A click the in-page blocker cancels after vetting passed still raises, as everywhere else.
+    """
+    try:
+        await vet(page, action)
+    except UnsafeActionRefused as refusal:
+        log.warning(f"  Skipping popup control the guard refuses ({refusal}); not clicked")
+        return None
+    return await act_on(stagehand, page, action, **options)
 
 
 async def safe_act(
