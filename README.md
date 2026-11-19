@@ -52,6 +52,8 @@ az login                    # or set AZURE_CLIENT_ID, AZURE_TENANT_ID, AZURE_CLI
 
 Then set `AZURE_OPENAI_ENDPOINT` and `AZURE_OPENAI_DEPLOYMENT` in `.env`. The signed-in identity needs the *Cognitive Services OpenAI User* role on the resource. The token is fetched before the first site is opened, so a sign-in problem stops the run with a message. The deployment must accept JSON-schema response formats (gpt-4o 2024-08-06 or later, and API version 2024-08-01-preview or later). Stagehand's agent mode, which uses tool calls, is not supported by the adapter; the workflows here do not use it.
 
+Throttling is printed rather than hidden: the adapter retries a 429, a server error or a dropped connection itself (up to three times, waiting as long as the endpoint's `retry-after` asks, at most 60 s) and prints each with the endpoint's message, the tokens and requests its rate-limit headers say are left this minute, and the request id. A call that leaves less than 10% of the per-minute limit is printed too, and so is a call Stagehand gives up waiting for. Run with `-v` to print every call's time, tokens and remaining quota.
+
 ## Usage
 
 ```bash
