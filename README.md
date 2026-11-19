@@ -209,8 +209,32 @@ Workflow-specific additions:
 - `virgin`: `flights.png` and `step-NN-<step>.png` for each booking step. The JSON also holds the search, `payment_surcharges`, `extras_preselected` and `total_vs_expected_diff`.
 - `ubereats`: `store.png`, `step-NN-<step>.png`, `fees_breakdown.csv` (advertised vs charged, per fee), `restaurant_direct_N.png` and `restaurant_direct_menu.txt`. The JSON also holds `fee_breakdown` and the direct-site markup figures. Runs started from a `/store/...` URL go to `output/ubereats.com-<store>/`.
 
-`summary.csv` columns: run timestamp, site, status (`ok`, `blocked`, `no_checkout`, `no_coffee_found`, `no_flights_found`, `no_items_found`, `add_to_cart_failed`, `error`), items added, expected subtotal, checkout subtotal, checkout total, currency, other fees, shipping/delivery, drip-detected flag and the run's output folder. `runs.csv` has the same columns plus `workflow`, `target` and `failure_reason`. The target is the site for `coffee`, the site and route for `virgin`, and the store (`/store/<slug>/<id>`) for `ubereats`, so audits of different restaurants or routes keep their own summary row.
+`summary.csv` columns: run timestamp, site, status (`ok`, `blocked`, `no_checkout`, `no_coffee_found`, `no_flights_found`, `no_items_found`, `add_to_cart_failed`, `error`), items added, expected subtotal, checkout subtotal, checkout total, currency, other fees, shipping/delivery, drip-detected flag, the run's output folder, and its time and LLM usage (see [Time and tokens per run](#time-and-tokens-per-run)). `runs.csv` has the same columns plus `workflow`, `target` and `failure_reason`. The target is the site for `coffee`, the site and route for `virgin`, and the store (`/store/<slug>/<id>`) for `ubereats`, so audits of different restaurants or routes keep their own summary row.
 
 `drip_detected` is `true` when any drip-pricing reason was found, `false` only when the final price screen was read and nothing was found, and empty/`null` when the run never read the final price (so it cannot say). `price_comparison.json` and `session.json` also carry `failure_reason`: `blocked`, `out_of_stock`, `flow_changed`, `element_not_found`, `extract_failed`, `timeout` or `unsafe_action_refused`.
+
+### Time and tokens per run
+
+Every run records how long it took and how much of the model it used, in `runs.csv`, `summary.csv` and `session.json` (`usage`), and prints it after the run's status line:
+
+```
+  Time 3m 19s (LLM 1m 54s, 14 calls) | Tokens 104,184 (95,045 in / 9,139 out)
+```
+
+| Column | Meaning |
+| --- | --- |
+| `duration_seconds` | Wall-clock time of the run, from opening the site to writing its reports |
+| `llm_time_seconds` | Time spent waiting on the model (Stagehand's inference time) |
+| `llm_calls` | Model calls made: every `extract`, `observe` and `act`, retries included |
+| `prompt_tokens`, `completion_tokens`, `total_tokens` | Tokens sent to and returned by the model during this run |
+
+A token or LLM-time column is empty, not zero, when Stagehand's metrics could not be read. A command auditing several targets also prints the total of all its runs at the end. To see the history:
+
+```bash
+python main.py usage            # per-workflow runs, average time, LLM time, calls and tokens, then the last 10 runs
+python main.py usage --last 25
+```
+
+`usage` reads `output/runs.csv` and opens no browser. Runs recorded before these columns existed are filled in from their `session.json` when it is still there.
 
 See [MIGRATION.md](MIGRATION.md) for what changed in the output files.

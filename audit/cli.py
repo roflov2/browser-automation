@@ -7,6 +7,7 @@ import sys
 from collections.abc import Sequence
 
 from .config import Settings, keep_loopback_off_proxy, load_settings
+from .core import OUTPUT_ROOT, read_csv, usage_report, with_session_usage
 from .runner import run
 from .workflows import WORKFLOWS
 
@@ -44,6 +45,13 @@ def build_parser(settings: Settings) -> argparse.ArgumentParser:
         sub = subparsers.add_parser(workflow.name, help=workflow.help, description=workflow.help, parents=[common])
         workflow.add_arguments(sub, settings)
         sub.set_defaults(workflow_class=workflow, parser=sub)
+    usage = subparsers.add_parser(
+        "usage",
+        help="Show time and LLM token usage per run, from output/runs.csv (opens no browser)",
+        description="Totals and averages of run time, LLM time, LLM calls and tokens per workflow, then the latest runs.",
+    )
+    usage.add_argument("--last", type=int, default=10, metavar="N", help="How many recent runs to list (default 10)")
+    usage.set_defaults(workflow_class=None)
     return parser
 
 
@@ -51,6 +59,9 @@ def main(argv: Sequence[str] | None = None) -> None:
     """Entry point of `python main.py` and the `drip-audit` console script."""
     settings = load_settings()
     args = build_parser(settings).parse_args(argv)
+    if args.workflow_class is None:  # `usage`: a report, not a run
+        print(usage_report(with_session_usage(read_csv(OUTPUT_ROOT / "runs.csv")), args.last))  # noqa: T201 - the report is the output
+        return
     configure_logging(args.verbose, args.quiet)
     keep_loopback_off_proxy()
     asyncio.run(run(args.workflow_class(args, settings), args, settings))

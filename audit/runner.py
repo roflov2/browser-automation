@@ -40,6 +40,7 @@ from .core import (
     OUTPUT_ROOT,
     AuditError,
     ExtractFailed,
+    RunUsage,
     SiteResult,
     Status,
     StepTimeout,
@@ -165,6 +166,8 @@ EXTRACT_IGNORE = (
     "#CybotCookiebotDialog",
     "#usercentrics-root",
 )
+# Stagehand methods that call the model, besides extract(): counted towards a run's llm_calls.
+LLM_METHODS = frozenset({"observe", "act"})
 
 
 class RecordingStagehand:
@@ -172,6 +175,7 @@ class RecordingStagehand:
 
     extract() gets an explicit timeout, leaves out the page furniture in EXTRACT_IGNORE, raises a
     specific error when it fails, and has every result appended to the run's extractions.jsonl.
+    Every model call (extract, observe, act, retries included) is counted in `llm_calls`.
     Everything else is passed straight through.
     """
 
@@ -179,6 +183,7 @@ class RecordingStagehand:
         self._stagehand = stagehand
         self._log = session_log or SessionLog()
         self._page = page
+        self.llm_calls = 0
 
     def record_to(self, path: Path | None) -> None:
         """Start writing extractions to `path` (one file per run); None stops recording."""
@@ -190,6 +195,7 @@ class RecordingStagehand:
             options.setdefault("ignore_locators", [self._page.locator(selector) for selector in EXTRACT_IGNORE])
         for attempt in range(2):
             try:
+                self.llm_calls += 1
                 result = await self._stagehand.extract(instruction, schema, **options)
                 break
             except ValidationError as error:
@@ -221,7 +227,15 @@ class RecordingStagehand:
         return result
 
     def __getattr__(self, name: str) -> Any:
-        return getattr(self._stagehand, name)
+        attribute = getattr(self._stagehand, name)
+        if name not in LLM_METHODS:
+            return attribute
+
+        async def counted(*args: Any, **kwargs: Any) -> Any:
+            self.llm_calls += 1
+            return await attribute(*args, **kwargs)
+
+        return counted
 
 
 @contextlib.asynccontextmanager
@@ -427,9 +441,10 @@ def metrics_delta(before: Any, after: Any) -> dict[str, float]:
 async def audit_and_record(
     workflow: Workflow, stagehand: Any, page: Page, browser: StagehandBrowser, url: str,
     session_log: SessionLog, describe_browser: Callable[[], dict[str, Any]], interactive: bool = False,
-) -> None:  # fmt: skip
-    """Audit one site and write its session.json, runs.csv row and summary."""
+) -> RunUsage:  # fmt: skip
+    """Audit one site and write its session.json, runs.csv row and summary. Returns the run's time and token usage."""
     start = perf_counter()
+    calls_before = getattr(stagehand, "llm_calls", None)
     before = await stagehand.metrics()
     async with ResourceMonitor().running() as monitor:
         result = await audit_site(workflow, stagehand, page, browser, url, interactive)
@@ -439,23 +454,30 @@ async def audit_and_record(
         log.warning("  Could not read usage metrics (%s); tokens_used is unknown for this run", error)
         after = None
 
+    delta = metrics_delta(before, after) if after else None
+    calls_after = getattr(stagehand, "llm_calls", None)
+    llm_calls = calls_after - calls_before if calls_before is not None and calls_after is not None else None
+    usage = RunUsage.from_metrics(round((perf_counter() - start) * 1000), delta, llm_calls)
     session = {
         "site": url,
         "workflow": workflow.name,
         "status": result.status,
         "message": result.message,
         "failure_reason": result.failure_reason,
-        "execution_time_ms": round((perf_counter() - start) * 1000),
+        "execution_time_ms": usage.duration_ms,
         "tokens_used": token_total(after) - token_total(before) if after else None,
-        "metrics": metrics_delta(before, after) if after else None,
+        "usage": usage.row(),
+        "metrics": delta,
         "metrics_cumulative": (after or before).model_dump(mode="json"),
         "resource_usage": monitor.summary(),
         "history": list(session_log.history),
         **describe_browser(),
     }
     write_json(result.out_dir / "session.json", session)
-    update_summary(result, workflow.name, workflow.target_key(url, result))
+    update_summary(result, workflow.name, workflow.target_key(url, result), usage)
     log.info(f"  Status: {result.status} {result.message} -> {result.out_dir}")
+    log.info(f"  {usage.describe()}")
+    return usage
 
 
 async def fresh_tab(browser: StagehandBrowser) -> Page:
@@ -512,8 +534,13 @@ async def run(
             # The in-page purchase blocker, on every page from here on (not for --login, where a person signs in).
             await safety.install(browser.context, page)
             stagehand = RecordingStagehand(client, session_log, page)
+            usages = []
             for url in targets:
                 session_log.start_site()
-                await audit_and_record(workflow, stagehand, page, browser, url, session_log, describe, interactive)
+                usages.append(
+                    await audit_and_record(workflow, stagehand, page, browser, url, session_log, describe, interactive)
+                )
+            if len(usages) > 1:
+                log.info(f"\nAll {len(usages)} runs: {sum(usages[1:], usages[0]).describe()}")
 
     log.info(f"\nSummary written to {OUTPUT_ROOT / 'summary.csv'} (history in {OUTPUT_ROOT / 'runs.csv'})")

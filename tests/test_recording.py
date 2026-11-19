@@ -48,3 +48,20 @@ def test_extractions_are_appended(tmp_path):
     assert entries[0]["schema"] == "Total"
     assert entries[0]["data"] == {"total": "$67.00"}
     assert datetime.fromisoformat(entries[0]["timestamp"]).tzinfo is not None
+
+
+def test_model_calls_are_counted():
+    class Fake(FakeStagehand):
+        async def observe(self, instruction, **options):
+            return []
+
+    stagehand = RecordingStagehand(Fake())
+
+    async def scenario():
+        await stagehand.extract("Read the total", Total)
+        await stagehand.observe("find the button")
+        await stagehand.observe("find it again")
+        await stagehand.metrics()  # not a model call
+
+    asyncio.run(scenario())
+    assert stagehand.llm_calls == 3
