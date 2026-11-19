@@ -9,6 +9,7 @@ import pytest
 from audit import safety
 from audit.core import PageScriptError, UnsafeActionRefused
 from audit.page import js, settle, shot, try_goto, wait_for_render, wait_until
+from audit.workflows.coffee import Product, resolve_product_url
 
 from .browser_support import find_chrome, launch_args, serve
 
@@ -49,6 +50,20 @@ async def observe_page(chrome: str, port: int, tmp: Path) -> dict:
                     seen[f"self_submit_{name}"] = ("went on", await page.url())
                 except UnsafeActionRefused as refusal:
                     seen[f"self_submit_{name}"] = ("refused", str(refusal))
+
+        # Which link a coffee product is opened from, whatever URL the model extracted for it
+        await page.goto(f"{base}/carousel.html")
+        shop = f"{base}/carousel.html"
+        for case, name, url in (
+            ("model_gave_section_link", "Lomaverde, Colombia", "/collections/single"),
+            ("model_gave_element_id", "Lomaverde, Colombia", "4-2475"),
+            ("model_gave_nothing", "Kamvara Estate AA, Kenya", None),
+            ("name_not_on_page_but_linked", "Mystery Blend", f"{base}/products/unnamed-card/"),
+            ("name_not_on_page_and_not_linked", "Mystery Blend", "/products/made-up"),
+        ):
+            product = Product(name=name, price="", sold_out=False, is_coffee=True, product_type="other", url=url)
+            found = await resolve_product_url(page, product, shop)
+            seen[f"resolve_{case}"] = found.removeprefix(base) if found else None
 
         await page.goto(f"{base}/static.html")
         seen["value"] = await js(page, "() => document.title")
@@ -156,3 +171,17 @@ def test_a_page_submitting_its_own_form_elsewhere_still_ends_the_run(seen):
     outcome, why = seen["self_submit_ordinary"]
     assert outcome == "refused"
     assert "Buy now" in why and "requestSubmit" in why
+
+
+@pytest.mark.parametrize(
+    ("case", "expected"),
+    [
+        ("model_gave_section_link", "/products/lomaverde-colombia"),  # the redbrick.coffee skip
+        ("model_gave_element_id", "/products/lomaverde-colombia"),
+        ("model_gave_nothing", "/products/kamvara-estate-aa"),
+        ("name_not_on_page_but_linked", "/products/unnamed-card"),
+        ("name_not_on_page_and_not_linked", None),  # clicked by name instead
+    ],
+)
+def test_a_product_is_opened_from_the_link_the_page_gives_it(seen, case, expected):
+    assert seen[f"resolve_{case}"] == expected

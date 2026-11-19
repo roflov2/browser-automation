@@ -185,22 +185,21 @@ def choose_coffees(products: list[Product], n: int) -> list[Product]:
     return (preferred + others)[:n]
 
 
-JS_FIND_PRODUCT_LINK = r"""({ names, currentUrl }) => {
+JS_FIND_PRODUCT_LINK = r"""({ names, modelUrl, currentUrl }) => {
     const norm = s => (s || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+    const bare = u => (u || '').split('#')[0].split('?')[0].replace(/\/+$/, '');
     const targets = new Set(names.map(norm).filter(Boolean));
-    const base = currentUrl.split('?')[0].replace(/\/+$/, '');
+    const base = bare(currentUrl);
 
-    const anchors = Array.from(document.querySelectorAll('a[href]'));
+    const anchors = Array.from(document.querySelectorAll('a[href]')).filter(a => {
+        const raw = a.getAttribute('href') || '';
+        return raw && !raw.startsWith('#') && !raw.startsWith('javascript:') && bare(a.href) && bare(a.href) !== base;
+    });
     // Prefer links containing /products/ or /product/ when multiple links match
     anchors.sort((a, b) => (b.href.includes('/product') ? 1 : 0) - (a.href.includes('/product') ? 1 : 0));
 
+    // 1. The link the page itself labels with the product's name.
     for (const a of anchors) {
-        const rawHref = a.getAttribute('href') || '';
-        if (!rawHref || rawHref.startsWith('#') || rawHref.startsWith('javascript:')) continue;
-
-        const resolved = a.href.split('?')[0].replace(/\/+$/, '');
-        if (!resolved || resolved === base) continue;
-
         const heading = a.querySelector('h1, h2, h3, h4, h5, [class*="title" i], [class*="name" i]');
         const candidates = [
             heading ? norm(heading.innerText) : '',
@@ -208,22 +207,25 @@ JS_FIND_PRODUCT_LINK = r"""({ names, currentUrl }) => {
             norm(a.title),
             norm(a.innerText)
         ].filter(Boolean);
-
         if (candidates.some(c => targets.has(c))) return a.href;
     }
+    // 2. The model's URL, but only if the page really links to it: the model sometimes reports a nearby
+    //    link instead ('Shop singles' -> /collections/single) or an element id ('4-2475').
+    const wanted = bare(modelUrl);
+    if (wanted) for (const a of anchors) if (bare(a.href) === wanted) return a.href;
     return null;
 }"""
 
 
 async def resolve_product_url(page: Page, product: Product, shop_url: str) -> str | None:
-    """Return a validated product URL from extraction or exact DOM match; None if clicking is required."""
-    if product.url and product.url.startswith(("http://", "https://", "/")):
-        full = urljoin(shop_url, product.url)
-        if full.split("?")[0].rstrip("/") != shop_url.split("?", maxsplit=1)[0].rstrip("/"):
-            return full
+    """The product page's URL as the shop page links to it; None if the product has to be clicked instead.
 
+    The page's own link for the product's name wins over the URL the model extracted, which is used only
+    when the page links to it.
+    """
+    model_url = urljoin(shop_url, product.url) if product.url and product.url.startswith(("http", "/")) else None
     names = [product.name, COFFEE_AFFIX.sub("", product.name).strip()]
-    href = await js(page, JS_FIND_PRODUCT_LINK, {"names": names, "currentUrl": shop_url})
+    href = await js(page, JS_FIND_PRODUCT_LINK, {"names": names, "modelUrl": model_url, "currentUrl": shop_url})
     return href if isinstance(href, str) and href else None
 
 
@@ -254,16 +256,23 @@ async def add_product_to_cart(stagehand: Stagehand, page: Page, product: Product
         ).data
 
         if not state.is_product_page:
-            if attempt == 0 and not target_url:
-                # If the initial click didn't open the product page, try once more
+            if attempt == 0:
+                # The link led elsewhere, or the click missed: click the product on the shop page once more
+                if target_url:
+                    log.info(f"    {await page.url()} is not the product page; clicking the product on the shop page")
+                    await page.goto(shop_url)
+                    await settle(page, 1000)
                 await safe_act(
                     stagehand,
                     page,
                     f"Click on the product link or title for '{product.name}' to open its product page.",
                 )
                 await settle(page, 1000)
+                await maybe_dismiss_popups(stagehand, page, POPUPS)
                 continue
-            log.info(f"    Not on a valid product page for '{product.name}' ({state.reason}), skipping.")
+            log.info(
+                f"    Not on a valid product page for '{product.name}' at {await page.url()} ({state.reason}), skipping."
+            )
             return item
 
         acted = False

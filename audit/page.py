@@ -265,7 +265,8 @@ async def dismiss_popups(stagehand: Stagehand, page: Page, targets: str, caution
         found = await stagehand.observe(
             "Find the close, accept, dismiss, 'No thanks', 'Maybe later' or 'Skip' button of any visible "
             f"{targets}. Prefer an 'X' or 'Close' icon. Never return a Subscribe, Sign up, Join, Submit or "
-            f"Reveal code button, and never an email field. {caution}Return nothing if there is none.",
+            f"Reveal code button, never a 'Skip to content' link, and never an email field. {caution}"
+            "Return nothing if there is none.",
             timeout=safety.LLM_TIMEOUT_MS,
         )
         skipped = False
