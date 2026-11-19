@@ -390,6 +390,18 @@ JS_DECLINE_UPSELL = r"""() => {
 JS_FIND_STORE = r"""({ preferred, excluded }) => {
     const norm = s => (s || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
     const pref = norm(preferred);
+    const storePath = a => { try { return new URL(a.href).pathname; } catch (e) { return a.href; } };
+    // The whole card: the largest ancestor whose store links all lead to this one store
+    const cardOf = a => {
+        const path = storePath(a);
+        let card = a;
+        for (let el = a.parentElement; el && el !== document.body; el = el.parentElement) {
+            if (Array.from(el.querySelectorAll('a[href*="/store/"]')).some(o => storePath(o) !== path)) break;
+            card = el;
+        }
+        return card;
+    };
+    const FEE = /(A?\$\s?\d+(?:\.\d{1,2})?\s*Delivery\s*Fee\^?|Delivery\s*Fee:?\s*A?\$\s?\d+(?:\.\d{1,2})?|Free\s*Delivery)/i;
     const found = [];
     for (const a of document.querySelectorAll('a[href*="/store/"]')) {
         const heading = a.querySelector('h1, h2, h3, h4, [data-testid*="store" i]') || a;
@@ -397,8 +409,7 @@ JS_FIND_STORE = r"""({ preferred, excluded }) => {
         const low = name.toLowerCase();
         if (!name || !vis(a, 40, 20)) continue;
         if (excluded.some(bad => low.includes(bad) || a.href.toLowerCase().includes('/store/' + bad))) continue;
-        const cardText = (a.closest('li, [data-testid*="store-card" i], div')?.innerText || a.innerText || '');
-        const feeMatch = cardText.match(/(A?\$[\d.]+\s*Delivery\s*Fee|Free\s*Delivery)/i);
+        const feeMatch = clean(cardOf(a).innerText).match(FEE);
         found.push({
             name,
             url: a.href,
@@ -566,26 +577,35 @@ def note_advertised_fees(result: UberResult, chosen: StoreCard) -> None:
 
 
 async def store_url(page: Page, chosen: StoreCard | None, result: UberResult) -> str | None:
-    """The chosen store's `/store/...` URL, from the extraction or else from the page's own links."""
-    if chosen and chosen.url and "/store/" in chosen.url:
-        return urljoin("https://www.ubereats.com", chosen.url)
+    """The chosen store's `/store/...` URL, from the extraction or else from the page's own links.
+
+    The model often answers with an element id instead of the link, or leaves the card's fee out, so the
+    card is also read from the page whenever either is missing.
+    """
+    model_url = (
+        urljoin("https://www.ubereats.com", chosen.url) if chosen and chosen.url and "/store/" in chosen.url else None
+    )
+    if model_url and result.advertised_delivery_fee_display:
+        return model_url
     dom_store = await js(
         page, JS_FIND_STORE, {"preferred": chosen.name if chosen else "", "excluded": list(NON_RESTAURANT_NAMES)}
     )
     if not dom_store:
-        return None
+        return model_url
     result.store_name = result.store_name or dom_store["name"]
     if dom_store.get("deliveryFee") and not result.advertised_delivery_fee_display:
         result.advertised_delivery_fee_display = dom_store["deliveryFee"]
         result.advertised_delivery_fee = parse_price(dom_store["deliveryFee"])
-    return dom_store["url"]
+    return model_url or dom_store["url"]
 
 
 async def open_store_from_feed(stagehand: Stagehand, page: Page, result: UberResult) -> None:
     """Pick a restaurant from the feed or search results and open its page."""
     chosen: StoreCard | None = None
-    with contextlib.suppress(ExtractFailed, StepTimeout):
+    try:
         chosen = choose_store((await stagehand.extract(FEED_QUESTION, StoreFeed, timeout=25_000)).data.stores)
+    except (ExtractFailed, StepTimeout) as error:
+        log.info(f"  Could not read the store cards ({error}); picking the first store link on the page")
     if chosen:
         note_advertised_fees(result, chosen)
 

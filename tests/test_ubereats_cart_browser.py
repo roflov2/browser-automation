@@ -1,4 +1,4 @@
-"""Clearing leftover Uber Eats cart items in a real browser, against a local copy of the cart drawer."""
+"""Uber Eats page steps in a real browser, against local copies of the cart drawer and the search results."""
 
 import asyncio
 from pathlib import Path
@@ -7,13 +7,29 @@ import pytest
 
 from audit import safety
 from audit.page import js
-from audit.workflows.ubereats.store import clear_existing_cart, get_cart_count
+from audit.workflows.ubereats.models import StoreCard, UberResult
+from audit.workflows.ubereats.store import clear_existing_cart, get_cart_count, store_url
 
 from .browser_support import find_chrome, launch_args, serve
 
 FIXTURE = Path(__file__).parent / "fixtures" / "pages"
 pytestmark = pytest.mark.browser
 CASES = {"icons": "", "labels": "?labels=1", "confirm": "?confirm=1"}
+STORES = {  # case: (the model's card, or None when its extraction failed)
+    "model_failed": None,
+    "model_gave_element_id": StoreCard(
+        name="OOSHMAN", delivery_fee_display=None, service_fee_display=None, eta=None,
+        available=True, is_restaurant=True, url="7-1809",
+    ),
+    "model_gave_link_but_no_fee": StoreCard(
+        name="La Casetta", delivery_fee_display=None, service_fee_display=None, eta=None,
+        available=True, is_restaurant=True, url="/au/store/la-casetta/ddd",
+    ),
+    "card_shows_no_fee": StoreCard(
+        name="Pizza Stop", delivery_fee_display=None, service_fee_display=None, eta=None,
+        available=True, is_restaurant=True, url=None,
+    ),
+}  # fmt: skip
 
 
 class NoModel:
@@ -48,6 +64,11 @@ async def clear_carts(chrome: str, port: int) -> dict:
                     "plus_clicks": await js(page, "() => window.plusClicks"),
                     "llm": model.instructions,
                 }
+            await page.goto(f"http://127.0.0.1:{port}/uber-search.html")
+            for case, card in STORES.items():
+                result = UberResult(site="ubereats", out_dir=Path())
+                url = await store_url(page, card, result)
+                seen[case] = (url.split("/store/")[-1] if url else None, result.advertised_delivery_fee_display)
     finally:
         await stagehand.close()
     return seen
@@ -68,3 +89,16 @@ def test_leftover_cart_items_are_all_removed_without_the_model(seen, case):
     assert seen[case]["after"] == 0
     assert seen[case]["plus_clicks"] == 0
     assert seen[case]["llm"] == []
+
+
+@pytest.mark.parametrize(
+    ("case", "expected"),
+    [
+        ("model_failed", ("ooshman-belconnen/bbb", "$4.99 Delivery Fee^")),  # the first restaurant, not Coles
+        ("model_gave_element_id", ("ooshman-belconnen/bbb", "$4.99 Delivery Fee^")),
+        ("model_gave_link_but_no_fee", ("la-casetta/ddd", "Delivery Fee: $0.99")),
+        ("card_shows_no_fee", ("pizza-stop/ccc", None)),
+    ],
+)
+def test_the_store_link_and_fee_are_read_from_the_whole_search_card(seen, case, expected):
+    assert seen[case] == expected
