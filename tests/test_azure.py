@@ -14,7 +14,15 @@ import pytest
 from pydantic import BaseModel
 from stagehand._generated import models as wire
 
-from audit.azure import AzureLLM, EntraToken, UnsupportedRequest, chat_messages, completion_options, open_azure_llm
+from audit.azure import (
+    AzureLLM,
+    EntraToken,
+    UnsupportedRequest,
+    chat_messages,
+    completion_options,
+    fill_missing_nulls,
+    open_azure_llm,
+)
 from audit.config import ConfigError, Settings
 
 from .browser_support import StubModel, find_chrome, launch_args, serve
@@ -44,18 +52,26 @@ def completion(content: str, finish_reason: str = "stop", refusal: str | None = 
 
 
 class FakeAzure:
-    """Stands in for AsyncAzureOpenAI: records each chat.completions.create call and returns `answer(kwargs)`."""
+    """Stands in for AsyncAzureOpenAI: records each chat completion call and answers `answer(kwargs)` (or raises it).
 
-    def __init__(self, answer) -> None:
+    The adapter calls `chat.completions.with_raw_response.create` to read the rate-limit headers, sent here as `headers`.
+    """
+
+    def __init__(self, answer, headers: dict | None = None) -> None:
         self.calls: list[dict] = []
         self.closed = False
         self._answer = answer
-        self.chat = SimpleNamespace(completions=SimpleNamespace(create=self._create))
+        self._headers = headers or {}
+        raw = SimpleNamespace(create=self._create)
+        self.chat = SimpleNamespace(completions=SimpleNamespace(with_raw_response=raw))
 
     async def _create(self, **kwargs):
         self.calls.append(kwargs)
         answer = self._answer(kwargs)
-        return await answer if inspect.isawaitable(answer) else answer
+        answer = await answer if inspect.isawaitable(answer) else answer
+        if isinstance(answer, BaseException):
+            raise answer
+        return SimpleNamespace(headers=self._headers, parse=lambda: answer)
 
     async def close(self) -> None:
         self.closed = True
@@ -110,6 +126,100 @@ def test_fenced_json_is_accepted_and_bad_json_or_refusal_fails():
         asyncio.run(AzureLLM(FakeAzure(lambda _: completion("not json")), "d")(STRUCTURED))
     with pytest.raises(ValueError, match="refused"):
         asyncio.run(AzureLLM(FakeAzure(lambda _: completion("", refusal="no")), "d")(STRUCTURED))
+
+
+def test_left_out_nullable_keys_are_answered_as_null():
+    """GPT-4o without strict mode drops keys it has nothing for; Stagehand rejects `undefined` but accepts null."""
+    from audit.workflows.ubereats.models import Offer
+
+    nullable = {"type": ["string", "null"]}
+    schema = {  # the shape Stagehand sends (nested objects inlined, nullable as a type list)
+        "type": "object",
+        "properties": {
+            "total": nullable,
+            "offers": {"type": "array", "items": {
+                "type": "object",
+                "properties": {"label": {"type": "string"}, "price": nullable, "price_basis": nullable},
+                "required": ["label", "price", "price_basis"],
+            }},
+        },
+        "required": ["total", "offers"],
+    }  # fmt: skip
+    answer = {"offers": [{"label": "Service Fee", "price": "$4.00", "price_basis": "per order"},
+                         {"label": "Priority delivery", "price": "+$2.99"},
+                         {"price": "$1"}]}  # fmt: skip
+    request = {**STRUCTURED, "response_format": {"type": "json_schema", "name": "Cart", "schema": schema}}
+
+    result = asyncio.run(AzureLLM(FakeAzure(lambda _: completion(json.dumps(answer))), "d")(request))
+
+    assert result["structured_content"] == {
+        "total": None,
+        "offers": [{"label": "Service Fee", "price": "$4.00", "price_basis": "per order"},
+                   {"label": "Priority delivery", "price": "+$2.99", "price_basis": None},
+                   {"price": "$1", "price_basis": None}],  # a missing non-nullable key is left for Stagehand to reject
+    }  # fmt: skip
+
+    # pydantic's own schema shape: $defs/$ref, anyOf with null, and the real Offer model
+    class Cart(BaseModel):
+        offers: list[Offer]
+        note: Offer | None
+
+    filled = fill_missing_nulls({"offers": [{"category": "fee", "label": "Bag", "selected": True, "mandatory": False}]},
+                                Cart.model_json_schema())  # fmt: skip
+    assert filled == {"note": None, "offers": [{"category": "fee", "label": "Bag", "price": None, "price_basis": None,
+                                                "selected": True, "mandatory": False}]}  # fmt: skip
+
+
+def rate_limited(retry_after: str = "7") -> Exception:
+    """A 429 as the openai SDK raises it for an Azure token-per-minute throttle."""
+    import httpx2
+    import openai
+
+    body = {"code": "429", "message": "Requests to the ChatCompletions_Create Operation have exceeded token rate limit"}
+    headers = {"retry-after": retry_after, "x-ratelimit-remaining-tokens": "0", "x-ratelimit-limit-tokens": "30000",
+               "apim-request-id": "req-1"}  # fmt: skip
+    request = httpx2.Request("POST", ENDPOINT + "openai/deployments/gpt-4o/chat/completions")
+    response = httpx2.Response(429, headers=headers, json={"error": body}, request=request)
+    return openai.RateLimitError("Error code: 429", response=response, body=body)
+
+
+def test_throttling_is_reported_with_the_endpoints_message_and_retried(caplog):
+    answers = [rate_limited(), rate_limited("120"), completion('{"total": "$1"}')]
+    headers = {"x-ratelimit-remaining-tokens": "900", "x-ratelimit-limit-tokens": "30000",
+               "x-ratelimit-remaining-requests": "40", "x-ratelimit-limit-requests": "50"}  # fmt: skip
+    waits: list[float] = []
+
+    async def sleep(seconds):
+        waits.append(seconds)
+
+    llm = AzureLLM(FakeAzure(lambda _: answers.pop(0), headers), "gpt-4o", sleep=sleep)
+    with caplog.at_level("DEBUG", logger="audit.azure"):
+        result = asyncio.run(llm(STRUCTURED))
+
+    assert result["structured_content"] == {"total": "$1"}
+    assert waits == [7.0, 60.0]  # the endpoint's retry-after, capped
+    first, second, done = (record.getMessage() for record in caplog.records)
+    assert "call 1 failed" in first and "(attempt 1/4): 429 [429] Requests to the ChatCompletions_Create" in first
+    assert "tokens 0/30,000" in first and "request id req-1" in first and "retrying in 7.0s" in first
+    assert "attempt 2/4" in second and "retrying in 60.0s" in second
+    assert "call 1:" in done and "128 tokens" in done and "tokens 900/30,000, requests 40/50" in done
+    assert "nearly out" in done and caplog.records[-1].levelname == "WARNING"  # 900 is under 10% of 30,000
+
+
+def test_persistent_throttling_or_a_bad_request_gives_up(caplog):
+    async def no_wait(_):
+        pass
+
+    throttled = FakeAzure(lambda _: rate_limited("1"))
+    with pytest.raises(Exception, match="429"):
+        asyncio.run(AzureLLM(throttled, "d", sleep=no_wait)(STRUCTURED))
+    assert len(throttled.calls) == 4
+    assert "attempt 4/4" in caplog.records[-1].getMessage() and "giving up" in caplog.records[-1].getMessage()
+
+    refused = FakeAzure(lambda _: ValueError("bad schema"))
+    with pytest.raises(ValueError, match="bad schema"):
+        asyncio.run(AzureLLM(refused, "d", sleep=no_wait)(STRUCTURED))
+    assert len(refused.calls) == 1  # not retried
 
 
 def test_tool_calls_are_refused_clearly():
@@ -202,6 +312,7 @@ def test_open_azure_llm_signs_in_up_front_and_closes(monkeypatch):
     assert built["credential"] == {"exclude_managed_identity_credential": True}
     assert built["client"]["azure_endpoint"] == ENDPOINT
     assert built["client"]["api_version"] == "2024-12-01-preview"
+    assert built["client"]["max_retries"] == 0  # AzureLLM retries, and reports each throttle
     assert built["fake"].closed and credential.closed
 
 

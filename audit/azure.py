@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import logging
 import re
 import time
 from collections.abc import AsyncIterator
@@ -19,9 +20,16 @@ from typing import Any, Protocol
 
 from .config import ConfigError, Settings
 
+log = logging.getLogger(__name__)
+
 SCOPE = "https://cognitiveservices.azure.com/.default"
 REFRESH_MARGIN_SECONDS = 300  # fetch a new token this long before the current one expires
 FENCED_JSON = re.compile(r"^\s*```(?:json)?\s*(.*?)\s*```\s*$", re.DOTALL)
+MAX_ATTEMPTS = 4  # one call plus three retries on a throttle (429), a server error or a dropped connection
+MAX_WAIT_SECONDS = 60.0
+RETRY_STATUSES = {408, 429, 500, 502, 503, 504}
+RETRY_ERRORS = {"APIConnectionError", "APITimeoutError"}  # by name: openai is an optional import
+LOW_QUOTA_SHARE = 0.1  # report when less than this share of the per-minute token or request limit is left
 
 
 class UnsupportedRequest(ValueError):
@@ -125,6 +133,71 @@ def parse_json(text: str) -> Any:
         raise ValueError(f"Azure OpenAI did not return valid JSON: {text[:200]!r}") from error
 
 
+def _resolve(schema: Any, root: dict[str, Any]) -> Any:
+    """Follows a local `$ref` (`#/$defs/...` or `#/definitions/...`); other schemas come back as they are."""
+    seen = 0
+    while isinstance(schema, dict) and isinstance(schema.get("$ref"), str) and schema["$ref"].startswith("#/"):
+        target: Any = root
+        for part in schema["$ref"][2:].split("/"):
+            target = target.get(part) if isinstance(target, dict) else None
+        if target is None or (seen := seen + 1) > 32:
+            return schema
+        schema = target
+    return schema
+
+
+def _variants(schema: Any, root: dict[str, Any]) -> list[dict[str, Any]]:
+    """The schema and, through anyOf/oneOf/allOf, every alternative it allows (refs resolved)."""
+    schema = _resolve(schema, root)
+    if not isinstance(schema, dict):
+        return []
+    found = [schema]
+    for key in ("anyOf", "oneOf", "allOf"):
+        for option in schema.get(key) or []:
+            found.extend(_variants(option, root))
+    return found
+
+
+def _allows_null(schema: Any, root: dict[str, Any]) -> bool:
+    for variant in _variants(schema, root):
+        kind = variant.get("type")
+        if kind == "null" or (isinstance(kind, list) and "null" in kind) or variant.get("nullable") is True:
+            return True
+        if "const" in variant and variant["const"] is None:
+            return True
+        if None in (variant.get("enum") or []):
+            return True
+    return False
+
+
+def fill_missing_nulls(value: Any, schema: Any, root: dict[str, Any] | None = None) -> Any:
+    """Sets every required-but-nullable key the model left out to null, at any depth; changes `value` in place.
+
+    The schema is sent without strict mode, so the model may drop a key it has nothing for instead of answering null,
+    and Stagehand's check of the answer then fails on `undefined`. Keys that cannot be null are left alone, so a real
+    gap still fails that check.
+    """
+    root = root if root is not None else (schema if isinstance(schema, dict) else {})
+    for variant in _variants(schema, root):
+        if isinstance(value, dict):
+            properties = variant.get("properties") or {}
+            for key in variant.get("required") or []:
+                if key not in value and key in properties and _allows_null(properties[key], root):
+                    value[key] = None
+            for key, child in properties.items():
+                if key in value:
+                    fill_missing_nulls(value[key], child, root)
+        elif isinstance(value, list):
+            items = variant.get("items")
+            if isinstance(items, list):  # tuple form
+                for element, child in zip(value, items, strict=False):
+                    fill_missing_nulls(element, child, root)
+            elif items is not None:
+                for element in value:
+                    fill_missing_nulls(element, items, root)
+    return value
+
+
 def _usage(usage: Any) -> dict[str, int] | None:
     if usage is None:
         return None
@@ -142,8 +215,8 @@ def _usage(usage: Any) -> dict[str, int] | None:
     return result
 
 
-def stagehand_result(response: Any, structured: bool) -> dict[str, Any]:
-    """A chat completion as Stagehand's LLM result."""
+def stagehand_result(response: Any, structured: bool, schema: Any = None) -> dict[str, Any]:
+    """A chat completion as Stagehand's LLM result; a structured answer gets the nulls it left out (see above)."""
     choice = response.choices[0]
     if getattr(choice.message, "refusal", None):
         raise ValueError(f"Azure OpenAI refused the request: {choice.message.refusal}")
@@ -155,24 +228,136 @@ def stagehand_result(response: Any, structured: bool) -> dict[str, Any]:
     if usage:
         result["usage"] = usage
     if structured:
-        return {**result, "output_format": "json_schema", "structured_content": parse_json(text)}
+        answer = parse_json(text)
+        if schema is not None:
+            fill_missing_nulls(answer, schema)
+        return {**result, "output_format": "json_schema", "structured_content": answer}
     return {**result, "output_format": "text"}
 
 
-class AzureLLM:
-    """The Stagehand LLM callback: one chat completion on the Azure deployment per Stagehand model request."""
+def _header(headers: Any, name: str) -> str | None:
+    value = headers.get(name) if headers is not None else None
+    return str(value) if value is not None else None
 
-    def __init__(self, client: Any, deployment: str) -> None:
+
+def _int_header(headers: Any, name: str) -> int | None:
+    value = _header(headers, name)
+    try:
+        return int(float(value)) if value is not None else None
+    except ValueError:
+        return None
+
+
+def quota(headers: Any) -> str:
+    """What the deployment's rate-limit headers say is left this minute, e.g. 'tokens 1,200/30,000, requests 4/50'."""
+    parts = []
+    for kind in ("tokens", "requests"):
+        left = _int_header(headers, f"x-ratelimit-remaining-{kind}")
+        limit = _int_header(headers, f"x-ratelimit-limit-{kind}")
+        if left is not None:
+            parts.append(f"{kind} {left:,}/{limit:,}" if limit else f"{kind} {left:,}")
+    return f"left this minute: {', '.join(parts)}" if parts else "no rate-limit headers"
+
+
+def quota_is_low(headers: Any) -> bool:
+    for kind in ("tokens", "requests"):
+        left = _int_header(headers, f"x-ratelimit-remaining-{kind}")
+        limit = _int_header(headers, f"x-ratelimit-limit-{kind}")
+        if left is not None and limit and left < limit * LOW_QUOTA_SHARE:
+            return True
+    return False
+
+
+def retry_after(headers: Any) -> float | None:
+    """How long the endpoint asked us to wait, in seconds (Azure sends retry-after-ms and/or retry-after)."""
+    milliseconds = _header(headers, "retry-after-ms")
+    seconds = _header(headers, "retry-after")
+    try:
+        if milliseconds is not None:
+            return float(milliseconds) / 1000
+        if seconds is not None:
+            return float(seconds)
+    except ValueError:
+        pass
+    return None
+
+
+def endpoint_message(error: BaseException) -> str:
+    """The endpoint's own error text (Azure: body.error.message or body.message), else the exception's."""
+    body = getattr(error, "body", None)
+    if isinstance(body, dict):
+        nested = body.get("error")
+        inner: dict[str, Any] = nested if isinstance(nested, dict) else body
+        code, message = inner.get("code"), inner.get("message")
+        if message:
+            return f"[{code}] {message}" if code else str(message)
+    return str(error) or type(error).__name__
+
+
+class AzureLLM:
+    """The Stagehand LLM callback: one chat completion on the Azure deployment per Stagehand model request.
+
+    Throttles (429), server errors and dropped connections are retried here rather than inside the OpenAI client
+    (which retries silently), so each one is printed with the endpoint's message and the quota it reports.
+    """
+
+    def __init__(self, client: Any, deployment: str, sleep: Any = asyncio.sleep) -> None:
         self.client = client
         self.deployment = deployment
+        self._sleep = sleep
+        self.calls = 0
+
+    async def _complete(self, messages: list[dict[str, Any]], options: dict[str, Any]) -> Any:
+        self.calls += 1
+        call = self.calls
+        for attempt in range(1, MAX_ATTEMPTS + 1):
+            started = time.monotonic()
+            try:
+                raw = await self.client.chat.completions.with_raw_response.create(
+                    model=self.deployment, messages=messages, **options
+                )
+            except asyncio.CancelledError:
+                log.warning(
+                    f"  Azure OpenAI call {call} abandoned after {time.monotonic() - started:.1f}s "
+                    f"(attempt {attempt}/{MAX_ATTEMPTS}): the caller timed out or was cancelled"
+                )
+                raise
+            except Exception as error:
+                status = getattr(error, "status_code", None)
+                headers = getattr(getattr(error, "response", None), "headers", None)
+                retryable = status in RETRY_STATUSES or type(error).__name__ in RETRY_ERRORS
+                request_id = _header(headers, "apim-request-id") or _header(headers, "x-request-id")
+                detail = (
+                    f"Azure OpenAI call {call} failed after {time.monotonic() - started:.1f}s "
+                    f"(attempt {attempt}/{MAX_ATTEMPTS}): {status or type(error).__name__} {endpoint_message(error)}"
+                    f" | {quota(headers)}" + (f" | request id {request_id}" if request_id else "")
+                )
+                if not retryable or attempt == MAX_ATTEMPTS:
+                    log.warning(f"  {detail} | giving up")
+                    raise
+                wait = min(retry_after(headers) or 2.0**attempt, MAX_WAIT_SECONDS)
+                log.warning(f"  {detail} | retrying in {wait:.1f}s")
+                await self._sleep(wait)
+                continue
+            response = raw.parse()
+            headers = raw.headers
+            usage = getattr(response, "usage", None)
+            tokens = f"{usage.total_tokens:,} tokens" if usage is not None else "tokens unknown"
+            summary = f"Azure OpenAI call {call}: {time.monotonic() - started:.1f}s, {tokens} | {quota(headers)}"
+            if quota_is_low(headers):
+                log.warning(f"  {summary} (nearly out)")
+            else:
+                log.debug(f"  {summary}")
+            return response
+        raise AssertionError("unreachable")
 
     async def __call__(self, params: Any) -> dict[str, Any]:
         request = as_dict(params)
         options = completion_options(request)
-        response = await self.client.chat.completions.create(
-            model=self.deployment, messages=chat_messages(request), **options
-        )
-        return stagehand_result(response, structured="response_format" in options)
+        response = await self._complete(chat_messages(request), options)
+        format_ = options.get("response_format")
+        schema = format_["json_schema"]["schema"] if format_ else None
+        return stagehand_result(response, structured=format_ is not None, schema=schema)
 
 
 @contextlib.asynccontextmanager
@@ -189,7 +374,10 @@ async def open_azure_llm(settings: Settings) -> AsyncIterator[AzureLLM]:
     credential = DefaultAzureCredential(exclude_managed_identity_credential=not settings.azure_openai_managed_identity)
     token = EntraToken(credential)
     client = AsyncAzureOpenAI(
-        api_version=settings.azure_openai_api_version, azure_endpoint=endpoint, azure_ad_token_provider=token
+        api_version=settings.azure_openai_api_version,
+        azure_endpoint=endpoint,
+        azure_ad_token_provider=token,
+        max_retries=0,  # AzureLLM retries itself, so that throttling is reported rather than silent
     )
     try:
         try:
