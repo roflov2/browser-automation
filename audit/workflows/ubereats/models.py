@@ -22,7 +22,8 @@ class AddressAndFeedState(BaseModel):
         description="Exact delivery address text currently shown in the top header location pill (e.g. '240 City Walk', '1 Jeffcott Pl'), or null if it says 'Enter delivery address' or is not set"
     )
     address_modal_or_input_open: bool = Field(
-        description="True if the 'Deliver to' / address input dialog or text field is currently open on screen"
+        description="True if the 'Deliver to' / address input dialog or text field is currently open on screen, "
+        "or a location prompt such as 'Let us know your building type' / dropoff details is open"
     )
     address_suggestions_open: bool = Field(
         description="True if an autocomplete dropdown list of address suggestions is currently visible below the address input"

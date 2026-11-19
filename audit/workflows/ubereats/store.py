@@ -181,6 +181,18 @@ const markScope = el => {
     el.setAttribute('data-audit-scope', '1');
     return true;
 };
+// Uber's location-manager 'building type' / dropoff-details prompt ('Let us know your building type for more
+// accurate deliveries'), or null. Its wording is required, so an item modal, the cart or the 'new order' prompt
+// never counts: a strong phrase, or at least two building kinds offered as choices.
+const LOCATION_PROMPT = /building type|type of building|more accurate deliver|choose your building|drop-?off (options?|instructions?|details?)/i;
+const BUILDING_KINDS = /\b(apartment|house|townhouse|business)\b/gi;
+const locationPrompt = () => dialogs().filter(d => vis(d, 200, 150)).reverse().find(d => {
+    const t = clean(txt(d));
+    if (addButton() && d.contains(addButton())) return false;
+    if (/subtotal|checkout|add to (order|cart)/i.test(t)) return false;
+    if (LOCATION_PROMPT.test(t)) return true;
+    return new Set((t.match(BUILDING_KINDS) || []).map(k => k.toLowerCase())).size >= 2;
+}) || null;
 """
 
 
@@ -188,8 +200,10 @@ async def dismiss_uber_popups(stagehand: Stagehand, page: Page) -> None:
     await page_helpers.maybe_dismiss_popups(
         stagehand,
         page,
-        "cookie banner, promotional popup, Uber One trial offer, or app-install banner",
-        caution="Do NOT click 'Sign in' or 'Continue' on an order. ",
+        "cookie banner, promotional popup, Uber One trial offer, app-install banner, or delivery building-type / "
+        "dropoff-details prompt ('Let us know your building type')",
+        caution="Do NOT click 'Sign in' or 'Continue' on an order. For the building-type prompt only, 'Skip', "
+        "'Not now' or 'Save' are fine; never edit or delete a saved address. ",
         selectors='[role="dialog"], [aria-modal="true"], [class*="cookie" i], [id*="cookie" i], '
         '[class*="promo" i], [class*="banner" i]',
     )
@@ -258,6 +272,58 @@ JS_SET_ADDRESS = r"""({ target, tokens }) => {
             safeClick(btn);
             return 'Clicked header address button: ' + txt(btn).split('\n')[0];
         }
+    }
+    return null;
+}"""
+
+# One step past Uber's location-manager popups: the 'building type' / dropoff-details prompt, and (only once the
+# header shows the target address) a leftover 'Addresses' dialog. Skipping is preferred so nothing is saved to the
+# account; never anything that edits or deletes a saved address. Returns what was done, 'STUCK: ...' when the
+# prompt is open but offers nothing to click, or null when neither dialog is open.
+JS_DISMISS_LOCATION_PROMPT = r"""({ addressConfirmed }) => {
+    const SKIP = /^(skip|not now|maybe later|no,? thanks|later)$/i;
+    const SAVE = /^(save( and continue| address)?|done|continue|confirm)$/i;
+    const EDITS = /edit|delete|remove|change|add (a |new )?address|\$\s*\d/i;
+    const disabled = b => b.disabled || b.getAttribute('aria-disabled') === 'true';
+    const buttons = d => Array.from(d.querySelectorAll('button, [role="button"]')).filter(b => vis(b, 20, 15));
+    const closeControl = d => buttons(d).find(b => guardAllows(b) && (
+        /close|dismiss/i.test(b.getAttribute('aria-label') || '') || (!clean(txt(b)) && b.querySelector('svg'))));
+
+    const prompt = locationPrompt();
+    if (prompt) {
+        const all = buttons(prompt);
+        const skip = all.find(b => SKIP.test(clean(txt(b))) && !disabled(b) && guardAllows(b));
+        if (skip) { safeClick(skip); return 'clicked ' + clean(txt(skip)); }
+        const saves = all.filter(b => SAVE.test(clean(txt(b))) && guardAllows(b));
+        const save = saves.find(b => !disabled(b));
+        if (save) { safeClick(save); return 'clicked ' + clean(txt(save)); }
+        if (saves.length || all.some(b => SKIP.test(clean(txt(b))))) {
+            // Save waits for a building type: choose the first one offered
+            for (const el of prompt.querySelectorAll('[role="radio"], input[type="radio"], [role="option"], li, button')) {
+                const target = el.matches('input') ? (el.closest('label') || (el.id && prompt.querySelector(`label[for="${el.id}"]`)) || el) : el;
+                const label = clean(txt(target) || el.getAttribute('aria-label') || el.value || '');
+                if (!vis(target, 5, 5) || SKIP.test(label) || SAVE.test(label) || EDITS.test(label)) continue;
+                if (el.matches('li, button') && (!label || el.querySelector('button, li, input'))) continue;
+                if ((el.checked || el.getAttribute('aria-checked') === 'true' || el.getAttribute('aria-selected') === 'true')) continue;
+                if (!guardAllows(target)) continue;
+                safeClick(target);
+                return 'chose option ' + (label || '(unlabelled)');
+            }
+        }
+        const close = closeControl(prompt);
+        if (close) { safeClick(close); return 'clicked close (X)'; }
+        return 'STUCK: ' + clean(txt(prompt)).slice(0, 160);
+    }
+
+    // A leftover 'Addresses' dialog over a header that already shows the target address: close it, never type in it
+    if (!addressConfirmed) return null;
+    for (const d of dialogs().filter(d => vis(d, 200, 150)).reverse()) {
+        const heading = d.querySelector('h1, h2, h3, [role="heading"]');
+        const isAddresses = (heading && /^addresses$/i.test(clean(txt(heading))))
+            || (location.href.includes('mod=locationManager') && d.querySelector('input'));
+        if (!isAddresses) continue;
+        const close = closeControl(d);
+        if (close) { safeClick(close); return 'closed the Addresses dialog'; }
     }
     return null;
 }"""
@@ -832,7 +898,8 @@ async def accept_new_order_prompt(page: Page) -> bool:
 ADDRESS_QUESTION = (
     "Look at the top header bar and any open address modal. Report the exact delivery address text currently shown "
     "in the header (`displayed_address`), whether an address input dialog is open (`address_modal_or_input_open`), "
-    "whether autocomplete suggestions are visible (`address_suggestions_open`), and any `blocked_reason`."
+    "whether autocomplete suggestions are visible (`address_suggestions_open`), and any `blocked_reason`. "
+    "A 'Let us know your building type' / dropoff-details prompt counts as an open address dialog."
 )
 FEED_QUESTION = (
     "Extract up to 8 prepared-food restaurants visible near the top of this page with their advertised delivery fee, "
@@ -848,13 +915,50 @@ def address_instruction(state: AddressAndFeedState, address: str) -> str:
     if state.address_modal_or_input_open:
         return (
             f"In the open address dialog: if an address input box is visible, clear it and type '{address}'; "
-            "if a 'Choose your building' or dropoff-options step is shown, select the first building/option or "
-            "click 'Save and continue' / 'Save' / 'Done'."
+            "if a 'Choose your building', 'Let us know your building type' or dropoff-options step is shown, "
+            "click 'Skip' / 'Not now' if offered, else select the first building type/option and click "
+            "'Save and continue' / 'Save' / 'Done'. Never edit or delete a saved address."
         )
     return (
         f"Click the current delivery address button ('{state.displayed_address or 'Enter delivery address'}') "
         f"in the top header so we can change the delivery address to '{address}'."
     )
+
+
+LOCATION_PROMPT_TRIES = 3
+STUCK = "STUCK: "
+
+
+async def location_prompt_open(page: Page) -> bool:
+    return bool(await js(page, "() => !!locationPrompt()", default=False))
+
+
+async def dismiss_location_prompt(page: Page, out: Path | None = None, address_confirmed: bool = False) -> bool:
+    """Get past Uber's 'building type' popup (and, once `address_confirmed`, a leftover 'Addresses' dialog).
+
+    Up to LOCATION_PROMPT_TRIES steps, so 'choose an option' then 'Save' can both happen; if the prompt is
+    still open after that, Escape is pressed. True if anything was done. A prompt that offers nothing to
+    click is saved as a screenshot to `out` (its labels were never captured; keep the regexes honest).
+    """
+    acted = False
+    for _ in range(LOCATION_PROMPT_TRIES):
+        step = await js(page, JS_DISMISS_LOCATION_PROMPT, {"addressConfirmed": address_confirmed})
+        if not step:
+            return acted
+        if step.startswith(STUCK):
+            log.info(f"  Location prompt: found but nothing to click ({step.removeprefix(STUCK)})")
+            if out is not None:
+                await shot(page, out / "location-prompt.png")
+            break
+        log.info(f"  Location prompt: {step}")
+        acted = True
+        await settle(page, 1200)
+    if await location_prompt_open(page):
+        log.info("  Location prompt: still open; pressing Escape")
+        await page.key_press("Escape")
+        await settle(page, 800)
+        acted = True
+    return acted
 
 
 async def confirm_address_step(stagehand: Stagehand, page: Page, address: str, url: str, step_no: int) -> bool:
@@ -864,12 +968,21 @@ async def confirm_address_step(stagehand: Stagehand, page: Page, address: str, u
     the screen (the whole feed page, the costliest extraction of the run) when the page snippets can
     neither confirm the address nor move it forward.
     """
+    # The building-type popup sits on top of a page whose header and pl= may already be right: it must be gone
+    # before the address counts as set, or the store is picked and clicked behind it
+    if await dismiss_location_prompt(page):
+        url = await page.url()
+    if await location_prompt_open(page):
+        log.info(f"  Address step {step_no}: the building-type prompt is still open")
+        return False
     pl_addr = extract_pl_address_from_url(url)
     shown = next(
         (label for label in await js(page, JS_HEADER_ADDRESS, default=[]) if addresses_match(label, address)), None
     )
     if shown or addresses_match(pl_addr, address):
         log.info(f"  Delivery address confirmed: {shown or pl_addr}")
+        if shown:  # the header behind it is right, so a leftover 'Addresses' dialog only needs closing
+            await dismiss_location_prompt(page, address_confirmed=True)
         return True
 
     dom_step = await js(page, JS_SET_ADDRESS, {"target": address, "tokens": street_tokens(address)})
@@ -984,6 +1097,7 @@ async def open_store_from_feed(
         )
         await page.goto(target_url)
         await settle(page, 2800)
+        await dismiss_location_prompt(page, result.out_dir, address_confirmed=True)
     else:
         await safe_act(
             stagehand,
@@ -1047,6 +1161,9 @@ async def ensure_address_and_open_store(
             if not await login_pause(page, f"Uber login wall detected ({curr_url}).", interactive):
                 raise Blocked(f"Redirected to Uber login wall ({curr_url})")
             curr_url = await page.url()
+
+        await dismiss_location_prompt(page, result.out_dir, address_confirmed=address_verified)
+        curr_url = await page.url()
 
         if not address_verified:
             address_verified = await confirm_address_step(stagehand, page, address, curr_url, step_idx + 1)

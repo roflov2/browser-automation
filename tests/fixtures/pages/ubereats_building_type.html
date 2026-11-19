@@ -1,0 +1,71 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Uber feed</title></head>
+<body>
+<!-- An Uber Eats feed after the delivery address was set: the header already shows it, and Uber's location manager
+     asks 'Let us know your building type for more accurate deliveries' on top. Save stays disabled until a
+     building type is chosen. Variants (query string):
+       ?noskip=1     the prompt has no Skip button, so a type must be chosen and saved
+       ?stuck=1      Skip and Escape do nothing (the prompt cannot be closed)
+       ?item=1       no prompt; an item modal ('House special pizza', 'Add 1 to order') instead
+       ?cart=1       no prompt; a cart drawer with 'Go to checkout' instead
+       ?addresses=1  no prompt; a leftover 'Addresses' dialog with another address typed in it
+     window.clicks lists the labels of every button the page saw clicked. -->
+<header>
+  <a href="/au">Uber Eats</a>
+  <button data-testid="edit-delivery-location-button" style="width:220px;height:40px">1 Jeffcott Place • Now</button>
+</header>
+<main>
+  <h1>Delivery near you</h1>
+  <ul>
+    <li><a href="/au/store/ooshman-belconnen/bbb" style="display:block;width:400px;height:60px">OOSHMAN - Belconnen</a></li>
+  </ul>
+</main>
+<script>
+const params = new URLSearchParams(location.search);
+window.clicks = [];
+document.addEventListener('click', e => {
+  const b = e.target.closest('button, [role="radio"], label');
+  if (b) window.clicks.push((b.innerText || b.getAttribute('aria-label') || '').trim());
+}, true);
+
+function dialog(id, html) {
+  const d = document.createElement('div');
+  d.id = id;
+  d.setAttribute('role', 'dialog');
+  d.style.cssText = 'position:fixed;top:40px;left:40px;width:420px;min-height:320px;background:#fff;border:1px solid #000';
+  d.innerHTML = html;
+  document.body.append(d);
+  return d;
+}
+const close = id => () => { const d = document.getElementById(id); if (d) d.remove(); };
+
+if (params.get('item')) {
+  const d = dialog('item', '<h2>House special pizza</h2><p>Apartment-sized, a business lunch favourite</p>' +
+    '<button aria-label="Close" style="width:30px;height:30px"><svg width="16" height="16"></svg></button>' +
+    '<button id="add" style="width:200px;height:40px">Add 1 to order • $18.00</button>');
+  d.querySelector('#add').onclick = () => { window.added = true; };
+} else if (params.get('cart')) {
+  dialog('cart', '<h2>Your cart</h2><p>Deliver to your house or apartment</p><p>Subtotal $22.40</p>' +
+    '<button aria-label="Close" style="width:30px;height:30px"><svg width="16" height="16"></svg></button>' +
+    '<button id="checkout" style="width:200px;height:40px">Go to checkout</button>');
+} else if (params.get('addresses')) {
+  const d = dialog('addresses', '<h2>Addresses</h2>' +
+    '<button aria-label="Close" id="x" style="width:30px;height:30px"><svg width="16" height="16"></svg></button>' +
+    '<input type="text" placeholder="Search for an address" value="23 Marcus Clarke Street, Canberra ACT 2601" style="width:300px;height:30px">' +
+    '<ul><li style="height:40px">1 Jeffcott Place <button style="width:60px;height:30px">Edit</button></li></ul>');
+  d.querySelector('#x').onclick = close('addresses');
+} else {
+  const stuck = !!params.get('stuck');
+  const types = ['House', 'Apartment', 'Townhouse', 'Business'].map((t, i) =>
+    `<label style="display:block;width:200px;height:30px"><input type="radio" name="bt" id="bt${i}" value="${t}"> ${t}</label>`).join('');
+  const d = dialog('building', '<h2>Building type</h2><p>Let us know your building type for more accurate deliveries</p>' +
+    types + '<button id="save" disabled style="width:160px;height:40px">Save</button>' +
+    (params.get('noskip') ? '' : '<button id="skip" style="width:160px;height:40px">Skip</button>'));
+  d.querySelectorAll('input').forEach(r => { r.onchange = () => { d.querySelector('#save').disabled = false; }; });
+  d.querySelector('#save').onclick = () => { window.saved = d.querySelector('input:checked').value; if (!stuck) d.remove(); };
+  const skip = d.querySelector('#skip');
+  if (skip) skip.onclick = () => { if (!stuck) d.remove(); };
+  document.addEventListener('keydown', e => { if (e.key === 'Escape' && !stuck) d.remove(); });
+}
+</script>
+</body></html>
