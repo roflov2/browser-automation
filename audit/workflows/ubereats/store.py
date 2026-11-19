@@ -45,6 +45,7 @@ ModelT = TypeVar("ModelT", bound=BaseModel)
 SITE_URL = "https://www.ubereats.com/au"
 CHECKOUT_URL = f"{SITE_URL}/checkout"
 MAX_ADDRESS_STEPS = 12
+MAX_CLOSED_STORES = 4
 MAX_MODIFIER_STEPS = 6
 MAX_CHECKOUT_STEPS = 10
 
@@ -166,6 +167,8 @@ def extract_pl_address_from_url(url: str) -> str | None:
 # Page helpers
 # ---------------------------------------------------------------------------
 UBER_JS = r"""
+// Wording Uber Eats shows on a store card or store page that cannot take an order now
+const STORE_CLOSED = /(?<![a-z])(closed|currently unavailable|unavailable|not accepting orders|opens? (at|in|tomorrow|on|\d)|available (at|from|tomorrow|on|in) |schedule (an? |your )?order|order (ahead|later) for)/i;
 const addButton = () => Array.from(document.querySelectorAll('button')).find(
     b => /^(Add\s+\d*\s*to\s+(order|cart)|Update\s+order)/i.test(txt(b)) && vis(b, 80, 25));
 const cartButtons = () => Array.from(document.querySelectorAll(
@@ -303,6 +306,34 @@ JS_CLICK_MENU_ITEM = r"""({ name, price }) => {
     return safeClick(card) ? clean(txt(card)).slice(0, 80) : null;
 }"""
 
+# Why the open store page cannot take an order now (closed, opens later, scheduled orders only), or null.
+# Only the store header is read, so a menu section's own hours ('Breakfast available from 7am') do not count.
+JS_STORE_CLOSED = r"""() => {
+    const main = document.querySelector('main') || document.body;
+    const heading = main.querySelector('h1');
+    const top = heading ? heading.getBoundingClientRect().top + window.scrollY : 0;
+    const lines = [];
+    for (const el of main.querySelectorAll('p, span, div, h2, h3, button')) {
+        if (el.children.length || el.closest('[role="dialog"], [aria-modal="true"], li') || !vis(el, 10, 6)) continue;
+        if (el.getBoundingClientRect().top + window.scrollY > top + 700) continue;
+        const t = clean(txt(el));
+        if (t && t.length < 120 && STORE_CLOSED.test(t)) lines.push(t);
+    }
+    return lines.length ? lines[0] : null;
+}"""
+
+# An item popup that is open but offers no 'Add to order' button: the label of its main button (for example
+# 'Schedule order' when the store is closed), else null
+JS_ITEM_DIALOG_BLOCKER = r"""() => {
+    if (addButton()) return null;
+    for (const d of dialogs().filter(d => vis(d, 200, 150)).reverse()) {
+        const buttons = Array.from(d.querySelectorAll('button')).filter(b => vis(b, 120, 25) && clean(txt(b)));
+        const main = buttons[buttons.length - 1];
+        if (main) return clean(txt(main)).slice(0, 80);
+    }
+    return null;
+}"""
+
 JS_CART_COUNT = r"""() => {
     const els = [...cartButtons(), ...document.querySelectorAll('header button')];
     for (const el of els) {
@@ -323,7 +354,14 @@ JS_OPEN_CART = r"""() => {
 CART_DRAWER_JS = r"""
 // The open cart drawer (never the item modal or a confirmation prompt), or null
 const cartDrawer = () => [...dialogs(), ...document.querySelectorAll('aside')].find(
-    d => vis(d, 220, 250) && /checkout|subtotal|clear cart|your (order|cart)/i.test(d.innerText || ''));
+    d => vis(d, 220, 250) && /checkout|subtotal|clear cart|your (order|cart)|^\s*carts\b|\bview cart\b/im.test(d.innerText || ''));
+// 'Clear cart' / 'Delete cart' and the like, exactly: a menu entry or button that empties a whole cart
+const CLEAR_CART = /^(clear|delete|remove|empty)( this| the)? (cart|order|basket)$|^(clear|remove|delete) all( items)?$/i;
+// The '...' button that opens a cart's menu (where Uber keeps 'Clear cart' / 'Delete cart')
+const MORE = /\b(more|options|actions|menu|overflow)\b|^\s*(…|\.\.\.|⋯|⋮)\s*$/i;
+// What the open cart panels show, for the log when the cart could not be cleared
+const JS_CART_PANELS_TEXT = () => [...dialogs(), ...document.querySelectorAll('aside')].filter(d => vis(d, 150, 100))
+    .map(d => clean(txt(d)).slice(0, 200)).join(' | ');
 const ctrlLabel = b => [b.getAttribute('aria-label'), b.getAttribute('title'), b.getAttribute('data-testid'),
     ...Array.from(b.querySelectorAll('svg title, [aria-label]'), n => n.textContent || n.getAttribute('aria-label'))]
     .filter(Boolean).join(' ');
@@ -355,6 +393,13 @@ JS_CLEAR_CART_STEP = r"""() => {
             b => vis(b, 30, 20) && /^(remove( item)?|delete( item)?|clear( cart)?|empty cart|yes,? (remove|clear|delete)\b.*)$/i.test(clean(txt(b))));
         if (yes) { safeClick(yes); return 'confirm'; }
     }
+
+    // 1b. An open cart menu (from the '...' button): its 'Clear cart' / 'Delete cart' entry
+    const entries = Array.from(document.querySelectorAll(
+        '[role="menu"] *, [role="menuitem"], [role="listbox"] *, [role="option"], [data-baseweb="popover"] *, [role="dialog"] li, [role="dialog"] button'));
+    const entry = entries.find(e => vis(e, 30, 12) && CLEAR_CART.test(clean(txt(e)))
+        && !Array.from(e.children).some(c => CLEAR_CART.test(clean(txt(c)))));
+    if (entry) { safeClick(entry.closest('button, [role="menuitem"], [role="option"], li') || entry); return 'menu_clear'; }
 
     // Scope strictly to the open cart drawer so page/header buttons are never clicked
     const drawer = cartDrawer();
@@ -388,6 +433,11 @@ JS_CLEAR_CART_STEP = r"""() => {
                 && !INCREASE.test(ctrlLabel(b)));
         if (icons.length) { safeClick(icons[0]); return 'stepper_button'; }
     }
+
+    // 6. The drawer's '...' menu, which holds 'Clear cart' (opened at most a few times per page)
+    window.__auditCartMenus = (window.__auditCartMenus || 0) + 1;
+    const more = window.__auditCartMenus <= 3 && buttons.find(b => MORE.test(ctrlLabel(b) + ' ' + clean(txt(b))));
+    if (more) { safeClick(more); return 'menu_open'; }
     return null;
 }"""
 
@@ -454,7 +504,7 @@ JS_DECLINE_UPSELL = r"""() => {
     return null;
 }"""
 
-JS_FIND_STORE = r"""({ preferred, excluded }) => {
+JS_FIND_STORE = r"""({ preferred, excluded, skip }) => {
     const norm = s => (s || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
     const pref = norm(preferred);
     const storePath = a => { try { return new URL(a.href).pathname; } catch (e) { return a.href; } };
@@ -476,13 +526,14 @@ JS_FIND_STORE = r"""({ preferred, excluded }) => {
         const low = name.toLowerCase();
         if (!name || !vis(a, 40, 20)) continue;
         if (excluded.some(bad => low.includes(bad) || a.href.toLowerCase().includes('/store/' + bad))) continue;
+        if ((skip || []).includes(storePath(a))) continue;
         const cardText = clean(cardOf(a).innerText);
         const feeMatch = cardText.match(FEE);
         found.push({
             name,
             url: a.href,
             deliveryFee: feeMatch ? feeMatch[1] : null,
-            closed: /\b(closed|currently unavailable|unavailable|opens (at|in|tomorrow|on)|not accepting orders)\b/i.test(cardText),
+            closed: STORE_CLOSED.test(cardText),
             match: !!pref && norm(name).includes(pref)
         });
     }
@@ -516,6 +567,12 @@ async def is_item_modal_open(page: Page) -> bool:
     return bool(await js(page, "() => !!addButton()", default=False))
 
 
+async def store_closed_reason(page: Page) -> str | None:
+    """The store header's 'Closed' / 'Opens at ...' wording when the open store page cannot take an order now."""
+    why = await js(page, JS_STORE_CLOSED, default=None)
+    return why if isinstance(why, str) and why else None
+
+
 async def get_cart_count(page: Page) -> int:
     count = await js(page, JS_CART_COUNT, default=0)
     return count if isinstance(count, int) else 0
@@ -538,7 +595,14 @@ async def close_item_modal(stagehand: Stagehand, page: Page) -> None:
 
 
 MAX_CART_CLEAR_STEPS = 25
-MAX_CART_CLEAR_LLM_STEPS = 3
+MAX_CART_CLEAR_LLM_STEPS = 4
+CLEAR_CART_INSTRUCTION = (
+    "Empty the Uber Eats cart. If a cart drawer is open, click the trash-can / remove button (or '-' quantity "
+    "button) of its first item, or 'Clear cart' / 'Delete cart'. If a list of carts by store is shown, open the "
+    "'...' menu of the first cart and choose 'Delete cart' / 'Clear cart'; if that menu is already open, click "
+    "that entry. If no cart is open, click the cart button in the header. "
+    "Do NOT click 'Go to checkout', 'View cart', a store name or '+'."
+)
 
 
 async def items_left_in_cart(page: Page) -> int:
@@ -559,37 +623,41 @@ async def clear_existing_cart(stagehand: Stagehand, page: Page) -> None:
     log.info(f"  Detected {existing} leftover item(s) in cart from a previous session; clearing cart...")
 
     llm_steps = 0
+    unrecognised_opens = 0
     for _ in range(MAX_CART_CLEAR_STEPS):
         step = await js(page, JS_CLEAR_CART_STEP)
         if step == "no_drawer":
             if await get_cart_count(page) == 0:
                 break
-            if not await open_cart_drawer(page):
-                log.debug("Cart button not found while clearing the cart")
-                break
-            await settle(page, 1500)
-            continue
-        if step:
+            # The cart button was clicked but nothing the page steps know opened (a list of carts by store,
+            # say): the model reads the page and takes one step instead of the button being clicked again
+            if unrecognised_opens < 2:
+                if not await open_cart_drawer(page):
+                    log.debug("Cart button not found while clearing the cart")
+                    break
+                unrecognised_opens += 1
+                await settle(page, 1500)
+                continue
+        if step and step != "no_drawer":
             log.debug("Cart clear step: %s", step)
+            unrecognised_opens = 0  # the drawer was there; it may close again after this removal
         else:
-            if await items_left_in_cart(page) == 0:
+            if step is None and await items_left_in_cart(page) == 0:
                 break
             llm_steps += 1
             if llm_steps > MAX_CART_CLEAR_LLM_STEPS:
                 break
-            await try_act(
-                stagehand,
-                page,
-                "Inside the open cart drawer, click the trash-can / remove button (or '-' quantity button) of the "
-                "first item in the cart, or 'Clear cart' if shown. Do NOT click 'Go to checkout' or '+'.",
-            )
+            await try_act(stagehand, page, CLEAR_CART_INSTRUCTION)
         await settle(page, 1000)
 
+    panels = await js(page, "() => JS_CART_PANELS_TEXT()", default="")
     await js(page, "() => { if (cartDrawer()) closeDialog() || pressEsc(); }")
     await settle(page, 1200)
     left = await get_cart_count(page)
     if left:
-        log.warning(f"  {left} leftover item(s) could not be removed; the checkout subtotal will include them.")
+        log.warning(f"  {left} leftover item(s) could not be removed; the checkout subtotal may include them.")
+        if panels:
+            log.warning(f"  The cart showed: {panels}")
     else:
         log.info("  Cart cleared.")
 
@@ -676,7 +744,9 @@ def note_advertised_fees(result: UberResult, chosen: StoreCard) -> None:
     result.advertised_service_fee_display = chosen.service_fee_display
 
 
-async def store_url(page: Page, chosen: StoreCard | None, result: UberResult) -> str | None:
+async def store_url(
+    page: Page, chosen: StoreCard | None, result: UberResult, skip_paths: frozenset[str] = frozenset()
+) -> str | None:
     """The chosen store's `/store/...` URL, from the extraction or else from the page's own links.
 
     The model often answers with an element id instead of the link, or leaves the card's fee out, so the
@@ -688,7 +758,13 @@ async def store_url(page: Page, chosen: StoreCard | None, result: UberResult) ->
     if model_url and result.advertised_delivery_fee_display:
         return model_url
     dom_store = await js(
-        page, JS_FIND_STORE, {"preferred": chosen.name if chosen else "", "excluded": list(NON_RESTAURANT_NAMES)}
+        page,
+        JS_FIND_STORE,
+        {
+            "preferred": chosen.name if chosen else "",
+            "excluded": list(NON_RESTAURANT_NAMES),
+            "skip": sorted(skip_paths),
+        },
     )
     if not dom_store:
         return model_url
@@ -699,20 +775,27 @@ async def store_url(page: Page, chosen: StoreCard | None, result: UberResult) ->
     return model_url or dom_store["url"]
 
 
-async def first_open_store_card(page: Page) -> dict | None:
-    """The first open store card on the page that is not a supermarket, liquor store or the like, else None."""
-    card = await js(page, JS_FIND_STORE, {"preferred": "", "excluded": list(NON_RESTAURANT_NAMES)})
+async def first_open_store_card(page: Page, skip_paths: frozenset[str] = frozenset()) -> dict | None:
+    """The first open store card on the page that is not a supermarket, liquor store or the like, else None.
+
+    `skip_paths` are `/store/...` paths already tried (found closed once opened).
+    """
+    card = await js(
+        page, JS_FIND_STORE, {"preferred": "", "excluded": list(NON_RESTAURANT_NAMES), "skip": sorted(skip_paths)}
+    )
     return card if card and not card.get("closed") and is_valid_restaurant_name(card.get("name")) else None
 
 
-async def open_store_from_feed(stagehand: Stagehand, page: Page, result: UberResult) -> None:
+async def open_store_from_feed(
+    stagehand: Stagehand, page: Page, result: UberResult, skip_paths: frozenset[str] = frozenset()
+) -> None:
     """Pick a restaurant from the feed or search results and open its page.
 
     The store cards are read from the page (name, link, the fee printed on the card, closed or not); the
     model reads the whole feed only when no open restaurant card is found that way.
     """
     chosen: StoreCard | None = None
-    card = await first_open_store_card(page)
+    card = await first_open_store_card(page, skip_paths)
     if card:
         result.store_name = card["name"]
         result.store_location = result.store_location or extract_suburb_hint(card["name"])
@@ -727,7 +810,9 @@ async def open_store_from_feed(stagehand: Stagehand, page: Page, result: UberRes
             log.info(f"  Could not read the store cards ({error}); picking the first store link on the page")
         if chosen:
             note_advertised_fees(result, chosen)
-        target_url = await store_url(page, chosen, result)
+        target_url = await store_url(page, chosen, result, skip_paths)
+        if target_url and urlparse(target_url).path in skip_paths:
+            target_url = None
     if target_url:
         log.info(
             f"  Picking store: {result.store_name or target_url} "
@@ -746,6 +831,29 @@ async def open_store_from_feed(stagehand: Stagehand, page: Page, result: UberRes
         await settle(page, 2500)
 
 
+async def keep_store_unless_closed(page: Page, result: UberResult, closed: set[str], feed_url: str | None) -> bool:
+    """True to keep the open store page. A closed one picked from the feed at `feed_url` is added to `closed`
+    and the feed reopened (False); with no `feed_url` the user named this store, so it is kept with a warning.
+    """
+    why = await store_closed_reason(page)
+    if not why:
+        return True
+    if feed_url is None:
+        log.warning(f"  This store looks closed ({why}); its items may not be addable right now.")
+        return True
+    closed.add(urlparse(await page.url()).path)
+    log.info(f"  Store is closed ({why}); trying the next one.")
+    if len(closed) >= MAX_CLOSED_STORES:
+        raise ElementNotFound(
+            f"Every store tried was closed ({len(closed)}, the last said '{why}'); try again when they are open"
+        )
+    result.store_name = result.store_location = None
+    result.advertised_delivery_fee_display = result.advertised_delivery_fee = None
+    await page.goto(feed_url)
+    await settle(page, 3000)
+    return False
+
+
 async def ensure_address_and_open_store(
     stagehand: Stagehand,
     page: Page,
@@ -754,9 +862,16 @@ async def ensure_address_and_open_store(
     result: UberResult,
     interactive: bool = True,
 ) -> str:
-    """Ensure the active delivery address matches `address` (updating if stale), run search, and open a `/store/...` page."""
+    """Ensure the active delivery address matches `address` (updating if stale), run search, and open a `/store/...` page.
+
+    A store picked from the feed that turns out to be closed (it opens later, or takes scheduled orders only)
+    is left for the next one, up to MAX_CLOSED_STORES times; its items could not be added to an order.
+    """
     query_submitted = False
     address_verified = False
+    started_on_store = "/store/" in await page.url()
+    feed_url: str | None = None
+    closed: set[str] = set()
 
     for step_idx in range(MAX_ADDRESS_STEPS):
         curr_url = await page.url()
@@ -775,7 +890,9 @@ async def ensure_address_and_open_store(
                 continue
 
         if "/store/" in curr_url:
-            return curr_url
+            if await keep_store_unless_closed(page, result, closed, None if started_on_store else feed_url):
+                return curr_url
+            continue
 
         if search_query and not query_submitted and "q=" not in curr_url.lower():
             search_url = f"{SITE_URL}/search?q={quote_plus(search_query)}"
@@ -784,9 +901,12 @@ async def ensure_address_and_open_store(
             query_submitted = True
             await settle(page, 3000)
 
-        await open_store_from_feed(stagehand, page, result)
+        feed_url = await page.url()
+        await open_store_from_feed(stagehand, page, result, frozenset(closed))
         if "/store/" in await page.url():
-            return await page.url()
+            if urlparse(await page.url()).path in closed:
+                raise ElementNotFound("Only closed stores are left in the results; try again when they are open")
+            continue  # checked for being closed at the top of the loop
 
     raise ElementNotFound(f"Could not open a `/store/` restaurant page (ended on {await page.url()})")
 
@@ -918,7 +1038,15 @@ async def add_menu_item_to_cart(
             item["status"] = "added"
             return item
         if not opened:
-            log.info(f"    Modal did not open for '{menu_item.name}', skipping.")
+            blocker = await js(page, JS_ITEM_DIALOG_BLOCKER, default=None)
+            if blocker:
+                item["error"] = f"item popup offers '{blocker}' instead of 'Add to order'"
+                log.info(
+                    f"    The popup for '{menu_item.name}' opened but offers '{blocker}', not 'Add to order' "
+                    "(the store is probably closed or taking scheduled orders only); skipping."
+                )
+            else:
+                log.info(f"    Modal did not open for '{menu_item.name}', skipping.")
             return item
 
         selected_modifiers: list[str] = []

@@ -3,7 +3,8 @@
 <body>
 <!-- An Uber Eats store page as the item and cart steps meet it: the delivery address in the header, a long
      menu of cards (title, price and a '+' quick-add button each), the item modal over the menu, and the cart
-     drawer. ?upsell=1 also opens an upsell popup beside the drawer. -->
+     drawer. ?upsell=1 also opens an upsell popup beside the drawer. ?closed=1 is the same store before it
+     opens: the header says so and the item modal offers 'Schedule order' instead of 'Add to order'. -->
 <header>
   <a href="/au">Uber Eats</a>
   <button data-testid="edit-delivery-location-button" style="width:220px;height:40px">1 Jeffcott Pl • Now</button>
@@ -11,14 +12,16 @@
 </header>
 <main>
   <h1>OOSHMAN - Belconnen</h1>
+  <p id="hours" style="width:300px;height:20px">4.6 (200+) • Pizza</p>
   <ul id="menu"></ul>
 </main>
 <script>
 const params = new URLSearchParams(location.search);
+if (params.get('closed')) document.getElementById('hours').textContent = 'Closed • Available at 11:00 AM';
 window.cartCount = 0;
 window.quickAdds = 0;
 const menu = document.getElementById('menu');
-const names = ['Super Supreme', 'Garlic Bread', 'Margherita'];
+const names = ['Super Supreme', 'Garlic Bread', 'Margherita', 'Breakfast roll (available from 7am)'];
 for (let i = 0; i < 60; i++) names.push(`Filler dish number ${i} with a long description of its toppings`);
 names.forEach((name, i) => {
   const li = document.createElement('li');
@@ -45,7 +48,8 @@ function openModal(name, price) {
   window.openedItem = name;
   dialog('modal', `<h2>${name}</h2><p>Required: Choose a base</p>` +
     `<label><input type="radio" name="base"> Classic</label><label><input type="radio" name="base"> Gluten free +$3.00</label>` +
-    `<button id="add" style="width:300px;height:40px">Add 1 to order • $${price.toFixed(2)}</button>`,
+    (params.get('closed') ? '<button style="width:300px;height:40px">Schedule order</button>'
+      : `<button id="add" style="width:300px;height:40px">Add 1 to order • $${price.toFixed(2)}</button>`),
     'top:50px;left:200px;width:600px;height:500px');
 }
 

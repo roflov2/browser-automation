@@ -3,7 +3,10 @@
 <body>
 <!-- Uber Eats' cart drawer as the clear-cart step meets it: icon-only stepper buttons (trash at quantity 1,
      '-' above it, then '+'), no 'Clear cart' button, and the drawer closes and re-renders after every removal.
-     ?labels=1 gives the buttons aria-labels instead; ?confirm=1 asks 'Remove item?' before each removal. -->
+     ?labels=1 gives the buttons aria-labels instead; ?confirm=1 asks 'Remove item?' before each removal.
+     ?carts=1 is a cart left from another store: the cart button opens a list of carts by store, and the cart
+     is emptied from its row's unlabelled '...' menu ('Delete cart'). ?more=1 is a drawer whose rows have no
+     buttons, emptied from the drawer's 'More options' menu ('Clear cart'). -->
 <header><button id="cart" data-testid="view-carts-btn"></button></header>
 <main style="height:600px"></main>
 <script>
@@ -25,8 +28,33 @@ const takeOne = i => {
     d.querySelectorAll('button')[1].onclick = () => { d.remove(); done(); };
     document.body.append(d);
 };
+const menu = entries => {
+    const m = document.createElement('div');
+    m.setAttribute('role', 'menu');
+    m.style.cssText = 'position:fixed;top:60px;right:20px;width:200px;height:80px;background:#fff;z-index:9';
+    m.innerHTML = entries.map(e => `<div role="menuitem" style="height:30px">${e}</div>`).join('');
+    m.lastChild.onclick = () => { items.length = 0; badge(); m.remove(); close(); };
+    document.body.append(m);
+};
 const open = () => {
     close();
+    if (params.get('carts') || params.get('more')) {
+        const d = document.createElement('div');
+        d.id = 'drawer';
+        d.setAttribute('role', 'dialog');
+        d.style.cssText = 'position:fixed;top:0;right:0;width:400px;height:500px;background:#eee';
+        if (params.get('carts')) {
+            d.innerHTML = `<h2>Carts</h2><ul><li><div>OOSHMAN</div><div>${count()} items • $33.00</div>` +
+                `<button class="more">${icon}</button></li></ul>`;
+            d.querySelector('.more').onclick = () => menu(['View store', 'Delete cart']);
+        } else {
+            d.innerHTML = `<button class="more" aria-label="More options">${icon}</button><h2>OOSHMAN</h2><ul>` +
+                items.map(it => `<li>${it.name} × ${it.qty} $10.00</li>`).join('') + '</ul><button>Go to checkout</button>';
+            d.querySelector('.more').onclick = () => menu(['Share cart', 'Clear cart']);
+        }
+        document.body.append(d);
+        return;
+    }
     const d = document.createElement('div');
     d.id = 'drawer';
     d.setAttribute('role', 'dialog');

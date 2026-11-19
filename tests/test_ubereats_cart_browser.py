@@ -8,13 +8,28 @@ import pytest
 from audit import safety
 from audit.page import js
 from audit.workflows.ubereats.models import StoreCard, UberResult
-from audit.workflows.ubereats.store import clear_existing_cart, get_cart_count, store_url
+from audit.workflows.ubereats.store import (
+    JS_ITEM_DIALOG_BLOCKER,
+    clear_existing_cart,
+    first_open_store_card,
+    get_cart_count,
+    is_item_modal_open,
+    store_closed_reason,
+    store_url,
+)
+from audit.workflows.ubereats.store import js as uber_js  # with the Uber Eats page helpers loaded
 
 from .browser_support import find_chrome, launch_args, serve
 
 FIXTURE = Path(__file__).parent / "fixtures" / "pages"
 pytestmark = pytest.mark.browser
-CASES = {"icons": "", "labels": "?labels=1", "confirm": "?confirm=1"}
+CASES = {
+    "icons": "",
+    "labels": "?labels=1",
+    "confirm": "?confirm=1",
+    "carts_by_store": "?carts=1",
+    "more_menu": "?more=1",
+}
 STORES = {  # case: (the model's card, or None when its extraction failed)
     "model_failed": None,
     "model_gave_element_id": StoreCard(
@@ -69,6 +84,17 @@ async def clear_carts(chrome: str, port: int) -> dict:
                 result = UberResult(site="ubereats", out_dir=Path())
                 url = await store_url(page, card, result)
                 seen[case] = (url.split("/store/")[-1] if url else None, result.advertised_delivery_fee_display)
+            card = await first_open_store_card(page, frozenset({"/au/store/ooshman-belconnen/bbb"}))
+            seen["skipping_ooshman"] = card["url"].split("/store/")[-1]
+            for case, query in (("open", ""), ("closed", "?closed=1")):
+                await page.goto(f"http://127.0.0.1:{port}/uber-store.html{query}")
+                why = await store_closed_reason(page)
+                await js(page, "() => document.querySelector('#menu .card').click()")
+                seen[f"store_{case}"] = (
+                    why,
+                    await is_item_modal_open(page),
+                    await uber_js(page, JS_ITEM_DIALOG_BLOCKER),
+                )
     finally:
         await stagehand.close()
     return seen
@@ -102,3 +128,14 @@ def test_leftover_cart_items_are_all_removed_without_the_model(seen, case):
 )
 def test_the_store_link_and_fee_are_read_from_the_whole_search_card(seen, case, expected):
     assert seen[case] == expected
+
+
+def test_a_closed_restaurant_card_is_passed_over(seen):
+    # 3rd Space shows 'Available at 11:00 AM' instead of a fee and ETA, so OOSHMAN after it is picked
+    assert seen["model_failed"][0] == "ooshman-belconnen/bbb"
+    assert seen["skipping_ooshman"] == "pizza-stop/ccc"  # a store found closed once opened is not picked again
+
+
+def test_a_closed_store_page_and_its_schedule_only_item_popup_are_recognised(seen):
+    assert seen["store_open"] == (None, True, None)  # a menu item's own hours do not make the store closed
+    assert seen["store_closed"] == ("Closed • Available at 11:00 AM", False, "Schedule order")
