@@ -6,19 +6,29 @@
      ?labels=1 gives the buttons aria-labels instead; ?confirm=1 asks 'Remove item?' before each removal.
      ?carts=1 is a cart left from another store: the cart button opens a list of carts by store, and the cart
      is emptied from its row's unlabelled '...' menu ('Delete cart'). ?more=1 is a drawer whose rows have no
-     buttons, emptied from the drawer's 'More options' menu ('Clear cart'). -->
+     buttons, emptied from the drawer's 'More options' menu ('Clear cart').
+     ?divrows=1 is the drawer met on 2026-11-20: rows are <div>s (no <li>), two items, an icon-only stepper,
+     the drawer stays open while items are removed and closes only from the unlabelled X at its top-left.
+     ?noesc=1 is the same drawer with no X: it ignores a synthetic Escape and closes only on a real key press.
+     ?stuck=1 (with ?divrows=1): the remove buttons do nothing, so the cart cannot be cleared. -->
 <header><button id="cart" data-testid="view-carts-btn"></button></header>
 <main style="height:600px"></main>
 <script>
 const params = new URLSearchParams(location.search);
-const items = [{ name: 'Garlic Bread', qty: 1 }, { name: 'Margherita', qty: 2 }, { name: 'Coke', qty: 1 }];
+const divRows = !!(params.get('divrows') || params.get('noesc'));
+const items = divRows ? [{ name: 'Super Supreme', qty: 1 }, { name: 'Pepperoni Burst', qty: 1 }]
+    : [{ name: 'Garlic Bread', qty: 1 }, { name: 'Margherita', qty: 2 }, { name: 'Coke', qty: 1 }];
 window.plusClicks = 0;
 const count = () => items.reduce((n, i) => n + i.qty, 0);
 const badge = () => { document.getElementById('cart').textContent = count() ? count() + ' items' : 'Cart'; };
 const icon = '<svg width="16" height="16"><path d="M0 0h16v16H0z"/></svg>';
 const close = () => { const d = document.getElementById('drawer'); if (d) d.remove(); };
 const takeOne = i => {
-    const done = () => { items[i].qty -= 1; if (!items[i].qty) items.splice(i, 1); badge(); close(); };
+    if (params.get('stuck')) return;  // ?stuck=1: removing does nothing
+    const done = () => {
+        items[i].qty -= 1; if (!items[i].qty) items.splice(i, 1); badge();
+        if (divRows) renderDivDrawer(); else close();
+    };
     if (!params.get('confirm')) return done();
     const d = document.createElement('div');
     d.setAttribute('role', 'dialog');
@@ -36,7 +46,32 @@ const menu = entries => {
     m.lastChild.onclick = () => { items.length = 0; badge(); m.remove(); close(); };
     document.body.append(m);
 };
+// The drawer of ?divrows=1 / ?noesc=1, re-rendered in place after each removal
+const renderDivDrawer = () => {
+    let d = document.getElementById('drawer');
+    if (!d) {
+        d = document.createElement('div');
+        d.id = 'drawer';
+        d.setAttribute('role', 'dialog');
+        d.style.cssText = 'position:fixed;top:0;right:0;width:400px;height:500px;background:#eee';
+        document.body.append(d);
+    }
+    const x = params.get('noesc') ? '' : `<button class="x" style="position:absolute;top:8px;left:8px">${icon}</button>`;
+    d.innerHTML = x + '<h2 style="margin-top:48px">OOSHMAN</h2><div class="rows">' + items.map((it, i) =>
+        `<div class="row" style="height:64px"><div><span>${it.name}</span><span>$${(28 + i).toFixed(2)}</span></div>` +
+        `<div><button data-i="${i}" class="minus">${icon}</button><span>${it.qty}</span>` +
+        `<button class="plus">${icon}</button></div></div>`).join('') +
+        `</div><div>Subtotal $${(28 * count()).toFixed(2)}</div><button>Go to checkout</button>`;
+    d.querySelectorAll('.minus').forEach(b => b.onclick = () => takeOne(+b.dataset.i));
+    d.querySelectorAll('.plus').forEach(b => b.onclick = () => { window.plusClicks++; });
+    const xb = d.querySelector('.x');
+    if (xb) xb.onclick = close;
+};
+document.addEventListener('keydown', e => {
+    if (e.key === 'Escape' && (e.isTrusted || !params.get('noesc'))) close();
+});
 const open = () => {
+    if (divRows) return renderDivDrawer();
     close();
     if (params.get('carts') || params.get('more')) {
         const d = document.createElement('div');

@@ -6,7 +6,8 @@ import functools
 import json
 import logging
 import re
-from typing import TypeVar
+from pathlib import Path
+from typing import NamedTuple, TypeVar
 from urllib.parse import parse_qs, quote_plus, unquote, urljoin, urlparse
 
 from pydantic import BaseModel
@@ -326,13 +327,18 @@ JS_STORE_CLOSED = r"""() => {
 # 'Schedule order' when the store is closed), else null
 JS_ITEM_DIALOG_BLOCKER = r"""() => {
     if (addButton()) return null;
-    for (const d of dialogs().filter(d => vis(d, 200, 150)).reverse()) {
-        const buttons = Array.from(d.querySelectorAll('button')).filter(b => vis(b, 120, 25) && clean(txt(b)));
-        const main = buttons[buttons.length - 1];
-        if (main) return clean(txt(main)).slice(0, 80);
+    for (const d of dialogs().filter(d => vis(d, 150, 80)).reverse()) {
+        const buttons = Array.from(d.querySelectorAll('button')).filter(b => vis(b, 30, 20) && clean(txt(b)));
+        if (NEW_ORDER_PROMPT.test(clean(txt(d))) && buttons.length) {
+            return 'NEW_ORDER: ' + clean(txt(d)).slice(0, 120);
+        }
+        const main = buttons.filter(b => vis(b, 120, 25)).pop();
+        if (main && vis(d, 200, 150)) return clean(txt(main)).slice(0, 80);
     }
     return null;
 }"""
+# How JS_ITEM_DIALOG_BLOCKER marks Uber's 'another store' prompt
+NEW_ORDER_BLOCKER = "NEW_ORDER: "
 
 JS_CART_COUNT = r"""() => {
     const els = [...cartButtons(), ...document.querySelectorAll('header button')];
@@ -367,9 +373,31 @@ const ctrlLabel = b => [b.getAttribute('aria-label'), b.getAttribute('title'), b
     .filter(Boolean).join(' ');
 const INCREASE = /increase|increment|\bplus\b|\badd\b|\bmore\b/i;
 const REMOVE = /remove|delete|trash|bin\b|decrease|decrement|minus|less\b/i;
-// Rows of the cart: list items in the drawer that show a price
-const cartRows = drawer => Array.from(drawer.querySelectorAll('li')).filter(
-    li => vis(li, 60, 20) && /\$\s*\d/.test(li.innerText || '') && !li.querySelector('li'));
+// A quantity stepper: a leaf holding just the quantity, next to the stepper's buttons
+const stepperQty = el => Array.from(el.querySelectorAll('span, div, p')).find(
+    n => n.children.length === 0 && /^\d{1,2}$/.test(txt(n)) && !!n.parentElement && !!n.parentElement.querySelector('button'));
+const PRICE = /\$\s*\d/;
+// Rows of the cart: list items in the drawer that show a price; when the drawer has none (its rows are
+// <div>s), the smallest elements that hold both a price and a quantity stepper
+const cartRows = drawer => {
+    const lis = Array.from(drawer.querySelectorAll('li')).filter(
+        li => vis(li, 60, 20) && PRICE.test(li.innerText || '') && !li.querySelector('li'));
+    if (lis.length) return lis;
+    const rows = Array.from(drawer.querySelectorAll('div, section, article')).filter(
+        el => vis(el, 60, 20) && PRICE.test(el.innerText || '') && stepperQty(el));
+    return rows.filter(r => !rows.some(o => o !== r && r.contains(o)));
+};
+// Uber's wording when an item is added while the cart holds another store's items
+const NEW_ORDER_PROMPT = /new order|start new|items from|another (store|restaurant)/i;
+const NEW_ORDER_YES = /^(new order|start new order|create new order|continue)$/i;
+// The store a cart belongs to, as the open cart panel shows it: its first heading that is not the panel's own title
+const cartStoreName = () => {
+    const panel = cartDrawer() || [...dialogs(), ...document.querySelectorAll('aside')].find(d => vis(d, 150, 100));
+    if (!panel) return null;
+    const heading = Array.from(panel.querySelectorAll('h1, h2, h3, h4, [data-testid*="store" i]')).map(h => clean(txt(h)))
+        .find(t => t && t.length < 80 && !/^(your (cart|order|basket)|carts?|cart|subtotal|order summary)$/i.test(t));
+    return heading || null;
+};
 """
 
 JS_CART_ITEMS_IN_DRAWER = r"""() => {
@@ -378,8 +406,7 @@ JS_CART_ITEMS_IN_DRAWER = r"""() => {
     let total = 0;
     for (const row of cartRows(drawer)) {
         const sel = row.querySelector('select');
-        const stepper = Array.from(row.querySelectorAll('span, div, p')).find(
-            n => n.children.length === 0 && /^\d{1,2}$/.test(txt(n)));
+        const stepper = stepperQty(row);
         const q = parseInt(sel ? sel.value : (stepper ? txt(stepper) : '1'), 10);
         total += Number.isFinite(q) && q > 0 ? q : 1;
     }
@@ -438,6 +465,50 @@ JS_CLEAR_CART_STEP = r"""() => {
     window.__auditCartMenus = (window.__auditCartMenus || 0) + 1;
     const more = window.__auditCartMenus <= 3 && buttons.find(b => MORE.test(ctrlLabel(b) + ' ' + clean(txt(b))));
     if (more) { safeClick(more); return 'menu_open'; }
+    return null;
+}"""
+
+# One way of closing the open cart drawer ('x': its own close control; 'backdrop': the page beside it).
+# Returns what was clicked, or null.
+JS_CLOSE_CART_DRAWER = r"""how => {
+    const drawer = cartDrawer();
+    if (!drawer || addButton()) return null;
+    if (how === 'x') {
+        const top = drawer.getBoundingClientRect().top;
+        const rows = cartRows(drawer);
+        const buttons = Array.from(drawer.querySelectorAll('button')).filter(
+            b => vis(b, 8, 8) && !b.disabled && !rows.some(r => r.contains(b)) && !b.closest('li'));
+        const labelled = buttons.find(b => /close|dismiss/i.test(ctrlLabel(b)));
+        const icon = buttons.find(b => !clean(txt(b)) && b.querySelector('svg, img')
+            && b.getBoundingClientRect().top - top < 80
+            && !MORE.test(ctrlLabel(b)) && !INCREASE.test(ctrlLabel(b)) && !REMOVE.test(ctrlLabel(b)));
+        const btn = labelled || icon;
+        if (btn && safeClick(btn)) return labelled ? 'close_button' : 'x_icon';
+        return null;
+    }
+    // The backdrop: a point on the side of the viewport away from the drawer, never a control
+    const r = drawer.getBoundingClientRect();
+    const x = r.left > 120 ? r.left / 2 : (r.right + window.innerWidth) / 2;
+    const el = document.elementFromPoint(x, window.innerHeight / 2);
+    if (!el || drawer.contains(el) || el.closest(AUDIT_ACTIONABLE)) return null;
+    return safeClick(el) ? 'backdrop' : null;
+}"""
+
+# What a cart clear that left items behind leaves for the run folder: the open panel's HTML (cut short)
+JS_CART_DRAWER_HTML = r"""limit => {
+    const panel = cartDrawer() || [...dialogs(), ...document.querySelectorAll('aside')].find(d => vis(d, 150, 100));
+    return panel ? panel.outerHTML.slice(0, limit) : null;
+}"""
+
+# Uber's 'Create new order?' prompt (the cart holds another store's items): click its confirming button.
+# Returns the button's label, or null when no such prompt is open.
+JS_CONFIRM_NEW_ORDER = r"""() => {
+    for (const d of dialogs().filter(d => vis(d, 150, 80)).reverse()) {
+        if (!NEW_ORDER_PROMPT.test(clean(txt(d)))) continue;
+        const yes = Array.from(d.querySelectorAll('button')).find(
+            b => vis(b, 30, 20) && NEW_ORDER_YES.test(clean(txt(b))) && guardAllows(b));
+        if (yes && safeClick(yes)) return clean(txt(yes));
+    }
     return null;
 }"""
 
@@ -605,61 +676,154 @@ CLEAR_CART_INSTRUCTION = (
 )
 
 
+DRAWER_HTML_LIMIT = 50_000
+
+
+class CartLeft(NamedTuple):
+    """What clear_existing_cart left behind: items still in the cart, and the store the cart drawer named."""
+
+    items: int
+    store: str | None
+
+
 async def items_left_in_cart(page: Page) -> int:
-    """Items still in the cart: counted in the open drawer's rows when it is open, else from the header badge."""
+    """Items still in the cart: the larger of the open drawer's rows and the header badge.
+
+    The rows can only add to the badge, never zero it: a drawer whose rows are not recognised counts none.
+    """
     in_drawer = await js(page, JS_CART_ITEMS_IN_DRAWER)
-    return in_drawer if isinstance(in_drawer, int) else await get_cart_count(page)
+    return max(in_drawer if isinstance(in_drawer, int) else 0, await get_cart_count(page))
 
 
-async def clear_existing_cart(stagehand: Stagehand, page: Page) -> None:
+async def is_cart_drawer_open(page: Page) -> bool:
+    return bool(await js(page, "() => !!cartDrawer()", default=False))
+
+
+async def close_cart_drawer(page: Page) -> bool:
+    """Close the open cart drawer: its own X, then a real Escape key press, then a click on the page beside it.
+
+    Stops as soon as the drawer is gone. True when no drawer is open at the end.
+    """
+    for how in ("x", "escape", "backdrop"):
+        if not await is_cart_drawer_open(page):
+            return True
+        if how == "escape":
+            with contextlib.suppress(*BROWSER_ERRORS):
+                await page.key_press("Escape")
+        elif not await js(page, JS_CLOSE_CART_DRAWER, how):
+            continue
+        log.debug("Closing the cart drawer: %s", how)
+        await settle(page, 700)
+    return not await is_cart_drawer_open(page)
+
+
+def write_cart_clear_report(out_dir: Path, name: str, report: dict) -> None:
+    with contextlib.suppress(OSError):  # the record is a diagnostic; a full disk must not end the run
+        out_dir.mkdir(parents=True, exist_ok=True)
+        (out_dir / name).write_text(json.dumps(report, indent=2, ensure_ascii=False), encoding="utf-8")
+
+
+async def finish_cart_clear(
+    page: Page, existing: int, steps: list[dict], out_dir: Path | None, report_name: str
+) -> CartLeft:
+    """Close the cart drawer and say what was left; a cart not emptied is recorded in `out_dir`/`report_name`."""
+    left = await items_left_in_cart(page)
+    panels = await js(page, "() => JS_CART_PANELS_TEXT()", default="") if left else ""
+    store = await js(page, "() => cartStoreName()", default=None) if left else None
+    drawer_html = await js(page, JS_CART_DRAWER_HTML, DRAWER_HTML_LIMIT, default=None) if left else None
+    closed = await close_cart_drawer(page)
+    await settle(page, 800)
+    left = await get_cart_count(page)
+    if left:
+        log.warning(f"  {left} leftover item(s) could not be removed; the checkout subtotal may include them.")
+        if panels:
+            log.warning(f"  The cart showed: {panels}")
+        if out_dir is not None:
+            write_cart_clear_report(
+                out_dir,
+                report_name,
+                {
+                    "items_before": existing,
+                    "items_left": left,
+                    "store": store,
+                    "steps": steps,
+                    "drawer_closed": closed,
+                    "panels_text": panels,
+                    "drawer_html": drawer_html,
+                },
+            )
+    else:
+        log.info("  Cart cleared.")
+    if not closed:
+        log.warning("  The cart drawer could not be closed; it may cover the menu.")
+    return CartLeft(left, store if left else None)
+
+
+async def clear_existing_cart(
+    stagehand: Stagehand, page: Page, out_dir: Path | None = None, report_name: str = "cart_clear.json"
+) -> CartLeft:
     """If the persistent profile has leftover items in the cart, clear them inside the cart drawer.
 
     Uber Eats re-renders (and often closes) the drawer after each removal, so the drawer is reopened
-    whenever it is gone and every step works from the page as it is now.
+    whenever it is gone and every step works from the page as it is now. When items are left, the steps
+    taken and the drawer's HTML are written to `out_dir`/`report_name`, so the next layout change can be
+    fixed from the run folder alone.
     """
     existing = await get_cart_count(page)
     if existing <= 0:
-        return
+        await close_cart_drawer(page)
+        return CartLeft(0, None)
     log.info(f"  Detected {existing} leftover item(s) in cart from a previous session; clearing cart...")
 
+    steps: list[dict] = []
     llm_steps = 0
     unrecognised_opens = 0
     for _ in range(MAX_CART_CLEAR_STEPS):
         step = await js(page, JS_CLEAR_CART_STEP)
+        taken = step
         if step == "no_drawer":
             if await get_cart_count(page) == 0:
+                steps.append({"step": step, "left": 0})
                 break
             # The cart button was clicked but nothing the page steps know opened (a list of carts by store,
             # say): the model reads the page and takes one step instead of the button being clicked again
             if unrecognised_opens < 2:
                 if not await open_cart_drawer(page):
                     log.debug("Cart button not found while clearing the cart")
+                    steps.append({"step": "no_cart_button", "left": await get_cart_count(page)})
                     break
                 unrecognised_opens += 1
                 await settle(page, 1500)
+                steps.append({"step": "open_cart", "left": await get_cart_count(page)})
                 continue
         if step and step != "no_drawer":
             log.debug("Cart clear step: %s", step)
             unrecognised_opens = 0  # the drawer was there; it may close again after this removal
         else:
             if step is None and await items_left_in_cart(page) == 0:
+                steps.append({"step": "none_left", "left": 0})
                 break
             llm_steps += 1
             if llm_steps > MAX_CART_CLEAR_LLM_STEPS:
                 break
-            await try_act(stagehand, page, CLEAR_CART_INSTRUCTION)
+            taken = "llm" if await try_act(stagehand, page, CLEAR_CART_INSTRUCTION) else "llm_failed"
         await settle(page, 1000)
+        steps.append({"step": taken, "left": await items_left_in_cart(page)})
 
-    panels = await js(page, "() => JS_CART_PANELS_TEXT()", default="")
-    await js(page, "() => { if (cartDrawer()) closeDialog() || pressEsc(); }")
-    await settle(page, 1200)
-    left = await get_cart_count(page)
-    if left:
-        log.warning(f"  {left} leftover item(s) could not be removed; the checkout subtotal may include them.")
-        if panels:
-            log.warning(f"  The cart showed: {panels}")
-    else:
-        log.info("  Cart cleared.")
+    return await finish_cart_clear(page, existing, steps, out_dir, report_name)
+
+
+async def accept_new_order_prompt(page: Page) -> bool:
+    """Confirm Uber's 'Create new order?' prompt (the cart holds another store's items), if it is open.
+
+    This replaces the old store's cart with this store's, so a leftover cart cannot block adding items.
+    """
+    clicked = await js(page, JS_CONFIRM_NEW_ORDER, default=None)
+    if not clicked:
+        return False
+    log.info(f"    The cart held another store's items; clicked '{clicked}' to start a new order")
+    await settle(page, 1500)
+    return True
 
 
 # ---------------------------------------------------------------------------
@@ -941,6 +1105,9 @@ async def open_item_modal(stagehand: Stagehand, page: Page, menu_item: MenuItem,
     if clicked:
         log.info(f"    Open item (DOM): {clicked}")
         await settle(page, 1800)
+        if await accept_new_order_prompt(page) and not await is_item_modal_open(page):
+            await js(page, JS_CLICK_MENU_ITEM, {"name": menu_item.name, "price": menu_item.price})
+            await settle(page, 1800)
         if await is_item_modal_open(page):
             return True
         if await get_cart_count(page) > cart_count_before:
@@ -1016,6 +1183,7 @@ async def modal_round(
         )
         log.info(f"    Click Add: {add_act.description}")
     await settle(page, 1800)
+    await accept_new_order_prompt(page)
     return picked, True
 
 
@@ -1029,6 +1197,7 @@ async def add_menu_item_to_cart(
     """Open the item, choose the cheapest required options, add it, and record what it cost."""
     item = order_item(menu_item)
     await close_item_modal(stagehand, page)
+    await close_cart_drawer(page)  # a stray drawer must never cover the menu
     before_cart_count = await get_cart_count(page)
 
     try:
@@ -1039,7 +1208,11 @@ async def add_menu_item_to_cart(
             return item
         if not opened:
             blocker = await js(page, JS_ITEM_DIALOG_BLOCKER, default=None)
-            if blocker:
+            if isinstance(blocker, str) and blocker.startswith(NEW_ORDER_BLOCKER):
+                prompt = blocker.removeprefix(NEW_ORDER_BLOCKER)
+                item["error"] = f"a cart from another store blocks this item (Uber asked: '{prompt}')"
+                log.info(f"    A cart from another store blocks '{menu_item.name}': {prompt}; skipping.")
+            elif blocker:
                 item["error"] = f"item popup offers '{blocker}' instead of 'Add to order'"
                 log.info(
                     f"    The popup for '{menu_item.name}' opened but offers '{blocker}', not 'Add to order' "

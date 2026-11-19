@@ -2,13 +2,14 @@
 
 1. Start on Uber Eats AU (or a direct `/store/...` URL), set the delivery address, and record the
    advertised delivery fee and service fee shown on the feed card and store banner.
-2. Clear leftover cart items, then add 1-5 menu items (auto-selecting $0/cheapest required
-   modifiers and declining paid add-ons).
+2. Clear leftover cart items (confirming Uber's 'new order' prompt if another store's cart remains),
+   then add 1-5 menu items (auto-selecting $0/cheapest required modifiers and declining paid add-ons).
 3. Walk through the cart drawer to the final checkout screen and extract every fee.
 4. Visit the restaurant's own website (found by search, or `--restaurant-url`), walk it until item
    prices are on screen, and compare its unit prices against the Uber Eats prices.
 
-The run always stops on the checkout screen: nothing is ordered or paid for.
+The run always stops on the checkout screen: nothing is ordered or paid for. When the checkout screen was not
+reached, the cart is emptied again on the way out, so the next run starts with an empty cart.
 """
 
 import argparse
@@ -21,12 +22,14 @@ from stagehand import Page, Stagehand
 from ...config import Settings
 from ...core import BROWSER_ERRORS, ITEM_FIELDS, SiteResult, Status, UnsafeActionRefused, parse_price, slug, write_csv
 from ...page import settle, shot
+from ...safety import Mode, current_guard
 from ...workflow import Workflow
 from .direct_site import audit_direct_restaurant_site
 from .models import CartAndCheckoutState, MenuItem, StoreMenu, UberResult
 from .pricing import FEE_BREAKDOWN_FIELDS, compare_prices, print_audit_tables
 from .store import (
     SITE_URL,
+    CartLeft,
     add_menu_item_to_cart,
     choose_menu_items,
     clear_existing_cart,
@@ -114,6 +117,7 @@ class UberEatsWorkflow(Workflow):
         assert isinstance(result, UberResult)
         args, out = self.args, result.out_dir
         result.search = {"address": args.address, "query": args.query}
+        leftover = CartLeft(0, None)
         cart_state: CartAndCheckoutState | None = None
         checkout_state: CartAndCheckoutState | None = None
         refused = False
@@ -128,7 +132,7 @@ class UberEatsWorkflow(Workflow):
                 stagehand, page, args.address, args.query, result, interactive=not self.settings.headless
             )
             log.info(f"  Store page: {result.shop_url}")
-            await clear_existing_cart(stagehand, page)
+            leftover = await clear_existing_cart(stagehand, page, out)
             await shot(page, out / "store.png")
 
             menu = (
@@ -173,7 +177,12 @@ class UberEatsWorkflow(Workflow):
                 result.items.append(item)
 
             if not result.added:
-                result.fail(Status.ADD_TO_CART_FAILED, "No menu items could be added to the order")
+                result.fail(
+                    Status.ADD_TO_CART_FAILED,
+                    f"A cart from another store ({leftover.store or 'store not shown'}) could not be cleared"
+                    if leftover.items
+                    else "No menu items could be added to the order",
+                )
                 return
 
             cart_state, checkout_state = await walk_to_checkout(
@@ -193,6 +202,8 @@ class UberEatsWorkflow(Workflow):
         finally:
             with contextlib.suppress(*BROWSER_ERRORS):  # the browser may be gone; the URL is a nicety
                 result.checkout_url = await page.url()
+            if result.added and not refused:
+                await self.empty_cart_after_run(stagehand, page, result)
             # However the Uber Eats side ended (even blocked by a login wall), the items that made it into
             # the cart can still be compared with the restaurant's own prices. Not after a guard refusal.
             if not args.skip_direct_site and result.added and not refused:
@@ -202,6 +213,25 @@ class UberEatsWorkflow(Workflow):
                     log.warning(f"  Direct website check skipped/failed: {type(error).__name__}: {error}")
             self.conclude(result, lambda: compare_prices(result, cart_state, checkout_state))
             write_csv(out / "fees_breakdown.csv", FEE_BREAKDOWN_FIELDS, result.comparison.get("fee_breakdown", []))
+
+    async def empty_cart_after_run(self, stagehand: Stagehand, page: Page, result: UberResult) -> None:
+        """Go back to the store page and empty the cart, so the next run does not meet this run's items.
+
+        Not once the checkout page has been identified: the guard then allows no clicks on Uber Eats at all
+        (it only ever tightens), and the next run's clear step and 'new order' prompt deal with the cart.
+        Errors are swallowed; a guard refusal still ends the run.
+        """
+        if not result.shop_url:
+            return
+        if current_guard().mode_for(result.shop_url) is not Mode.NORMAL:
+            log.info("  Leaving the cart as it is: the checkout page was reached and Uber Eats takes no more clicks.")
+            return
+        try:
+            await page.goto(result.shop_url)
+            await settle(page, SETTLE_MS)
+            await clear_existing_cart(stagehand, page, result.out_dir, "cart_clear-after.json")
+        except BROWSER_ERRORS as error:
+            log.warning(f"  Could not empty the cart after the run: {type(error).__name__}: {error}")
 
     def target_key(self, url: str, result: SiteResult) -> str:
         """The store that was audited (`/store/<slug>/<id>`), so different restaurants keep separate summary rows."""

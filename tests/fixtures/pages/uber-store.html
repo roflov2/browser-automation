@@ -4,7 +4,9 @@
 <!-- An Uber Eats store page as the item and cart steps meet it: the delivery address in the header, a long
      menu of cards (title, price and a '+' quick-add button each), the item modal over the menu, and the cart
      drawer. ?upsell=1 also opens an upsell popup beside the drawer. ?closed=1 is the same store before it
-     opens: the header says so and the item modal offers 'Schedule order' instead of 'Add to order'. -->
+     opens: the header says so and the item modal offers 'Schedule order' instead of 'Add to order'.
+     ?other=1 is a cart left from another store: the header shows 1 item, and 'Add to order' asks
+     'Create new order?' before the item replaces that cart. -->
 <header>
   <a href="/au">Uber Eats</a>
   <button data-testid="edit-delivery-location-button" style="width:220px;height:40px">1 Jeffcott Pl • Now</button>
@@ -18,7 +20,9 @@
 <script>
 const params = new URLSearchParams(location.search);
 if (params.get('closed')) document.getElementById('hours').textContent = 'Closed • Available at 11:00 AM';
-window.cartCount = 0;
+window.cartCount = params.get('other') ? 1 : 0;
+const cartBadge = () => { document.getElementById('cart').textContent = window.cartCount ? window.cartCount + ' item' : 'Cart'; };
+cartBadge();
 window.quickAdds = 0;
 const menu = document.getElementById('menu');
 const names = ['Super Supreme', 'Garlic Bread', 'Margherita', 'Breakfast roll (available from 7am)'];
@@ -51,6 +55,17 @@ function openModal(name, price) {
     (params.get('closed') ? '<button style="width:300px;height:40px">Schedule order</button>'
       : `<button id="add" style="width:300px;height:40px">Add 1 to order • $${price.toFixed(2)}</button>`),
     'top:50px;left:200px;width:600px;height:500px');
+  const add = document.getElementById('add');
+  if (add) add.onclick = () => {
+    const done = () => { document.getElementById('modal').remove(); window.cartCount = 1; cartBadge(); };
+    if (!params.get('other')) { window.cartCount++; document.getElementById('modal').remove(); return cartBadge(); }
+    const p = dialog('neworder', '<h2>Create new order?</h2><p>Your order contains items from OOSHMAN - Gungahlin. ' +
+      'Create a new order to add items from OOSHMAN - Belconnen.</p>' +
+      '<button style="width:100px;height:30px">Cancel</button><button style="width:100px;height:30px">New order</button>',
+      'top:150px;left:300px;width:400px;height:200px;z-index:9');
+    p.querySelectorAll('button')[0].onclick = () => p.remove();
+    p.querySelectorAll('button')[1].onclick = () => { p.remove(); done(); };
+  };
 }
 
 function openDrawer() {
