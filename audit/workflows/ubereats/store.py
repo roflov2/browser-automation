@@ -158,7 +158,6 @@ const addButton = () => Array.from(document.querySelectorAll('button')).find(
 const cartButtons = () => Array.from(document.querySelectorAll(
     '[data-testid*="cart" i], button[aria-label*="cart" i], button[aria-label*="bag" i]'));
 """
-js = functools.partial(page_helpers.js, lib=UBER_JS)
 
 
 async def dismiss_uber_popups(stagehand: Stagehand, page: Page) -> None:
@@ -254,29 +253,77 @@ JS_OPEN_CART = r"""() => {
     return !!btn && safeClick(btn);
 }"""
 
-JS_CLEAR_CART_STEP = r"""() => {
-    // Scope strictly to the open cart drawer so page/header buttons are never clicked
-    const drawer = [...dialogs(), ...document.querySelectorAll('aside')].find(
-        d => vis(d, 220, 250) && /checkout|subtotal|clear cart|your order/i.test(d.innerText || ''));
+CART_DRAWER_JS = r"""
+// The open cart drawer (never the item modal or a confirmation prompt), or null
+const cartDrawer = () => [...dialogs(), ...document.querySelectorAll('aside')].find(
+    d => vis(d, 220, 250) && /checkout|subtotal|clear cart|your (order|cart)/i.test(d.innerText || ''));
+const ctrlLabel = b => [b.getAttribute('aria-label'), b.getAttribute('title'), b.getAttribute('data-testid'),
+    ...Array.from(b.querySelectorAll('svg title, [aria-label]'), n => n.textContent || n.getAttribute('aria-label'))]
+    .filter(Boolean).join(' ');
+const INCREASE = /increase|increment|\bplus\b|\badd\b|\bmore\b/i;
+const REMOVE = /remove|delete|trash|bin\b|decrease|decrement|minus|less\b/i;
+// Rows of the cart: list items in the drawer that show a price
+const cartRows = drawer => Array.from(drawer.querySelectorAll('li')).filter(
+    li => vis(li, 60, 20) && /\$\s*\d/.test(li.innerText || '') && !li.querySelector('li'));
+"""
+
+JS_CART_ITEMS_IN_DRAWER = r"""() => {
+    const drawer = cartDrawer();
     if (!drawer) return null;
-    const buttons = Array.from(drawer.querySelectorAll('button'));
-    const aria = b => (b.getAttribute('aria-label') || '').trim();
+    let total = 0;
+    for (const row of cartRows(drawer)) {
+        const sel = row.querySelector('select');
+        const stepper = Array.from(row.querySelectorAll('span, div, p')).find(
+            n => n.children.length === 0 && /^\d{1,2}$/.test(txt(n)));
+        const q = parseInt(sel ? sel.value : (stepper ? txt(stepper) : '1'), 10);
+        total += Number.isFinite(q) && q > 0 ? q : 1;
+    }
+    return total;
+}"""
 
-    const clear = buttons.find(b => /^(Clear cart|Empty cart|Remove all|Clear)/i.test(txt(b)) || /^clear cart$/i.test(aria(b)));
-    if (clear) { safeClick(clear); return 'clear_button'; }
-
-    for (const sel of drawer.querySelectorAll('select')) {
-        const zero = Array.from(sel.options).find(o => o.value === '0' || /^remove$/i.test((o.text || '').trim()));
-        if (zero) {
-            safeSelect(sel, zero.value);
-            return 'select_zero';
-        }
+JS_CLEAR_CART_STEP = r"""() => {
+    // 1. A 'Remove item?' / 'Clear cart?' confirmation prompt on top of the drawer
+    for (const d of dialogs().filter(d => vis(d, 150, 80) && !/subtotal|checkout/i.test(d.innerText || '')).reverse()) {
+        const yes = Array.from(d.querySelectorAll('button')).find(
+            b => vis(b, 30, 20) && /^(remove( item)?|delete( item)?|clear( cart)?|empty cart|yes,? (remove|clear|delete)\b.*)$/i.test(clean(txt(b))));
+        if (yes) { safeClick(yes); return 'confirm'; }
     }
 
-    const remove = buttons.find(b => /^(Remove item|Delete item|Decrease quantity)/i.test(aria(b)));
-    if (remove) { safeClick(remove); return 'remove_item_btn'; }
+    // Scope strictly to the open cart drawer so page/header buttons are never clicked
+    const drawer = cartDrawer();
+    if (!drawer) return 'no_drawer';
+    const buttons = Array.from(drawer.querySelectorAll('button')).filter(b => vis(b, 8, 8) && !b.disabled);
+
+    // 2. A 'Clear cart' / 'Remove all' button
+    const clear = buttons.find(b => /^(clear cart|empty cart|remove all|clear all)$/i.test(clean(txt(b)))
+        || /^(clear|empty) cart$/i.test(ctrlLabel(b).trim()));
+    if (clear) { safeClick(clear); return 'clear_button'; }
+
+    // 3. A quantity <select> that can be set to 0 / 'Remove'
+    for (const sel of drawer.querySelectorAll('select')) {
+        const zero = Array.from(sel.options).find(o => o.value === '0' || /^remove$/i.test((o.text || '').trim()));
+        if (zero && sel.value !== zero.value) { safeSelect(sel, zero.value); return 'select_zero'; }
+    }
+
+    // 4. A labelled remove / delete / trash / decrease control (not the '+' next to it)
+    const labelled = buttons.find(b => {
+        const label = ctrlLabel(b) + ' ' + clean(txt(b));
+        return REMOVE.test(label) && !INCREASE.test(label);
+    });
+    if (labelled) { safeClick(labelled); return 'remove_button'; }
+
+    // 5. An unlabelled icon-only button in a cart row: the first one of the quantity stepper is the
+    //    trash can (quantity 1) or the '-' (quantity > 1). The '+' comes after it, so never pick the last
+    //    of two or more.
+    for (const row of cartRows(drawer)) {
+        const icons = Array.from(row.querySelectorAll('button')).filter(
+            b => vis(b, 8, 8) && !b.disabled && !clean(txt(b)).replace(/[−–-]/g, '') && b.querySelector('svg, img')
+                && !INCREASE.test(ctrlLabel(b)));
+        if (icons.length) { safeClick(icons[0]); return 'stepper_button'; }
+    }
     return null;
 }"""
+
 
 JS_SELECT_REQUIRED = r"""() => {
     const chosen = [];
@@ -343,6 +390,18 @@ JS_DECLINE_UPSELL = r"""() => {
 JS_FIND_STORE = r"""({ preferred, excluded }) => {
     const norm = s => (s || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
     const pref = norm(preferred);
+    const storePath = a => { try { return new URL(a.href).pathname; } catch (e) { return a.href; } };
+    // The whole card: the largest ancestor whose store links all lead to this one store
+    const cardOf = a => {
+        const path = storePath(a);
+        let card = a;
+        for (let el = a.parentElement; el && el !== document.body; el = el.parentElement) {
+            if (Array.from(el.querySelectorAll('a[href*="/store/"]')).some(o => storePath(o) !== path)) break;
+            card = el;
+        }
+        return card;
+    };
+    const FEE = /(A?\$\s?\d+(?:\.\d{1,2})?\s*Delivery\s*Fee\^?|Delivery\s*Fee:?\s*A?\$\s?\d+(?:\.\d{1,2})?|Free\s*Delivery)/i;
     const found = [];
     for (const a of document.querySelectorAll('a[href*="/store/"]')) {
         const heading = a.querySelector('h1, h2, h3, h4, [data-testid*="store" i]') || a;
@@ -350,8 +409,7 @@ JS_FIND_STORE = r"""({ preferred, excluded }) => {
         const low = name.toLowerCase();
         if (!name || !vis(a, 40, 20)) continue;
         if (excluded.some(bad => low.includes(bad) || a.href.toLowerCase().includes('/store/' + bad))) continue;
-        const cardText = (a.closest('li, [data-testid*="store-card" i], div')?.innerText || a.innerText || '');
-        const feeMatch = cardText.match(/(A?\$[\d.]+\s*Delivery\s*Fee|Free\s*Delivery)/i);
+        const feeMatch = clean(cardOf(a).innerText).match(FEE);
         found.push({
             name,
             url: a.href,
@@ -361,6 +419,9 @@ JS_FIND_STORE = r"""({ preferred, excluded }) => {
     }
     return found.find(c => c.match) || found[0] || null;
 }"""
+
+
+js = functools.partial(page_helpers.js, lib=UBER_JS + CART_DRAWER_JS)
 
 
 async def is_item_modal_open(page: Page) -> bool:
@@ -388,37 +449,61 @@ async def close_item_modal(stagehand: Stagehand, page: Page) -> None:
         await settle(page, 1000)
 
 
+MAX_CART_CLEAR_STEPS = 25
+MAX_CART_CLEAR_LLM_STEPS = 3
+
+
+async def items_left_in_cart(page: Page) -> int:
+    """Items still in the cart: counted in the open drawer's rows when it is open, else from the header badge."""
+    in_drawer = await js(page, JS_CART_ITEMS_IN_DRAWER)
+    return in_drawer if isinstance(in_drawer, int) else await get_cart_count(page)
+
+
 async def clear_existing_cart(stagehand: Stagehand, page: Page) -> None:
-    """If the persistent profile has leftover items in the cart, clear them inside the cart drawer."""
+    """If the persistent profile has leftover items in the cart, clear them inside the cart drawer.
+
+    Uber Eats re-renders (and often closes) the drawer after each removal, so the drawer is reopened
+    whenever it is gone and every step works from the page as it is now.
+    """
     existing = await get_cart_count(page)
     if existing <= 0:
         return
     log.info(f"  Detected {existing} leftover item(s) in cart from a previous session; clearing cart...")
-    if not await open_cart_drawer(page):
-        return
-    await settle(page, 1800)
 
-    llm_clears = 0
-    for _ in range(12):
-        if await get_cart_count(page) == 0:
-            break
-        if not await js(page, JS_CLEAR_CART_STEP):
-            llm_clears += 1
-            if llm_clears > 3:
+    llm_steps = 0
+    for _ in range(MAX_CART_CLEAR_STEPS):
+        step = await js(page, JS_CLEAR_CART_STEP)
+        if step == "no_drawer":
+            if await get_cart_count(page) == 0:
+                break
+            if not await open_cart_drawer(page):
+                log.debug("Cart button not found while clearing the cart")
+                break
+            await settle(page, 1500)
+            continue
+        if step:
+            log.debug("Cart clear step: %s", step)
+        else:
+            if await items_left_in_cart(page) == 0:
+                break
+            llm_steps += 1
+            if llm_steps > MAX_CART_CLEAR_LLM_STEPS:
                 break
             await try_act(
                 stagehand,
                 page,
-                "Inside the open cart drawer, click 'Clear cart' (or remove one item from the cart, confirming "
-                "any 'Remove' prompt). Do NOT click 'Go to checkout'.",
+                "Inside the open cart drawer, click the trash-can / remove button (or '-' quantity button) of the "
+                "first item in the cart, or 'Clear cart' if shown. Do NOT click 'Go to checkout' or '+'.",
             )
         await settle(page, 1000)
 
-    await js(page, "() => { closeDialog() || pressEsc(); }")
+    await js(page, "() => { if (cartDrawer()) closeDialog() || pressEsc(); }")
     await settle(page, 1200)
     left = await get_cart_count(page)
     if left:
         log.warning(f"  {left} leftover item(s) could not be removed; the checkout subtotal will include them.")
+    else:
+        log.info("  Cart cleared.")
 
 
 # ---------------------------------------------------------------------------
@@ -492,26 +577,35 @@ def note_advertised_fees(result: UberResult, chosen: StoreCard) -> None:
 
 
 async def store_url(page: Page, chosen: StoreCard | None, result: UberResult) -> str | None:
-    """The chosen store's `/store/...` URL, from the extraction or else from the page's own links."""
-    if chosen and chosen.url and "/store/" in chosen.url:
-        return urljoin("https://www.ubereats.com", chosen.url)
+    """The chosen store's `/store/...` URL, from the extraction or else from the page's own links.
+
+    The model often answers with an element id instead of the link, or leaves the card's fee out, so the
+    card is also read from the page whenever either is missing.
+    """
+    model_url = (
+        urljoin("https://www.ubereats.com", chosen.url) if chosen and chosen.url and "/store/" in chosen.url else None
+    )
+    if model_url and result.advertised_delivery_fee_display:
+        return model_url
     dom_store = await js(
         page, JS_FIND_STORE, {"preferred": chosen.name if chosen else "", "excluded": list(NON_RESTAURANT_NAMES)}
     )
     if not dom_store:
-        return None
+        return model_url
     result.store_name = result.store_name or dom_store["name"]
     if dom_store.get("deliveryFee") and not result.advertised_delivery_fee_display:
         result.advertised_delivery_fee_display = dom_store["deliveryFee"]
         result.advertised_delivery_fee = parse_price(dom_store["deliveryFee"])
-    return dom_store["url"]
+    return model_url or dom_store["url"]
 
 
 async def open_store_from_feed(stagehand: Stagehand, page: Page, result: UberResult) -> None:
     """Pick a restaurant from the feed or search results and open its page."""
     chosen: StoreCard | None = None
-    with contextlib.suppress(ExtractFailed, StepTimeout):
+    try:
         chosen = choose_store((await stagehand.extract(FEED_QUESTION, StoreFeed, timeout=25_000)).data.stores)
+    except (ExtractFailed, StepTimeout) as error:
+        log.info(f"  Could not read the store cards ({error}); picking the first store link on the page")
     if chosen:
         note_advertised_fees(result, chosen)
 

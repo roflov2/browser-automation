@@ -143,6 +143,9 @@ class UberEatsWorkflow(Workflow):
             result.store_name = header.store_name or result.store_name
             result.store_location = header.store_address_or_suburb or result.store_location
             if header.advertised_delivery_fee and not result.advertised_delivery_fee_display:
+                log.info(
+                    f"  Delivery fee not read from the search card; using the store page's: {header.advertised_delivery_fee}"
+                )
                 result.advertised_delivery_fee_display = header.advertised_delivery_fee
                 result.advertised_delivery_fee = parse_price(header.advertised_delivery_fee)
             result.advertised_service_fee_display = (
