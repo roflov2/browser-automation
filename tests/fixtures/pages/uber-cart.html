@@ -1,0 +1,47 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Uber cart</title></head>
+<body>
+<!-- Uber Eats' cart drawer as the clear-cart step meets it: icon-only stepper buttons (trash at quantity 1,
+     '-' above it, then '+'), no 'Clear cart' button, and the drawer closes and re-renders after every removal.
+     ?labels=1 gives the buttons aria-labels instead; ?confirm=1 asks 'Remove item?' before each removal. -->
+<header><button id="cart" data-testid="view-carts-btn"></button></header>
+<main style="height:600px"></main>
+<script>
+const params = new URLSearchParams(location.search);
+const items = [{ name: 'Garlic Bread', qty: 1 }, { name: 'Margherita', qty: 2 }, { name: 'Coke', qty: 1 }];
+window.plusClicks = 0;
+const count = () => items.reduce((n, i) => n + i.qty, 0);
+const badge = () => { document.getElementById('cart').textContent = count() ? count() + ' items' : 'Cart'; };
+const icon = '<svg width="16" height="16"><path d="M0 0h16v16H0z"/></svg>';
+const close = () => { const d = document.getElementById('drawer'); if (d) d.remove(); };
+const takeOne = i => {
+    const done = () => { items[i].qty -= 1; if (!items[i].qty) items.splice(i, 1); badge(); close(); };
+    if (!params.get('confirm')) return done();
+    const d = document.createElement('div');
+    d.setAttribute('role', 'dialog');
+    d.style.cssText = 'position:fixed;top:200px;left:100px;width:300px;height:120px;background:#fff;z-index:9';
+    d.innerHTML = '<p>Remove item?</p><button>Cancel</button><button>Remove</button>';
+    d.querySelectorAll('button')[0].onclick = () => d.remove();
+    d.querySelectorAll('button')[1].onclick = () => { d.remove(); done(); };
+    document.body.append(d);
+};
+const open = () => {
+    close();
+    const d = document.createElement('div');
+    d.id = 'drawer';
+    d.setAttribute('role', 'dialog');
+    d.style.cssText = 'position:fixed;top:0;right:0;width:400px;height:500px;background:#eee';
+    const label = s => params.get('labels') ? ` aria-label="${s}"` : '';
+    d.innerHTML = '<h2>Your cart</h2><ul>' + items.map((it, i) =>
+        `<li><div><span>${it.name}</span><span>$${(10 + i).toFixed(2)}</span></div>` +
+        `<div><button data-i="${i}" class="minus"${label(it.qty > 1 ? 'Decrease quantity' : 'Remove')}>${icon}</button>` +
+        `<span>${it.qty}</span><button class="plus"${label('Increase quantity')}>${icon}</button></div></li>`).join('') +
+        '</ul><p>Subtotal</p><button>Go to checkout</button>';
+    d.querySelectorAll('.minus').forEach(b => b.onclick = () => takeOne(+b.dataset.i));
+    d.querySelectorAll('.plus').forEach(b => b.onclick = () => { window.plusClicks++; });
+    document.body.append(d);
+};
+document.getElementById('cart').onclick = open;
+badge();
+</script>
+</body></html>
