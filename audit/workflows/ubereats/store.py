@@ -373,38 +373,77 @@ JS_CLICK_MENU_ITEM = r"""({ name, price }) => {
     return safeClick(card) ? clean(txt(card)).slice(0, 80) : null;
 }"""
 
-# Why the open store page cannot take an order now (closed, opens later, scheduled orders only), or null.
-# Only the store header is read, so a menu section's own hours ('Breakfast available from 7am') do not count.
+# Why the open store page cannot take an order now (closed, opens later, scheduled orders only, or outside the
+# menu's hours), or null. Only the store header and the menu selector in the sidebar are read, so a menu
+# section's own hours ('Breakfast available from 7am', a section heading's '7:00 am - 11:00 am') do not count.
+# The menu's hours ('Hackett Uber Menu · 12:00 pm - 2:29 pm') are compared with the browser's clock: the store
+# is open when any range shown covers now, and a range that ends before it starts runs past midnight.
 JS_STORE_CLOSED = r"""() => {
     const main = document.querySelector('main') || document.body;
     const heading = main.querySelector('h1');
     const top = heading ? heading.getBoundingClientRect().top + window.scrollY : 0;
-    const lines = [];
+    // The store's menu selector: Uber's desktop sidebar, else any side navigation
+    const SIDEBAR = '#store-desktop-vertical-menu-nav, [id*="menu-nav" i], aside, nav';
+    const TIME = '(\\d{1,2})(?::(\\d{2}))?\\s*([ap])\\.?\\s*m\\.?';
+    const RANGE = new RegExp(TIME + '\\s*(?:[-\u2013\u2014]|to)\\s*' + TIME, 'gi');
+    const minutes = (h, m, ap) => (parseInt(h, 10) % 12 + (/p/i.test(ap) ? 12 : 0)) * 60 + (parseInt(m || '0', 10));
+    const lines = [], hours = [], ranges = [];
     for (const el of main.querySelectorAll('p, span, div, h2, h3, button')) {
         if (el.children.length || el.closest('[role="dialog"], [aria-modal="true"], li') || !vis(el, 10, 6)) continue;
-        if (el.getBoundingClientRect().top + window.scrollY > top + 700) continue;
+        const inHeader = el.getBoundingClientRect().top + window.scrollY <= top + 700;
+        if (!inHeader && !el.closest(SIDEBAR)) continue;
         const t = clean(txt(el));
-        if (t && t.length < 120 && STORE_CLOSED.test(t)) lines.push(t);
+        if (!t || t.length >= 120) continue;
+        if (inHeader && STORE_CLOSED.test(t)) lines.push(t);
+        // An hours line: nothing but time ranges, perhaps after the menu's name and a dot ('Lunch \u00b7 12:00 pm \u2013 2:29 pm')
+        const bare = t.replace(/^[^\u00b7\u2022]{1,60}[\u00b7\u2022]\s*(?=\d)/, '');
+        const found = [...bare.matchAll(RANGE)];
+        if (!found.length || bare.replace(RANGE, '').replace(/[\s,;&|\u00b7\u2022]|and/gi, '')) continue;
+        hours.push(bare);
+        for (const m of found) ranges.push([minutes(m[1], m[2], m[3]), minutes(m[4], m[5], m[6])]);
     }
-    return lines.length ? lines[0] : null;
+    if (lines.length) return lines[0];
+    if (!ranges.length) return null;
+    const d = new Date();
+    const now = d.getHours() * 60 + d.getMinutes();
+    const covers = ([from, to]) => from === to || (from < to ? now >= from && now <= to : now >= from || now <= to);
+    return ranges.some(covers) ? null : 'menu hours ' + [...new Set(hours)].join('; ');
 }"""
 
-# An item popup that is open but offers no 'Add to order' button: the label of its main button (for example
-# 'Schedule order' when the store is closed), else null
+# The open item popup when it offers no 'Add to order' button, or null when no popup is open (or it can add).
+# A popup is a visible dialog; when Uber's popup carries no dialog role but the URL says one is open
+# (?mod=quickView), it is the box at the middle of the screen. Returns {kind, ...}:
+#   new_order: Uber's 'another store' prompt (text); button: its main button (label, disabled);
+#   text: no usable button, a sample of what it shows (text); unrecognised: the URL says open, nothing found.
 JS_ITEM_DIALOG_BLOCKER = r"""() => {
     if (addButton()) return null;
-    for (const d of dialogs().filter(d => vis(d, 150, 80)).reverse()) {
-        const buttons = Array.from(d.querySelectorAll('button')).filter(b => vis(b, 30, 20) && clean(txt(b)));
-        if (NEW_ORDER_PROMPT.test(clean(txt(d))) && buttons.length) {
-            return 'NEW_ORDER: ' + clean(txt(d)).slice(0, 120);
-        }
-        const main = buttons.filter(b => vis(b, 120, 25)).pop();
-        if (main && vis(d, 200, 150)) return clean(txt(main)).slice(0, 80);
+    const quickView = /[?&]mod=quickView\b/i.test(location.search);
+    const usable = d => Array.from(d.querySelectorAll('button, [role="button"]')).filter(b => vis(b, 10, 10) && clean(txt(b)));
+    const open = dialogs().filter(d => vis(d, 150, 80)).reverse();
+    for (const d of open) {
+        if (NEW_ORDER_PROMPT.test(clean(txt(d))) && usable(d).length) return { kind: 'new_order', text: clean(txt(d)).slice(0, 120) };
     }
-    return null;
+    let popup = open.find(d => vis(d, 200, 150)) || null;
+    if (!popup && quickView) {
+        // The innermost box around the middle of the screen that is smaller than the screen (not the backdrop)
+        let el = document.elementFromPoint(innerWidth / 2, innerHeight / 2);
+        for (; el && el !== document.body; el = el.parentElement) {
+            const r = el.getBoundingClientRect();
+            if (r.width >= innerWidth * 0.95 && r.height >= innerHeight * 0.95) break;
+            if (vis(el, 200, 150)) popup = el;
+        }
+    }
+    if (!popup) return quickView ? { kind: 'unrecognised' } : null;
+    const buttons = usable(popup);
+    // The main button is the widest one (the bottom call to action); of equal ones, the last
+    const main = buttons.reduce((best, b) =>
+        !best || b.getBoundingClientRect().width >= best.getBoundingClientRect().width ? b : best, null);
+    if (main && vis(main, 60, 20)) {
+        const disabled = main.disabled || main.getAttribute('aria-disabled') === 'true';
+        return { kind: 'button', label: clean(txt(main)).slice(0, 80), disabled };
+    }
+    return { kind: 'text', text: clean(txt(popup)).slice(0, 120) };
 }"""
-# How JS_ITEM_DIALOG_BLOCKER marks Uber's 'another store' prompt
-NEW_ORDER_BLOCKER = "NEW_ORDER: "
 
 JS_CART_COUNT = r"""() => {
     const els = [...cartButtons(), ...document.querySelectorAll('header button')];
@@ -704,8 +743,36 @@ async def is_item_modal_open(page: Page) -> bool:
     return bool(await js(page, "() => !!addButton()", default=False))
 
 
+async def item_popup_blocker(page: Page) -> str | None:
+    """Why the open item popup offers no usable 'Add to order' button, or None when no popup is open."""
+    found = await js(page, JS_ITEM_DIALOG_BLOCKER, default=None)
+    if not isinstance(found, dict):
+        return None
+    kind = found.get("kind")
+    if kind == "new_order":
+        return f"a cart from another store blocks this item (Uber asked: '{found.get('text')}')"
+    if kind == "button" and found.get("disabled"):
+        return f"item popup's '{found.get('label')}' button is disabled"
+    if kind == "button":
+        return f"item popup offers '{found.get('label')}' instead of 'Add to order'"
+    if kind == "text":
+        return f"item popup has no usable button (it shows: '{found.get('text')}')"
+    return "item popup is open (URL mod=quickView) but its content was not recognised"
+
+
+def url_mod(url: str) -> str | None:
+    """The `mod=` parameter Uber sets while a popup is open (`quickView` for an item), or None."""
+    return parse_qs(urlparse(url).query).get("mod", [None])[0]
+
+
+async def item_popup_open_without_add(page: Page) -> bool:
+    """True when Uber says an item popup is open (`?mod=quickView`) but it offers no usable 'Add to order'."""
+    return url_mod(await page.url()) == "quickView" and bool(await item_popup_blocker(page))
+
+
 async def store_closed_reason(page: Page) -> str | None:
-    """The store header's 'Closed' / 'Opens at ...' wording when the open store page cannot take an order now."""
+    """Why the open store page cannot take an order now: the header's 'Closed' / 'Opens at ...' wording, or
+    'menu hours ...' when the browser's clock is outside every hours range the menu selector shows."""
     why = await js(page, JS_STORE_CLOSED, default=None)
     return why if isinstance(why, str) and why else None
 
@@ -1213,7 +1280,8 @@ def order_item(menu_item: MenuItem, **extra: object) -> Item:
 
 async def open_item_modal(stagehand: Stagehand, page: Page, menu_item: MenuItem, cart_count_before: int) -> bool | None:
     """Open the item's customisation modal. True if it is open, None if the item was quick-added
-    without a modal, False if it could not be opened.
+    without a modal, False if no popup with an 'Add to order' button could be opened: either no popup
+    opened, or one opened that cannot add the item (see item_popup_blocker for which).
 
     The item's card is clicked from the page first; the model (which reads the whole menu) only looks
     for it when that click does not open the modal.
@@ -1229,6 +1297,8 @@ async def open_item_modal(stagehand: Stagehand, page: Page, menu_item: MenuItem,
             return True
         if await get_cart_count(page) > cart_count_before:
             return None
+        if await item_popup_open_without_add(page):  # clicking the menu behind the popup would not help
+            return False
 
     step = await safe_act(
         stagehand,
@@ -1241,6 +1311,8 @@ async def open_item_modal(stagehand: Stagehand, page: Page, menu_item: MenuItem,
         return True
     if await get_cart_count(page) > cart_count_before:
         return None
+    if await item_popup_open_without_add(page):
+        return False
 
     retry = await safe_act(
         stagehand, page, f"Scroll to and click directly on the menu item title '{menu_item.name}' to open its popup."
@@ -1324,19 +1396,14 @@ async def add_menu_item_to_cart(
             item["status"] = "added"
             return item
         if not opened:
-            blocker = await js(page, JS_ITEM_DIALOG_BLOCKER, default=None)
-            if isinstance(blocker, str) and blocker.startswith(NEW_ORDER_BLOCKER):
-                prompt = blocker.removeprefix(NEW_ORDER_BLOCKER)
-                item["error"] = f"a cart from another store blocks this item (Uber asked: '{prompt}')"
-                log.info(f"    A cart from another store blocks '{menu_item.name}': {prompt}; skipping.")
-            elif blocker:
-                item["error"] = f"item popup offers '{blocker}' instead of 'Add to order'"
-                log.info(
-                    f"    The popup for '{menu_item.name}' opened but offers '{blocker}', not 'Add to order' "
-                    "(the store is probably closed or taking scheduled orders only); skipping."
-                )
+            blocker = await item_popup_blocker(page)
+            if blocker:
+                item["error"] = blocker
+                log.info(f"    '{menu_item.name}' cannot be added: {blocker}; skipping.")
             else:
-                log.info(f"    Modal did not open for '{menu_item.name}', skipping.")
+                mod = url_mod(await page.url())
+                item["error"] = f"item popup did not open (page URL mod={mod or 'none'})"
+                log.info(f"    Modal did not open for '{menu_item.name}' (page URL mod={mod or 'none'}), skipping.")
             return item
 
         selected_modifiers: list[str] = []
