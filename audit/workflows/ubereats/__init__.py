@@ -179,11 +179,13 @@ class UberEatsWorkflow(Workflow):
                 result.items.append(item)
 
             if not result.added:
+                first_error = next((i["error"] for i in result.items if i.get("error")), None)
                 result.fail(
                     Status.ADD_TO_CART_FAILED,
                     f"A cart from another store ({leftover.store or 'store not shown'}) could not be cleared"
                     if leftover.items
-                    else "No menu items could be added to the order",
+                    else "No menu items could be added to the order"
+                    + (f" (first item: {first_error})" if first_error else ""),
                 )
                 return
 

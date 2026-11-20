@@ -6,7 +6,12 @@
      drawer. ?upsell=1 also opens an upsell popup beside the drawer. ?closed=1 is the same store before it
      opens: the header says so and the item modal offers 'Schedule order' instead of 'Add to order'.
      ?other=1 is a cart left from another store: the header shows 1 item, and 'Add to order' asks
-     'Create new order?' before the item replaces that cart. -->
+     'Create new order?' before the item replaces that cart.
+     ?menuhours= shows the menu's hours in the sidebar, set from the browser's clock: 'later' (opens in two
+     hours), 'now' (covers now), 'both' (a later range and one covering now) or 'overnight' (runs past midnight
+     and covers now). A menu section far down the page always shows hours that have not started.
+     ?quickview=1 opens the item as Uber does now: the URL gains ?mod=quickView and the popup is a plain box
+     with no dialog role, whose only labelled button is a disabled 'Schedule order'. -->
 <header>
   <a href="/au">Uber Eats</a>
   <button data-testid="edit-delivery-location-button" style="width:220px;height:40px">1 Jeffcott Pl • Now</button>
@@ -15,11 +20,23 @@
 <main>
   <h1>OOSHMAN - Belconnen</h1>
   <p id="hours" style="width:300px;height:20px">4.6 (200+) • Pizza</p>
+  <div id="store-desktop-vertical-menu-nav" style="position:absolute;left:0;top:120px;width:180px">
+    <button style="width:180px;height:40px"><div>Hackett Uber Menu</div><p id="menuhours"></p></button>
+  </div>
   <ul id="menu"></ul>
 </main>
 <script>
 const params = new URLSearchParams(location.search);
 if (params.get('closed')) document.getElementById('hours').textContent = 'Closed • Available at 11:00 AM';
+const clock = m => { m = ((m % 1440) + 1440) % 1440; const h = Math.floor(m / 60) % 12 || 12;
+  return `${h}:${String(m % 60).padStart(2, '0')} ${m < 720 ? 'am' : 'pm'}`; };
+const range = (from, to) => `${clock(from)} – ${clock(to)}`;
+const nowMin = new Date().getHours() * 60 + new Date().getMinutes();
+document.getElementById('menuhours').textContent = {
+  later: range(nowMin + 120, nowMin + 180), now: range(nowMin - 60, nowMin + 60),
+  both: range(nowMin + 120, nowMin + 180) + ', ' + range(nowMin - 60, nowMin + 60),
+  overnight: range(nowMin - 60, nowMin - 120),
+}[params.get('menuhours')] || '';
 window.cartCount = params.get('other') ? 1 : 0;
 const cartBadge = () => { document.getElementById('cart').textContent = window.cartCount ? window.cartCount + ' item' : 'Cart'; };
 cartBadge();
@@ -37,6 +54,11 @@ names.forEach((name, i) => {
   li.querySelector('.plus').onclick = () => { window.quickAdds++; };
   menu.append(li);
 });
+if (params.get('menuhours')) {  // a section's own hours, far below the header and outside the sidebar
+  const section = document.createElement('section');
+  section.innerHTML = `<h2>Late breakfast</h2><p style="width:200px;height:20px">${range(nowMin + 120, nowMin + 180)}</p>`;
+  document.querySelector('main').append(section);
+}
 
 function dialog(id, html, css) {
   const d = document.createElement('div');
@@ -50,6 +72,17 @@ function dialog(id, html, css) {
 
 function openModal(name, price) {
   window.openedItem = name;
+  if (params.get('quickview')) {
+    history.replaceState(null, '', location.pathname + location.search + '&mod=quickView&modctx=%7B%22itemUuid%22%7D');
+    const box = document.createElement('div');
+    box.id = 'modal';
+    box.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,.5)';
+    box.innerHTML = '<div style="position:absolute;top:50px;left:200px;width:600px;height:500px;background:#fff">' +
+      `<h2>${name}</h2><p>$${price.toFixed(2)}</p><button style="width:300px;height:40px" disabled>Schedule order</button>` +
+      '<button aria-label="Close" style="width:30px;height:30px"></button></div>';
+    document.body.append(box);
+    return;
+  }
   dialog('modal', `<h2>${name}</h2><p>Required: Choose a base</p>` +
     `<label><input type="radio" name="base"> Classic</label><label><input type="radio" name="base"> Gluten free +$3.00</label>` +
     (params.get('closed') ? '<button style="width:300px;height:40px">Schedule order</button>'

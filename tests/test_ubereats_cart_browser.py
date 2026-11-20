@@ -18,6 +18,7 @@ from audit.workflows.ubereats.store import (
     first_open_store_card,
     get_cart_count,
     is_item_modal_open,
+    item_popup_blocker,
     store_closed_reason,
     store_url,
 )
@@ -63,6 +64,14 @@ class NoModel:
     async def observe(self, instruction: str, **_: object):
         self.instructions.append(instruction)
         raise RuntimeError("no model in this test")
+
+
+class FindsNothing(NoModel):
+    """A model that looks but finds nothing to click, so no LLM action changes the page."""
+
+    async def observe(self, instruction: str, **_: object) -> SimpleNamespace:
+        self.instructions.append(instruction)
+        return SimpleNamespace(data=[])
 
 
 class ModalModel(NoModel):
@@ -118,15 +127,30 @@ async def clear_carts(chrome: str, port: int, out_dir: Path) -> dict:
             dish = MenuItem(name="Super Supreme", category=None, price="$10.00", sold_out=False, is_food_or_drink=True)
             seen["new_order"] = await add_menu_item_to_cart(ModalModel(), page, dish, result, 1)  # type: ignore[arg-type]
             seen["new_order_cart"] = await get_cart_count(page)
-            for case, query in (("open", ""), ("closed", "?closed=1")):
+            for case, query in (("open", ""), ("closed", "?closed=1"), ("quickview", "?quickview=1")):
                 await page.goto(f"http://127.0.0.1:{port}/uber-store.html{query}")
                 why = await store_closed_reason(page)
+                no_popup = await uber_js(page, JS_ITEM_DIALOG_BLOCKER)
                 await js(page, "() => document.querySelector('#menu .card').click()")
                 seen[f"store_{case}"] = (
                     why,
                     await is_item_modal_open(page),
-                    await uber_js(page, JS_ITEM_DIALOG_BLOCKER),
+                    await item_popup_blocker(page),
+                    no_popup,
                 )
+            for hours in ("later", "now", "both", "overnight"):
+                await page.goto(f"http://127.0.0.1:{port}/uber-store.html?menuhours={hours}")
+                seen[f"menu_hours_{hours}"] = (
+                    await store_closed_reason(page),
+                    await js(page, "() => document.getElementById('menuhours').textContent"),
+                )
+            # Skipped items say why: a popup that cannot add, and no popup at all
+            for case, query, name in (("quickview", "?quickview=1", "Margherita"), ("none", "", "Not on the menu")):
+                await page.goto(f"http://127.0.0.1:{port}/uber-store.html{query}")
+                dish = MenuItem(name=name, category=None, price="$12.00", sold_out=False, is_food_or_drink=True)
+                model = FindsNothing()
+                item = await add_menu_item_to_cart(model, page, dish, UberResult(site="ubereats", out_dir=out_dir), 1)  # type: ignore[arg-type]
+                seen[f"skipped_{case}"] = (item["status"], item.get("error"), model.instructions)
     finally:
         await stagehand.close()
     return seen
@@ -197,5 +221,26 @@ def test_a_closed_restaurant_card_is_passed_over(seen):
 
 
 def test_a_closed_store_page_and_its_schedule_only_item_popup_are_recognised(seen):
-    assert seen["store_open"] == (None, True, None)  # a menu item's own hours do not make the store closed
-    assert seen["store_closed"] == ("Closed • Available at 11:00 AM", False, "Schedule order")
+    assert seen["store_open"] == (None, True, None, None)  # a menu item's own hours do not make the store closed
+    assert seen["store_closed"] == (
+        "Closed • Available at 11:00 AM", False, "item popup offers 'Schedule order' instead of 'Add to order'", None,
+    )  # fmt: skip
+
+
+def test_a_quickview_popup_without_a_dialog_role_is_still_described(seen):
+    assert seen["store_quickview"] == (None, False, "item popup's 'Schedule order' button is disabled", None)
+
+
+@pytest.mark.parametrize(("hours", "closed"), [("later", True), ("now", False), ("both", False), ("overnight", False)])
+def test_a_store_outside_its_menu_hours_is_closed(seen, hours, closed):
+    why, shown = seen[f"menu_hours_{hours}"]
+    # Any range covering the browser's clock keeps the store open; a later menu section's hours never close it
+    assert why == (f"menu hours {shown}" if closed else None)
+
+
+def test_an_item_that_cannot_be_added_always_records_why(seen):
+    status, error, llm = seen["skipped_quickview"]
+    assert (status, error) == ("skipped", "item popup's 'Schedule order' button is disabled")
+    assert llm == []  # the open popup was recognised, so the model was not asked to click the menu behind it
+    status, error, _ = seen["skipped_none"]
+    assert (status, error) == ("skipped", "item popup did not open (page URL mod=none)")
