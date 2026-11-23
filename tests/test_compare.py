@@ -192,6 +192,32 @@ def test_ubereats_fee_without_amount(saved_runs):
     assert report["other_fees_total"] == baseline["other_fees_total"]
 
 
+def test_ubereats_null_summary_and_reason(saved_runs):
+    """A screen read with no summary/reason (the model returned null or left it out) is kept, not rejected."""
+    (run,) = runs_for(saved_runs, "ubereats")
+    c = run["checkout"]
+    state = uber_state({**c, "summary": None}, checkout_page=True, subtotal=c["subtotal"])
+    assert state.summary is None
+    assert "summary" not in uber_models.CartAndCheckoutState.model_json_schema()["required"]
+
+    modal = {"has_unmet_required_choices": True, "next_required_group": "Add Spread",
+             "cheapest_option_in_required_group": "Butter", "button_price_display": "$9.00",
+             "paid_modifier_offers": []}  # fmt: skip
+    assert uber_models.ItemModalState(**modal).reason is None
+    assert uber_models.ItemModalState(**modal, reason=None).reason is None
+    address = {"displayed_address": None, "address_modal_or_input_open": False,
+               "address_suggestions_open": False, "blocked_reason": None}  # fmt: skip
+    assert uber_models.AddressAndFeedState(**address).reason is None
+
+    def result():
+        return uber_models.UberResult(site="https://example.test", out_dir=Path(), items=run["items"], **run["result"])
+
+    report = uber_pricing.compare_prices(result(), None, state)
+    expected = uber_pricing.compare_prices(result(), None, uber_state(c, checkout_page=True, subtotal=c["subtotal"]))
+    assert report["checkout_summary"] is None
+    assert {**report, "checkout_summary": expected["checkout_summary"]} == expected
+
+
 def coffee_inputs(run: dict, **checkout_overrides):
     c = {**run["checkout"], **checkout_overrides}
     cart = coffee.CartLines(

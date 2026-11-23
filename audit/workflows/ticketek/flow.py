@@ -347,7 +347,7 @@ async def walk_to_payment(stagehand: Stagehand, page: Page, result: SiteResult, 
             log.info(f"  Step {index}: unchanged after the last action (repeat {repeats})")
             if repeats >= MAX_STUCK_REPEATS:
                 result.message = f"Stuck on '{last_state.heading or last_state.page_type}': " + (
-                    "; ".join(last_state.validation_errors) or last_state.summary
+                    "; ".join(last_state.validation_errors) or last_state.summary or "no summary"
                 )
                 return False
             await next_action(stagehand, page, last_state, last_state.page_type)

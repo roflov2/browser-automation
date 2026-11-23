@@ -30,7 +30,9 @@ class FindState(BaseModel):
         description="If progress is blocked by a CAPTCHA, 'verify you are human', access-denied or bot check, describe "
         "it; otherwise null. A queue / waiting room is NOT blocked."
     )
-    reason: str
+    reason: str | None = Field(
+        default=None, description="One short sentence explaining this reading of the screen; null if unsure"
+    )
 
 
 class Session(BaseModel):
@@ -98,7 +100,9 @@ class HeldTickets(BaseModel):
     quantity: int | None = Field(description="Number of tickets held")
     unit_price: str | None = Field(description="Price per ticket as displayed")
     total: str | None = Field(description="Total currently displayed for the held tickets")
-    reason: str
+    reason: str | None = Field(
+        default=None, description="One short sentence explaining this reading of the screen; null if unsure"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -134,7 +138,7 @@ class StepState(BaseModel):
     price_lines: list[Fee] = Field(description="Lines of the order summary / total panel currently displayed")
     total: str | None = Field(description="Order total currently displayed, e.g. '$195.75'")
     validation_errors: list[str] = Field(description="Any form validation or error messages currently displayed")
-    summary: str
+    summary: str | None = Field(default=None, description="One short sentence describing this screen; null if unsure")
 
 
 class TicketLine(LineItem):
@@ -172,7 +176,7 @@ class CheckoutDetails(BaseModel):
     )
     total: str | None = Field(description="Total amount due as displayed")
     currency: str | None = Field(description="Currency code if shown, e.g. 'AUD'")
-    summary: str
+    summary: str | None = Field(default=None, description="One short sentence describing this screen; null if unsure")
 
 
 # ---------------------------------------------------------------------------

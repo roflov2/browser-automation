@@ -31,7 +31,9 @@ class AddressAndFeedState(BaseModel):
     blocked_reason: str | None = Field(
         description="If progress is blocked by a CAPTCHA, mandatory login wall, or bot check, describe it; otherwise null"
     )
-    reason: str
+    reason: str | None = Field(
+        default=None, description="One short sentence explaining this reading of the screen; null if unsure"
+    )
 
 
 class StoreCard(BaseModel):
@@ -114,7 +116,9 @@ class ItemModalState(BaseModel):
     paid_modifier_offers: list[Offer] = Field(
         description="Optional or required paid modifiers/add-ons visible in this modal (where price > $0), up to 10 items"
     )
-    reason: str
+    reason: str | None = Field(
+        default=None, description="One short sentence explaining this reading of the screen; null if unsure"
+    )
 
 
 class CartAndCheckoutState(BaseModel):
@@ -157,7 +161,7 @@ class CartAndCheckoutState(BaseModel):
     offers: list[Offer] = Field(
         description="Every optional upsell, delivery speed tier (Priority vs Standard), Uber One prompt, tip preset, or fee visible on this screen"
     )
-    summary: str
+    summary: str | None = Field(default=None, description="One short sentence describing this screen; null if unsure")
 
 
 def extract_suburb_hint(name: str | None) -> str | None:
