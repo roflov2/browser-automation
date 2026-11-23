@@ -155,7 +155,11 @@ class CartAndCheckoutState(BaseModel):
         description="Any other fees or charges shown (e.g. bag fee, delivery adjustment, regulatory fee, tip) excluding Subtotal, Delivery Fee, Service Fee and Small Order Fee"
     )
     tax_amount: str | None = Field(description="Estimated taxes/GST if itemised separately")
-    tax_included: bool = Field(description="True if GST/tax is included in prices")
+    tax_included: bool | None = Field(
+        default=None,
+        description="True if prices are shown as including GST/tax (e.g. 'incl. GST'); False if tax is added as a "
+        "separate line; null if not stated",
+    )
     total: str | None = Field(description="Total amount due (or cart subtotal if full total not yet shown)")
     currency: str | None = Field(description="Currency code if shown, e.g. 'AUD'")
     offers: list[Offer] = Field(
