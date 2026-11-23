@@ -232,7 +232,7 @@ def option_name(option: PriceOption) -> str:
 def choose_option(options: list[PriceOption]) -> PriceOption | None:
     """The cheapest available ticket an ordinary adult can buy; any cheapest ticket if none is plainly adult."""
     priced = [o for o in options if o.available and parse_price(o.price) is not None]
-    standard = [o for o in priced if not RESTRICTED_TYPES.search(o.price_type)]
+    standard = [o for o in priced if not RESTRICTED_TYPES.search(o.price_type or "")]
     candidates = standard or priced
     specific = [o for o in candidates if not re.search(r"any\s+price", o.area or "", re.IGNORECASE)]
     return min(specific or candidates, key=lambda o: parse_price(o.price) or 0.0, default=None)
@@ -246,7 +246,9 @@ def cheapest_offered(options: list[PriceOption]) -> float | None:
 async def hold_tickets(stagehand: Stagehand, page: Page, option: PriceOption, quantity: int) -> Item:
     """Choose `quantity` tickets of `option` (best available seats) and get them held in the cart."""
     item = new_item(option_name(option), option.price, quantity=quantity)
-    described = f"{quantity} x '{option.price_type}'" + (f" in '{option.area}'" if option.area else "")
+    kind = " in ".join(f"'{part}'" for part in [option.price_type, option.area] if part) or "standard"
+    described = f"{quantity} x {kind}"
+    ticket_type = f"'{option.price_type}' (or Adult / Standard)" if option.price_type else "'Adult / Standard'"
     question = (
         f"We want {described} tickets. Are tickets now held/reserved (a cart, basket, order summary or countdown "
         "timer)? Report the area, seats, ticket type, quantity, price per ticket and total."
@@ -262,7 +264,7 @@ async def hold_tickets(stagehand: Stagehand, page: Page, option: PriceOption, qu
             f"pills above the seat map or in the category list), click the '{option.area or 'Best available'}' "
             f"({option.price}) button/option (scroll the price bar or click its arrow if needed), or click 'Find Best "
             "available' to show the category list; "
-            f"2) Once quantity +/- buttons or a quantity dropdown are visible for '{option.price_type}' (or Adult / Standard), "
+            f"2) Once quantity +/- buttons or a quantity dropdown are visible for {ticket_type}, "
             f"increase/set the quantity to {quantity} (leave every other ticket type at 0); "
             "3) Once the quantity is set, click the 'Next' / 'Get tickets' / 'Find tickets' / 'Continue' button "
             "to reserve the tickets. Do NOT click 'Choose your own' or 'Find Best available' if ticket categories or "

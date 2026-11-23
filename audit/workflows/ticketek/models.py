@@ -38,8 +38,10 @@ class FindState(BaseModel):
 class Session(BaseModel):
     date: str = Field(description="Date and time of the performance as displayed, e.g. 'Sat 14 Mar 2027, 7:30pm'")
     venue: str | None = Field(description="Venue and city as displayed")
-    status: str = Field(
-        description="One of: on_sale, selling_fast, limited, sold_out, not_on_sale_yet, cancelled, resale_only"
+    status: str | None = Field(
+        default=None,
+        description="One of: on_sale, selling_fast, limited, sold_out, not_on_sale_yet, cancelled, resale_only; "
+        "null if no status is shown",
     )
     from_price: str | None = Field(description="Lowest price shown for this session, e.g. 'From $89.90'; null if none")
 
@@ -66,8 +68,10 @@ class PriceOption(BaseModel):
     area: str | None = Field(
         description="Seating area, section, reserve or tier, e.g. 'A Reserve', 'General Admission'"
     )
-    price_type: str = Field(
-        description="Ticket type as displayed, e.g. 'Adult', 'Child', 'Concession', 'Student', 'Family', 'Member'"
+    price_type: str | None = Field(
+        default=None,
+        description="Ticket type as displayed, e.g. 'Adult', 'Child', 'Concession', 'Student', 'Family', 'Member'; "
+        "null if the tier shows no separate ticket type",
     )
     price: str | None = Field(description="Price per ticket as displayed, e.g. '$89.90'; null if unavailable")
     available: bool = Field(description="False if sold out, unavailable or greyed out")
@@ -150,7 +154,9 @@ class TicketLine(LineItem):
 
 class Surcharge(BaseModel):
     payment_method: str = Field(description="e.g. 'Visa/Mastercard', 'Amex', 'PayPal'")
-    fee: str = Field(description="Fee as displayed, e.g. '1.5%', '$2.20', 'No fee'")
+    fee: str | None = Field(
+        default=None, description="Fee as displayed, e.g. '1.5%', '$2.20', 'No fee'; null if no fee is shown"
+    )
 
 
 class CheckoutDetails(BaseModel):

@@ -51,6 +51,31 @@ def test_choose_option_prefers_the_cheapest_standard_adult_ticket():
     assert flow.choose_option([option("Adult", "$40", available=False)]) is None
 
 
+def test_a_tier_with_no_ticket_type_reads_and_counts_as_standard():
+    shown = {"area": "A Reserve", "price": "$129", "available": True, "price_note": None}
+    assert PriceOption.model_validate({**shown, "price_type": None}).price_type is None
+    assert PriceOption.model_validate(shown).price_type is None  # key left out entirely
+    untyped = option(None, "$129")
+    assert flow.choose_option([untyped, option("Student", "$40")]) is untyped  # untyped beats a restricted type
+    assert flow.choose_option([untyped]) is untyped
+    assert flow.option_name(untyped) == "A Reserve"
+
+
+def test_a_session_or_surcharge_may_leave_out_what_the_page_does_not_show():
+    no_status = Session.model_validate({"date": "Fri 5 Mar 2027", "venue": None, "from_price": None})
+    assert no_status.status is None
+    assert flow.choose_session([no_status], None) is None  # unknown status is not bookable
+    assert Surcharge.model_validate({"payment_method": "Amex", "fee": None}).fee is None
+
+
+def test_a_surcharge_with_no_fee_shown_is_recorded_but_not_charged(tmp_path):
+    run = result(tmp_path)
+    pricing.record_surcharges(run, [Surcharge(payment_method="Amex", fee=None)])
+    assert [(e["label"], e["price_display"], e["price"]) for e in run.extras] == [("Amex", None, None)]
+    report = pricing.compare_prices(run, checkout(payment_surcharges=[Surcharge(payment_method="Amex")]))
+    assert not any("payment surcharge" in r for r in report["drip_reasons"])
+
+
 # --- price comparison --------------------------------------------------------------------------------------
 def held(price="$89.90", quantity=2):
     item = new_item("C Reserve - Adult", price, quantity=quantity)

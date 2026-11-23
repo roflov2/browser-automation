@@ -157,7 +157,7 @@ class TicketekWorkflow(Workflow):
                 result.fail(Status.NO_ITEMS_FOUND, "No tickets available for the session")
                 return
 
-            log.info(f"  Holding {args.tickets} x {option.area or ''} {option.price_type} ({option.price})")
+            log.info(f"  Holding {args.tickets} x {option.area or ''} {option.price_type or ''} ({option.price})")
             item = await hold_tickets(stagehand, page, option, args.tickets)
             item["price_basis"] = options.price_basis
             result.items.append(item)
