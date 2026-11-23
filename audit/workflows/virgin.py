@@ -107,7 +107,9 @@ class SearchState(BaseModel):
     blocked_reason: str | None = Field(
         description="If progress is blocked by a CAPTCHA, 'verify you are human', access-denied or bot check, describe it; otherwise null"
     )
-    reason: str
+    reason: str | None = Field(
+        default=None, description="One short sentence explaining this reading of the screen; null if unsure"
+    )
 
 
 class FareOption(BaseModel):
@@ -117,9 +119,11 @@ class FareOption(BaseModel):
 
 class Flight(BaseModel):
     flight_number: str | None = Field(description="e.g. 'VA 815'; null if not shown")
-    departs: str = Field(description="Departure time as displayed, e.g. '6:00am'")
-    arrives: str = Field(description="Arrival time as displayed")
-    stops: int = Field(description="Number of stops; 0 for a direct flight")
+    departs: str | None = Field(
+        default=None, description="Departure time as displayed, e.g. '6:00am'; null if not shown"
+    )
+    arrives: str | None = Field(default=None, description="Arrival time as displayed; null if not shown")
+    stops: int | None = Field(default=None, description="Number of stops; 0 for a direct flight; null if not shown")
     duration: str | None
     price: str | None = Field(description="Lowest price displayed for this flight, e.g. 'From $129'; null if sold out")
     sold_out: bool
@@ -143,7 +147,9 @@ class SelectedFare(BaseModel):
     fare_name: str | None = Field(description="Selected fare brand, e.g. 'Lite'")
     fare_price: str | None = Field(description="Price shown for the selected fare, e.g. '$129'")
     running_total: str | None = Field(description="Trip total / cart total currently displayed, if any")
-    reason: str
+    reason: str | None = Field(
+        default=None, description="One short sentence explaining this reading of the screen; null if unsure"
+    )
 
 
 class Offer(BaseModel):
@@ -180,7 +186,7 @@ class StepState(BaseModel):
     )
     total: str | None = Field(description="Running trip total currently displayed, e.g. '$129.00'")
     validation_errors: list[str] = Field(description="Any form validation or error messages currently displayed")
-    summary: str
+    summary: str | None = Field(default=None, description="One short sentence describing this screen; null if unsure")
 
 
 PASSENGER_DETAILS = ("title", "first_name", "last_name", "gender", "date_of_birth", "email", "phone", "country")
@@ -190,9 +196,11 @@ CHOSEN_DETAILS = ("title", "gender", "country")
 
 class FieldToFill(BaseModel):
     label: str = Field(description="Label of the form field exactly as displayed")
-    kind: str = Field(description="One of: text, dropdown, radio, checkbox, date")
-    detail: str = Field(
-        description=f"Which passenger detail belongs in this field. One of: {', '.join(PASSENGER_DETAILS)}, other"
+    kind: str | None = Field(default=None, description="One of: text, dropdown, radio, checkbox, date; null if unclear")
+    detail: str | None = Field(
+        default=None,
+        description=f"Which passenger detail belongs in this field. One of: {', '.join(PASSENGER_DETAILS)}, other; "
+        "null if unclear",
     )
 
 
@@ -213,7 +221,9 @@ class LineItem(BaseModel):
 
 class Surcharge(BaseModel):
     payment_method: str = Field(description="e.g. 'Visa/Mastercard credit', 'Amex', 'PayPal', 'Debit card'")
-    fee: str = Field(description="Fee as displayed, e.g. '1.3%', '$3.50', 'No fee'")
+    fee: str | None = Field(
+        default=None, description="Fee as displayed, e.g. '1.3%', '$3.50', 'No fee'; null if no fee is shown"
+    )
 
 
 class CheckoutDetails(BaseModel):
@@ -243,7 +253,7 @@ class CheckoutDetails(BaseModel):
     )
     total: str | None = Field(description="Total amount due as displayed")
     currency: str | None = Field(description="Currency code if shown, e.g. 'AUD'")
-    summary: str
+    summary: str | None = Field(default=None, description="One short sentence describing this screen; null if unsure")
 
 
 @dataclass
@@ -369,7 +379,7 @@ async def search_flights(stagehand: Stagehand, page: Page, trip: Trip) -> None:
     if state.blocked_reason:
         raise Blocked(state.blocked_reason)
     if not state.on_results_page:
-        raise FlowChanged(f"Couldn't reach the flight results page: {state.reason}")
+        raise FlowChanged(f"Couldn't reach the flight results page: {state.reason or 'no reason given'}")
 
 
 def choose_flight(flights: list[Flight]) -> Flight | None:
@@ -379,12 +389,24 @@ def choose_flight(flights: list[Flight]) -> Flight | None:
     return min(direct or available, key=lambda f: parse_price(f.price) or 0.0, default=None)
 
 
+def describe_flight(flight: Flight) -> tuple[str, str]:
+    """The item name for a flight, and how to describe it in a prompt, from whatever the listing showed."""
+    times = " - ".join(filter(None, [flight.departs, flight.arrives]))
+    name = " ".join(filter(None, [flight.flight_number, times])) or f"Flight at {flight.price}"
+    legs = [
+        f"departing {flight.departs}" if flight.departs else "",
+        f"arriving {flight.arrives}" if flight.arrives else "",
+    ]
+    when = " and ".join(filter(None, legs))
+    described = " ".join(filter(None, ["the flight", when, flight.flight_number and f"({flight.flight_number})"]))
+    if not when and not flight.flight_number:
+        described += f" priced {flight.price}"
+    return name, described
+
+
 async def select_flight(stagehand: Stagehand, page: Page, flight: Flight) -> dict:
-    name = " ".join(filter(None, [flight.flight_number, f"{flight.departs} - {flight.arrives}"]))
+    name, described = describe_flight(flight)
     item = new_item(name, flight.price)
-    described = f"the flight departing {flight.departs} and arriving {flight.arrives}" + (
-        f" ({flight.flight_number})" if flight.flight_number else ""
-    )
     question = (
         f"We want {described} on its cheapest fare. Is a flight and fare now selected (shown as selected, or in the "
         "trip summary / cart)? Report the selected flight, fare brand, fare price and any running total."
@@ -513,7 +535,7 @@ async def walk_to_payment(stagehand: Stagehand, page: Page, passenger: Passenger
             repeats += 1
             log.info(f"  Step {index}: unchanged after the last action (repeat {repeats})")
             if repeats >= MAX_STUCK_REPEATS:
-                errors = "; ".join(last_state.validation_errors) or last_state.summary
+                errors = "; ".join(last_state.validation_errors) or last_state.summary or "no summary"
                 result.message = f"Stuck on '{last_state.heading or last_state.step_type}': {errors}"
                 return False
             await next_booking_action(
@@ -566,9 +588,7 @@ async def walk_to_payment(stagehand: Stagehand, page: Page, passenger: Passenger
         repeats = repeats + 1 if signature == last_signature else 0
         last_signature = signature
         if repeats >= MAX_STUCK_REPEATS:
-            result.message = (
-                f"Stuck on '{state.heading or step_type}': {'; '.join(state.validation_errors) or state.summary}"
-            )
+            result.message = f"Stuck on '{state.heading or step_type}': {'; '.join(state.validation_errors) or state.summary or 'no summary'}"
             return False
 
         # Remember what the screen looked like when it was read; if the action leaves it exactly so,
@@ -758,7 +778,9 @@ class VirginWorkflow(Workflow):
                 result.fail(Status.NO_FLIGHTS_FOUND, "No available flights with a price on the results page")
                 return
 
-            log.info(f"  Selecting: {flight.flight_number or ''} {flight.departs}-{flight.arrives} ({flight.price})")
+            log.info(
+                f"  Selecting: {flight.flight_number or ''} {flight.departs or ''}-{flight.arrives or ''} ({flight.price})"
+            )
             item = await select_flight(stagehand, page, flight)
             item["price_basis"] = listing.price_basis
             result.items.append(item)

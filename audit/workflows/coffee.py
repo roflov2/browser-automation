@@ -73,21 +73,25 @@ class PageCheck(BaseModel):
     is_shop_page: bool = Field(
         description="True only on the store's shop/catalogue page listing coffee products for sale with prices, not the homepage"
     )
-    reason: str
+    reason: str | None = Field(
+        default=None, description="One short sentence explaining this reading of the screen; null if unsure"
+    )
 
 
 class Product(BaseModel):
     name: str = Field(
         description="Clean product title without duplicated collection/category prefixes (e.g. 'Ethiopia Worka Sakaro', not 'Coffee Ethiopia Worka Sakaro')"
     )
-    price: str = Field(description="Price as displayed, e.g. 'From $15.00'")
+    price: str | None = Field(default=None, description="Price as displayed, e.g. 'From $15.00'; null if none is shown")
     sold_out: bool
     is_coffee: bool = Field(
         description="True for coffee for drinking: whole bean or ground coffee, pods, capsules, drip bags or steep bags. "
         "False for equipment, mugs, merch, gift cards, courses and subscription-only products."
     )
-    product_type: str = Field(
-        description="One of: whole_bean_or_ground, pods_or_capsules, drip_or_steep_bags, equipment, merch, gift_card, subscription, course, other"
+    product_type: str | None = Field(
+        default=None,
+        description="One of: whole_bean_or_ground, pods_or_capsules, drip_or_steep_bags, equipment, merch, gift_card, "
+        "subscription, course, other; null if unclear",
     )
     url: str | None = Field(description="Link (href) to the product page, if present")
 
@@ -117,7 +121,9 @@ class ProductPageState(BaseModel):
     current_price: str | None = Field(
         description="Price currently displayed for the selected one-time purchase option, e.g. '$21.00'"
     )
-    reason: str
+    reason: str | None = Field(
+        default=None, description="One short sentence explaining this reading of the screen; null if unsure"
+    )
 
 
 class CartLines(BaseModel):
@@ -125,7 +131,9 @@ class CartLines(BaseModel):
     items: list[LineItem]
     subtotal: str | None
     has_checkout_button: bool
-    reason: str
+    reason: str | None = Field(
+        default=None, description="One short sentence explaining this reading of the screen; null if unsure"
+    )
 
 
 class CheckoutDetails(BaseModel):
@@ -149,7 +157,7 @@ class CheckoutDetails(BaseModel):
     )
     total: str | None
     currency: str | None = Field(description="Currency code if shown, e.g. 'AUD'")
-    summary: str
+    summary: str | None = Field(default=None, description="One short sentence describing this screen; null if unsure")
 
 
 # ---------------------------------------------------------------------------
@@ -167,8 +175,9 @@ async def find_shop_page(stagehand: Stagehand, page: Page) -> str:
         check = await stagehand.extract("Is the current page the store's coffee shop page?", PageCheck)
         if check.data.is_shop_page:
             return curr_url
-        if "ERR_" in check.data.reason or "failed to load" in check.data.reason.lower():
-            raise FlowChanged(check.data.reason)
+        reason = check.data.reason or ""
+        if "ERR_" in reason or "failed to load" in reason.lower():
+            raise FlowChanged(reason)
 
         step = await safe_act(
             stagehand,
@@ -250,7 +259,7 @@ async def add_product_to_cart(stagehand: Stagehand, page: Page, product: Product
     for attempt in range(3):
         state = (
             await stagehand.extract(
-                f"Check this page for product '{product.name}' (shop price: {product.price}): "
+                f"Check this page for product '{product.name}' (shop price: {product.price or 'not shown'}): "
                 "1) Is this an individual product page with an Add to Cart / Buy button? "
                 "2) Does it offer one-time purchase vs subscription, and is one-time purchase selected? "
                 "3) Does it have package size or weight options, and is the smallest/cheapest one selected? "
@@ -538,7 +547,7 @@ class CoffeeWorkflow(Workflow):
         log.info(f"  Cart: {len(cart.items)} line(s), subtotal {cart.subtotal}")
         await shot(page, out / "cart.png", full_page=False)
 
-        shopify = cart.reason.endswith("/cart.js")
+        shopify = (cart.reason or "").endswith("/cart.js")
         checkout = await go_to_checkout(stagehand, page, result, shopify) if cart.has_checkout_button else None
         result.checkout_url = await page.url()
         result.comparison = compare_prices(result.added, cart, checkout)

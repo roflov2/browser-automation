@@ -73,7 +73,10 @@ class StoreHeaderInfo(BaseModel):
 class MenuItem(BaseModel):
     name: str = Field(description="Clean menu item title without price, discount badge or calorie text")
     category: str | None = Field(description="Menu section heading, e.g. 'Burgers', 'Mains', 'Sides'")
-    price: str = Field(description="Current price as displayed on the menu, e.g. '$14.70' or 'A$22.00'")
+    price: str | None = Field(
+        default=None,
+        description="Current price as displayed on the menu, e.g. '$14.70' or 'A$22.00'; null if none is shown",
+    )
     sold_out: bool = Field(description="True if marked sold out or unavailable")
     is_food_or_drink: bool = Field(
         description="True for regular food, meals, sides or drinks; False for cutlery/utensils, napkins, bags, or donations"

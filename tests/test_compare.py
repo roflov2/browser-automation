@@ -230,6 +230,45 @@ def test_tax_included_may_be_null(model):
     assert {"type": "null"} in schema["properties"]["tax_included"]["anyOf"]
 
 
+NULLABLE_READS = [
+    (coffee.PageCheck, "reason"),
+    (coffee.ProductPageState, "reason"),
+    (coffee.CartLines, "reason"),
+    (coffee.CheckoutDetails, "summary"),
+    (coffee.Product, "price"),
+    (coffee.Product, "product_type"),
+    (virgin.SearchState, "reason"),
+    (virgin.SelectedFare, "reason"),
+    (virgin.StepState, "summary"),
+    (virgin.CheckoutDetails, "summary"),
+    (virgin.Flight, "departs"),
+    (virgin.Flight, "arrives"),
+    (virgin.Flight, "stops"),
+    (virgin.FieldToFill, "kind"),
+    (virgin.FieldToFill, "detail"),
+    (virgin.Surcharge, "fee"),
+    (uber_models.MenuItem, "price"),
+]
+
+
+@pytest.mark.parametrize(("model", "field"), NULLABLE_READS, ids=lambda x: getattr(x, "__qualname__", x))
+def test_fields_the_page_may_not_show_may_be_null(model, field):
+    """A null (or missing) value here is a fair reading of the page; it must not reject the whole extraction."""
+    schema = model.model_json_schema()
+    assert field not in schema.get("required", []), f"{model.__name__}.{field}"
+    assert {"type": "null"} in schema["properties"][field]["anyOf"]
+    assert model.model_fields[field].default is None
+
+
+def test_coffee_null_summary_is_reported_as_unknown(saved_runs):
+    run = runs_for(saved_runs, "coffee")[0]
+    cart, checkout = coffee_inputs(run, summary=None)
+    report = coffee.compare_prices(copy.deepcopy(run["items"]), cart, checkout)
+    expected = coffee.compare_prices(copy.deepcopy(run["items"]), *coffee_inputs(run))
+    assert report["checkout_summary"] is None
+    assert {**report, "checkout_summary": expected["checkout_summary"]} == expected  # nothing else changes
+
+
 def test_ubereats_null_tax_included(saved_runs):
     (run,) = runs_for(saved_runs, "ubereats")
     c = run["checkout"]
