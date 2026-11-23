@@ -208,6 +208,43 @@ def test_virgin_picks_the_cheapest_direct_flight():
     assert virgin.choose_flight([flight(None), flight("$10", sold_out=True)]) is None
 
 
+def test_fields_left_null_are_handled_where_they_are_read():
+    """Each field the model may leave null (see test_compare.NULLABLE_READS) has readers that cope with it."""
+    untyped = coffee.Product(name="Mystery", sold_out=False, is_coffee=True, url=None)  # no price, no type
+    bean = coffee.Product(name="Rogue", price="$20", sold_out=False, is_coffee=True,
+                          product_type="whole_bean_or_ground", url=None)  # fmt: skip
+    assert coffee.choose_coffees([untyped, bean], 2) == [bean, untyped]  # an unknown type is not preferred
+
+    def flight(**shown):
+        return virgin.Flight(
+            **{"flight_number": None, "duration": None, "price": "$129", "sold_out": False, "fares": [], **shown}
+        )
+
+    full = flight(flight_number="VA 815", departs="6:00am", arrives="7:35am", stops=0)
+    assert virgin.describe_flight(full) == (
+        "VA 815 6:00am - 7:35am",
+        "the flight departing 6:00am and arriving 7:35am (VA 815)",
+    )
+    assert virgin.describe_flight(flight(departs="6:00am")) == ("6:00am", "the flight departing 6:00am")
+    assert virgin.describe_flight(flight()) == ("Flight at $129", "the flight priced $129")
+    assert "None" not in " ".join(virgin.describe_flight(flight(arrives="7:35am")))
+    direct, unknown = flight(departs="9:00am", stops=0), flight(departs="6:00am")
+    unknown.price = "$99"
+    assert virgin.choose_flight([unknown, direct]) is direct  # unknown stops is not taken as direct
+
+    passenger = Passenger.from_settings(REAL)
+    assert passenger_field_instruction(FieldToFill(label="Mystery", kind="text"), passenger) is None
+    assert passenger_field_instruction(FieldToFill(label="Email", detail="email"), passenger) == (
+        "Type %email% into the 'Email' field of the passenger details form.",
+        {"email": "sam@real.example"},
+    )
+
+    def dish(price):
+        return uber_models.MenuItem(name="Dish", category=None, price=price, sold_out=False, is_food_or_drink=True)
+
+    assert uber_store.choose_menu_items([dish(None), dish("$14.70")], 2) == [dish("$14.70")]
+
+
 def test_ubereats_address_helpers():
     assert uber_store.street_tokens("1 Jeffcott Place, Canberra ACT 2615") == ["1", "jeffcott"]
     assert uber_store.addresses_match("1 Jeffcott Pl", "1 Jeffcott Place, Canberra ACT 2615")
