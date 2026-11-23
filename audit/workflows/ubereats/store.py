@@ -1269,11 +1269,6 @@ def order_item(menu_item: MenuItem, **extra: object) -> Item:
         menu_item.name,
         menu_item.price,
         category=menu_item.category,
-        direct_item_name=None,
-        direct_price_display=None,
-        direct_price=None,
-        uber_vs_direct_diff=None,
-        uber_vs_direct_markup_pct=None,
         **extra,
     )
 

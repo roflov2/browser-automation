@@ -452,11 +452,6 @@
     "selected_variant": "Tomato Sauce Base",
     "selected_price_display": "$25.00",
     "selected_price": 25.0,
-    "direct_item_name": "PEPPERONI BURST",
-    "direct_price_display": "$21.00",
-    "direct_price": 21.0,
-    "uber_vs_direct_diff": 4.0,
-    "uber_vs_direct_markup_pct": 19.0,
     "status": "added"
    },
    {
@@ -467,11 +462,6 @@
     "selected_variant": null,
     "selected_price_display": "$22.40",
     "selected_price": 22.4,
-    "direct_item_name": "SUPER SUPREME",
-    "direct_price_display": "$24.00",
-    "direct_price": 24.0,
-    "uber_vs_direct_diff": -1.6,
-    "uber_vs_direct_markup_pct": -6.7,
     "status": "added"
    }
   ],
@@ -510,7 +500,6 @@
   },
   "result": {
    "store_name": "OOSHMAN",
-   "direct_website_url": "https://order.ooshman.au/order",
    "advertised_delivery_fee_display": "$4.99 Delivery Fee^",
    "advertised_delivery_fee": 4.99,
    "advertised_service_fee_display": "+ Service Fee"
@@ -1554,7 +1543,6 @@
    }
   ],
   "expected": {
-   "direct_website_url": "https://order.ooshman.au/order",
    "fee_breakdown": [
     {
      "fee_type": "delivery_fee",
@@ -1622,11 +1610,6 @@
     }
    ],
    "other_fees_total": 5.69,
-   "direct_items_matched": 2,
-   "direct_matched_subtotal": 45.0,
-   "uber_matched_subtotal": 47.4,
-   "uber_vs_direct_subtotal_diff": 2.4,
-   "uber_vs_direct_markup_pct": 5.3,
    "extras_offered": 43,
    "extras_offered_by_category": {
     "item_modifier_paid": 10,
@@ -1648,7 +1631,6 @@
    "drip_detected": true,
    "drip_reasons": [
     "service fee added at checkout ($5.69, 12.0% of subtotal)",
-    "Uber Eats menu prices marked up +5.3% (+$2.40) vs restaurant direct website",
     "optional extras pre-selected: Standard"
    ],
    "checkout_summary": "On the final checkout page. Subtotal is $47.40 (discounted from $53.00), Service fee is $5.69, Standard delivery fee is $4.99, Promotion discount is -$11.85, and final Total is $46.23. Priority delivery is offered for +$5.99."

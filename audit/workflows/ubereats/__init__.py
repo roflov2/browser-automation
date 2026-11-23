@@ -1,12 +1,10 @@
-"""Uber Eats food delivery: drip pricing at checkout, and menu markup against the restaurant's own site.
+"""Uber Eats food delivery: drip pricing at checkout.
 
 1. Start on Uber Eats AU (or a direct `/store/...` URL), set the delivery address, and record the
    advertised delivery fee and service fee shown on the feed card and store banner.
 2. Clear leftover cart items (confirming Uber's 'new order' prompt if another store's cart remains),
    then add 1-5 menu items (auto-selecting $0/cheapest required modifiers and declining paid add-ons).
 3. Walk through the cart drawer to the final checkout screen and extract every fee.
-4. Visit the restaurant's own website (found by search, or `--restaurant-url`), walk it until item
-   prices are on screen, and compare its unit prices against the Uber Eats prices.
 
 The run always stops on the checkout screen: nothing is ordered or paid for. When the checkout screen was not
 reached, the cart is emptied again on the way out, so the next run starts with an empty cart.
@@ -20,11 +18,10 @@ from urllib.parse import urlparse
 from stagehand import Page, Stagehand
 
 from ...config import Settings
-from ...core import BROWSER_ERRORS, ITEM_FIELDS, SiteResult, Status, UnsafeActionRefused, parse_price, slug, write_csv
+from ...core import BROWSER_ERRORS, SiteResult, Status, UnsafeActionRefused, parse_price, slug, write_csv
 from ...page import settle, shot
 from ...safety import Mode, current_guard
 from ...workflow import Workflow
-from .direct_site import audit_direct_restaurant_site
 from .models import CartAndCheckoutState, MenuItem, StoreMenu, UberResult
 from .pricing import FEE_BREAKDOWN_FIELDS, compare_prices, print_audit_tables
 from .store import (
@@ -53,18 +50,10 @@ SAFETY_PROMPT = (
 
 class UberEatsWorkflow(Workflow):
     name = "ubereats"
-    help = "Uber Eats: order 1-5 menu items up to checkout, record every fee, and compare prices with the restaurant's own site"
+    help = "Uber Eats: order 1-5 menu items up to checkout, and record every fee"
     system_prompt = SAFETY_PROMPT
     viewport = (1440, 1000)
     result_class = UberResult
-    item_fields = (
-        *ITEM_FIELDS[:-1],
-        "direct_item_name",
-        "direct_price_display",
-        "uber_vs_direct_diff",
-        "uber_vs_direct_markup_pct",
-        ITEM_FIELDS[-1],
-    )
 
     @classmethod
     def add_arguments(cls, parser: argparse.ArgumentParser, settings: Settings) -> None:
@@ -93,16 +82,6 @@ class UberEatsWorkflow(Workflow):
             choices=range(1, 6),
             metavar="N",
             help="Number of menu items to add to the order (1-5, default 2)",
-        )
-        parser.add_argument(
-            "--restaurant-url",
-            default=None,
-            help="Optional direct URL to the restaurant's own website/ordering page for unit-price comparison",
-        )
-        parser.add_argument(
-            "--skip-direct-site",
-            action="store_true",
-            help="Skip visiting the restaurant's own website at the end of the Uber Eats run",
         )
 
     def targets(self) -> list[str]:
@@ -201,20 +180,13 @@ class UberEatsWorkflow(Workflow):
             else:
                 result.fail(Status.NO_CHECKOUT, "Checkout screen not reached")
         except UnsafeActionRefused:
-            refused = True  # the guard stopped the run: touch nothing else, on this site or the restaurant's
+            refused = True  # the guard stopped the run: touch nothing else
             raise
         finally:
             with contextlib.suppress(*BROWSER_ERRORS):  # the browser may be gone; the URL is a nicety
                 result.checkout_url = await page.url()
             if result.added and not refused:
                 await self.empty_cart_after_run(stagehand, page, result)
-            # However the Uber Eats side ended (even blocked by a login wall), the items that made it into
-            # the cart can still be compared with the restaurant's own prices. Not after a guard refusal.
-            if not args.skip_direct_site and result.added and not refused:
-                try:
-                    await audit_direct_restaurant_site(stagehand, page, result, args.address, args.restaurant_url)
-                except BROWSER_ERRORS as error:  # the direct-site comparison is an extra; the audit stands without it
-                    log.warning(f"  Direct website check skipped/failed: {type(error).__name__}: {error}")
             self.conclude(result, lambda: compare_prices(result, cart_state, checkout_state))
             write_csv(out / "fees_breakdown.csv", FEE_BREAKDOWN_FIELDS, result.comparison.get("fee_breakdown", []))
 

@@ -160,26 +160,6 @@ class CartAndCheckoutState(BaseModel):
     summary: str
 
 
-class DirectMenuMatch(BaseModel):
-    uber_item_name: str = Field(description="The requested Uber Eats item name, copied exactly as given")
-    direct_item_name: str | None = Field(
-        description="Name of the same dish as written on this restaurant website; null if it is not on this page"
-    )
-    direct_price_display: str | None = Field(
-        description="Unit price this website shows for that dish, e.g. '$19.00' or '20'; null if not found or no price listed"
-    )
-
-
-class DirectSiteExtraction(BaseModel):
-    page_state: str = Field(
-        description="One of: menu_with_prices (menu items with prices are listed), menu_without_prices, "
-        "order_type_choice (must pick pickup vs delivery), store_selection (must pick a store/location), "
-        "blocked (login, delivery address, or CAPTCHA required), other"
-    )
-    matches: list[DirectMenuMatch] = Field(description="One entry per requested Uber Eats item, in the order given")
-    summary: str
-
-
 def extract_suburb_hint(name: str | None) -> str | None:
     """Extract a suburb hint like 'Braddon' from 'Grease Monkey (BRADDON)'."""
     m = re.search(r"\(([^)]+)\)", name or "")
@@ -190,7 +170,6 @@ def extract_suburb_hint(name: str | None) -> str | None:
 class UberResult(SiteResult):
     store_name: str | None = None
     store_location: str | None = None
-    direct_website_url: str | None = None
     advertised_delivery_fee_display: str | None = None
     advertised_delivery_fee: float | None = None
     advertised_service_fee_display: str | None = None
