@@ -331,6 +331,7 @@ class FailureReason(StrEnum):
     EXTRACT_FAILED = "extract_failed"
     TIMEOUT = "timeout"
     UNSAFE_ACTION_REFUSED = "unsafe_action_refused"
+    CART_LOST = "cart_lost"
 
 
 # The reason that goes with each status a workflow sets without raising.
@@ -384,6 +385,12 @@ class StepTimeout(AuditError):
     """An LLM call, a navigation or a wait ran out of time."""
 
     reason = FailureReason.TIMEOUT
+
+
+class CartLost(AuditError):
+    """Items were in the cart, then the cart came up empty partway to checkout (the site dropped it)."""
+
+    reason = FailureReason.CART_LOST
 
 
 class PageScriptError(AuditError):

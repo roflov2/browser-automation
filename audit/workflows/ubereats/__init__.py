@@ -182,6 +182,13 @@ class UberEatsWorkflow(Workflow):
         except UnsafeActionRefused:
             refused = True  # the guard stopped the run: touch nothing else
             raise
+        except Exception:
+            # The runner's error.png is taken after the cleanup below has gone back to the store and emptied the
+            # cart, so it never shows the screen the run failed on: keep that one here.
+            await shot(page, out / "error-before-cleanup.png", full_page=False)
+            with contextlib.suppress(*BROWSER_ERRORS):
+                log.info(f"  Failed on {await page.url()}; emptying the cart before the error is recorded")
+            raise
         finally:
             with contextlib.suppress(*BROWSER_ERRORS):  # the browser may be gone; the URL is a nicety
                 result.checkout_url = await page.url()
