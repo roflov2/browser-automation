@@ -40,8 +40,9 @@ class Session(BaseModel):
     venue: str | None = Field(description="Venue and city as displayed")
     status: str | None = Field(
         default=None,
-        description="One of: on_sale, selling_fast, limited, sold_out, not_on_sale_yet, cancelled, resale_only; "
-        "null if no status is shown",
+        description="One of: on_sale, selling_fast, limited, sold_out, not_on_sale_yet, cancelled, resale_only. "
+        "Use on_sale when a 'Find tickets' / 'Buy tickets' button is shown and no other status is displayed; "
+        "null only if nothing on the page indicates availability",
     )
     from_price: str | None = Field(description="Lowest price shown for this session, e.g. 'From $89.90'; null if none")
 

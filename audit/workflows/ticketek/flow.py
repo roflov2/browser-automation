@@ -159,8 +159,13 @@ async def find_event(
 
 
 def choose_session(sessions: list[Session], hint: str | None) -> Session | None:
-    """The first bookable session, or the first bookable one whose date/venue contains `hint`."""
-    bookable = [s for s in sessions if s.status in BOOKABLE]
+    """The first bookable session, or the first bookable one whose date/venue contains `hint`.
+
+    Sessions marked bookable come first. If there are none, sessions with no status read are tried
+    instead, since a buy button with no label can leave the status unread. A session with a known
+    non-bookable status (sold out, cancelled, ...) is never picked.
+    """
+    bookable = [s for s in sessions if s.status in BOOKABLE] or [s for s in sessions if s.status is None]
     if hint:
         words = hint.lower().split()
         matching = [s for s in bookable if all(w in f"{s.date} {s.venue or ''}".lower() for w in words)]

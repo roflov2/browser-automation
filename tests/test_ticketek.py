@@ -40,6 +40,18 @@ def test_choose_session_takes_the_first_bookable_one_or_the_one_asked_for():
     assert flow.choose_session([session("x", "sold_out")], None) is None
 
 
+def test_a_session_with_no_status_read_may_still_be_bookable():
+    unknown = [session("Fri 5 Mar 2027", None, venue="RAC Arena, Perth, WA"),
+               session("Sat 6 Mar 2027", None, venue="Qudos Bank Arena, Sydney, NSW")]  # fmt: skip
+    assert flow.choose_session(unknown, None) is unknown[0]
+    on_sale = session("Sat 6 Mar 2027", "on_sale")
+    assert flow.choose_session([unknown[0], on_sale], None) is on_sale  # an explicit status wins
+    assert flow.choose_session([session("a", "sold_out"), session("b", "cancelled")], None) is None
+    assert flow.choose_session(unknown, "Sydney") is unknown[1]
+    no_status = Session.model_validate({"date": "Fri 5 Mar 2027", "venue": "X", "from_price": None})
+    assert no_status.status is None
+
+
 def test_choose_option_prefers_the_cheapest_standard_adult_ticket():
     options = [option("Child", "$49.90"), option("Concession", "$59.90"), option("Adult", "$129.90"),
                option("Adult", "$89.90", area="C Reserve"), option("Adult", "$69.90", area="D Reserve", available=False),
@@ -64,7 +76,6 @@ def test_a_tier_with_no_ticket_type_reads_and_counts_as_standard():
 def test_a_session_or_surcharge_may_leave_out_what_the_page_does_not_show():
     no_status = Session.model_validate({"date": "Fri 5 Mar 2027", "venue": None, "from_price": None})
     assert no_status.status is None
-    assert flow.choose_session([no_status], None) is None  # unknown status is not bookable
     assert Surcharge.model_validate({"payment_method": "Amex", "fee": None}).fee is None
 
 
