@@ -11,6 +11,7 @@ from audit import safety
 from audit.page import js
 from audit.workflows.ubereats.models import ItemModalState, MenuItem, StoreCard, UberResult
 from audit.workflows.ubereats.store import (
+    JS_CLICK_CHECKOUT,
     JS_ITEM_DIALOG_BLOCKER,
     add_menu_item_to_cart,
     clear_existing_cart,
@@ -19,6 +20,7 @@ from audit.workflows.ubereats.store import (
     get_cart_count,
     is_item_modal_open,
     item_popup_blocker,
+    open_cart_drawer,
     store_closed_reason,
     store_url,
 )
@@ -115,6 +117,11 @@ async def clear_carts(chrome: str, port: int, out_dir: Path) -> dict:
             await js(page, "() => document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))")
             seen["synthetic_escape_ignored"] = await js(page, "() => !!document.getElementById('drawer')")
             seen["closed_by_key"] = await close_cart_drawer(page)
+            # The checkout click says what it clicked: the drawer's own 'Go to checkout', never another control
+            await page.goto(f"http://127.0.0.1:{port}/uber-cart.html")
+            await open_cart_drawer(page)
+            seen["checkout_click"] = await uber_js(page, JS_CLICK_CHECKOUT)
+            seen["checkout_click_cart"] = await get_cart_count(page)
             await page.goto(f"http://127.0.0.1:{port}/uber-search.html")
             for case, card in STORES.items():
                 result = UberResult(site="ubereats", out_dir=Path())
@@ -236,6 +243,11 @@ def test_a_store_outside_its_menu_hours_is_closed(seen, hours, closed):
     why, shown = seen[f"menu_hours_{hours}"]
     # Any range covering the browser's clock keeps the store open; a later menu section's hours never close it
     assert why == (f"menu hours {shown}" if closed else None)
+
+
+def test_the_checkout_click_reports_the_drawers_button(seen):
+    assert seen["checkout_click"] == {"tag": "button", "text": "Go to checkout", "href": None, "inDrawer": True}
+    assert seen["checkout_click_cart"] == 4  # clicking it removed nothing
 
 
 def test_an_item_that_cannot_be_added_always_records_why(seen):

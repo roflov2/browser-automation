@@ -17,6 +17,7 @@ from ... import page as page_helpers
 from ...core import (
     BROWSER_ERRORS,
     Blocked,
+    CartLost,
     ElementNotFound,
     ExtractFailed,
     Item,
@@ -656,11 +657,20 @@ JS_CLICK_ADD = r"""() => {
     return { clicked: safeClick(btn), price: m ? m[1] : null };
 }"""
 
+# Click the cart's checkout button. Returns what was clicked ({tag, text, href, inDrawer}), or null.
 JS_CLICK_CHECKOUT = r"""() => {
     // Exact labels only: 'Checkout · Pay $54.20' or 'Checkout with PayPal' must never match
     const el = Array.from(document.querySelectorAll('a[href*="/checkout"], button')).find(
         e => /^(Go to checkout|Checkout|Continue to checkout)$/i.test(clean(txt(e))) && guardAllows(e));
-    return !!el && safeClick(el);
+    if (!el) return null;
+    const drawer = cartDrawer();
+    const clicked = {
+        tag: el.tagName.toLowerCase(),
+        text: clean(txt(el)),
+        href: (el.closest('a') || el).getAttribute('href') || null,
+        inDrawer: !!drawer && drawer.contains(el),
+    };
+    return safeClick(el) ? clicked : null;
 }"""
 
 JS_DECLINE_UPSELL = r"""() => {
@@ -1437,18 +1447,28 @@ CHECKOUT_QUESTION = (
 async def read_checkout_step(
     stagehand: Stagehand, page: Page, result: UberResult, step_idx: int, url: str
 ) -> tuple[CartAndCheckoutState, str]:
-    """Extract the current screen of the ordering flow and record it as a step. Returns (state, step type)."""
-    if "/checkout" in url:
-        state = (await stagehand.extract(CHECKOUT_QUESTION, CartAndCheckoutState)).data
-    else:
-        state = await scoped_extract(
-            stagehand,
-            page,
-            JS_MARK_CART_DRAWER,
-            CHECKOUT_QUESTION,
-            CartAndCheckoutState,
-            "Only the open cart drawer is shown (nothing else is open over the store page).",
-        )
+    """Extract the current screen of the ordering flow and record it as a step. Returns (state, step type).
+
+    A failed extraction is recorded too (a step with the URL and the error, and a screenshot of the screen it
+    could not read) before it is raised: the run's error.png is taken after the cart is emptied on the way out.
+    """
+    try:
+        if "/checkout" in url:
+            state = (await stagehand.extract(CHECKOUT_QUESTION, CartAndCheckoutState)).data
+        else:
+            state = await scoped_extract(
+                stagehand,
+                page,
+                JS_MARK_CART_DRAWER,
+                CHECKOUT_QUESTION,
+                CartAndCheckoutState,
+                "Only the open cart drawer is shown (nothing else is open over the store page).",
+            )
+    except (ExtractFailed, StepTimeout) as error:
+        log.warning(f"  Step {step_idx}: could not read the screen at {url}: {error}")
+        await shot(page, result.out_dir / f"step-{step_idx:02d}-extract-failed.png", full_page=False)
+        result.steps.append({"step": step_idx, "step_type": "extract_failed", "url": url, "error": str(error)})
+        raise
     step_type = "checkout" if state.is_checkout_page else state.step_type
     log.info(
         f"  Step {step_idx}: {step_type} | subtotal={state.subtotal} | "
@@ -1533,17 +1553,44 @@ async def open_cart_or_checkout(stagehand: Stagehand, page: Page, cart_visible: 
         await settle(page, 2200)
         return
 
-    if await js(page, JS_CLICK_CHECKOUT, default=False):
-        log.info("    Clicked 'Go to checkout' button")
+    clicked = await js(page, JS_CLICK_CHECKOUT, default=None)
+    if isinstance(clicked, dict):
+        log.info(
+            f"    Clicked checkout via DOM: <{clicked.get('tag')}> '{clicked.get('text')}' "
+            f"href={clicked.get('href')} in_drawer={clicked.get('inDrawer')}"
+        )
     else:
         act_res = await safe_act(
             stagehand,
             page,
             "Click the 'Go to checkout' / 'Checkout' button in the cart drawer. Never click 'Place order' or 'Pay'.",
         )
-        log.info(f"    Proceeding to checkout: {act_res.description}")
+        log.info(f"    Proceeding to checkout via act: {act_res.description}")
     await wait_for_render(page, 15)
     await page.wait_for_timeout(2500)
+    log.info(f"    After checkout click: {await page.url()}")
+
+
+async def count_empty_cart_read(
+    page: Page, result: UberResult, step_idx: int, cart: CartAndCheckoutState | None, empty_reads: int
+) -> int:
+    """Consecutive reads of the store page (no drawer, no checkout) with an empty cart, after `cart` was seen.
+
+    `cart` is the cart read earlier, or None when this step is not such a read (or no cart was seen yet).
+    Two in a row (the drawer is reopened in between) mean Uber dropped the cart, and raise CartLost instead of
+    walking on to MAX_CHECKOUT_STEPS. One alone is not enough: a header badge that is not recognised also reads 0.
+    """
+    if cart is None or await items_left_in_cart(page):
+        return 0
+    url = await page.url()
+    if empty_reads + 1 < 2:
+        log.warning(f"  Step {step_idx}: the cart looks empty ({url}); reopening it once to check")
+        return empty_reads + 1
+    await shot(page, result.out_dir / f"step-{step_idx:02d}-cart-lost.png", full_page=False)
+    raise CartLost(
+        f"The cart ({len(cart.items)} item(s), subtotal {cart.subtotal}) was empty at step {step_idx} on {url}, "
+        "after it had been opened on the way to checkout"
+    )
 
 
 async def walk_to_checkout(
@@ -1556,6 +1603,7 @@ async def walk_to_checkout(
     out = result.out_dir
     cart_snapshot: CartAndCheckoutState | None = None
     upsell_declines = 0
+    empty_cart_reads = 0
 
     async def login_or_block(reason: str) -> None:
         if not await login_pause(page, reason, interactive):
@@ -1577,6 +1625,7 @@ async def walk_to_checkout(
             await login_or_block(f"Uber login wall reached before checkout ({curr_url}).")
             curr_url = await page.url()
 
+        log.info(f"  Step {step_idx}: reading {curr_url} | header cart count={await get_cart_count(page)}")
         state, step_type = await read_checkout_step(stagehand, page, result, step_idx, curr_url)
 
         if "/checkout" not in curr_url and await is_item_modal_open(page):
@@ -1596,6 +1645,11 @@ async def walk_to_checkout(
             await current_guard().freeze(page)  # hard stop: the page with 'Place order' is only read from here on
             await shot(page, out / "checkout.png")
             return cart_snapshot, state
+
+        on_store_page = "/checkout" not in curr_url and not (state.is_cart_visible or upsell)
+        empty_cart_reads = await count_empty_cart_read(
+            page, result, step_idx, cart_snapshot if on_store_page else None, empty_cart_reads
+        )
 
         if state.blocked_reason or step_type == "login_wall":
             await login_or_block(state.blocked_reason or "Mandatory sign-in screen before checkout.")

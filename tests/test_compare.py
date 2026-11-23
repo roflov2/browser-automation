@@ -218,6 +218,33 @@ def test_ubereats_null_summary_and_reason(saved_runs):
     assert {**report, "checkout_summary": expected["checkout_summary"]} == expected
 
 
+@pytest.mark.parametrize(
+    "model",
+    [uber_models.CartAndCheckoutState, coffee.CheckoutDetails, virgin.CheckoutDetails],
+    ids=lambda m: m.__module__,
+)
+def test_tax_included_may_be_null(model):
+    """A screen that says nothing about GST/tax is read as tax_included=None, not rejected (it used to end the run)."""
+    schema = model.model_json_schema()
+    assert "tax_included" not in schema["required"]
+    assert {"type": "null"} in schema["properties"]["tax_included"]["anyOf"]
+
+
+def test_ubereats_null_tax_included(saved_runs):
+    (run,) = runs_for(saved_runs, "ubereats")
+    c = run["checkout"]
+    state = uber_state({**c, "tax_included": None}, checkout_page=True, subtotal=c["subtotal"])
+    assert state.tax_included is None
+    fields = {k: v for k, v in state.model_dump().items() if k != "tax_included"}
+    assert uber_models.CartAndCheckoutState(**fields).tax_included is None  # left out entirely
+
+    def result():
+        return uber_models.UberResult(site="https://example.test", out_dir=Path(), items=run["items"], **run["result"])
+
+    report = uber_pricing.compare_prices(result(), None, state)
+    assert report["tax_included"] is None
+
+
 def coffee_inputs(run: dict, **checkout_overrides):
     c = {**run["checkout"], **checkout_overrides}
     cart = coffee.CartLines(

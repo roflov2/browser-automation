@@ -236,7 +236,11 @@ class CheckoutDetails(BaseModel):
         description="Card/payment-method fees advertised on the page, whether or not applied to the total yet"
     )
     tax_amount: str | None = Field(description="Taxes/airport charges if itemised")
-    tax_included: bool = Field(description="True if taxes and charges are included in the fare shown")
+    tax_included: bool | None = Field(
+        default=None,
+        description="True if taxes and charges are included in the fare shown; False if they are added as a "
+        "separate line; null if not stated",
+    )
     total: str | None = Field(description="Total amount due as displayed")
     currency: str | None = Field(description="Currency code if shown, e.g. 'AUD'")
     summary: str

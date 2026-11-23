@@ -142,7 +142,11 @@ class CheckoutDetails(BaseModel):
         description="Any other added charges that are NOT tax and NOT shipping, e.g. service fee, handling fee, card surcharge"
     )
     tax_amount: str | None
-    tax_included: bool = Field(description="True if tax is included in item prices (e.g. 'Including $1.91 in taxes')")
+    tax_included: bool | None = Field(
+        default=None,
+        description="True if tax is included in item prices (e.g. 'Including $1.91 in taxes'); False if tax is "
+        "added as a separate line; null if not stated",
+    )
     total: str | None
     currency: str | None = Field(description="Currency code if shown, e.g. 'AUD'")
     summary: str
