@@ -65,18 +65,13 @@ def test_options_are_stable():
             "pizza",
             "--items",
             "2",
-            "--restaurant-url",
-            "https://r.test",
-            "--skip-direct-site",
             "--local",
         ]
     )
-    assert (uber.address, uber.query, uber.items, uber.restaurant_url, uber.skip_direct_site, uber.local) == (
+    assert (uber.address, uber.query, uber.items, uber.local) == (
         "1 Test St",
         "pizza",
         2,
-        "https://r.test",
-        True,
         True,
     )
     defaults = parser.parse_args(["ubereats", "--products", "3"])

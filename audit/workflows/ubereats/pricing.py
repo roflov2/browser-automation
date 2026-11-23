@@ -1,4 +1,4 @@
-"""Uber Eats price & fee comparison: menu vs checkout, advertised vs charged fees, Uber vs restaurant direct."""
+"""Uber Eats price & fee comparison: menu vs checkout, advertised vs charged fees."""
 
 from __future__ import annotations
 
@@ -19,7 +19,6 @@ from ...core import (
     money_sum,
     parse_amount,
     parse_price,
-    pct_diff,
     pct_of,
     pop_best_line,
     positive,
@@ -135,23 +134,9 @@ def record_checkout_fees(
             })  # fmt: skip
 
 
-def direct_markup(added: list[Item]) -> dict[str, Any]:
-    """Uber Eats menu prices against the restaurant's own, over the items found on both."""
-    matched = [i for i in added if i.get("direct_price") is not None and i.get("shop_price") is not None]
-    direct = money_sum(i["direct_price"] for i in matched)
-    uber = money_sum(i["shop_price"] for i in matched)
-    return {
-        "direct_items_matched": len(matched),
-        "direct_matched_subtotal": direct,
-        "uber_matched_subtotal": uber,
-        "uber_vs_direct_subtotal_diff": diff(uber, direct),
-        "uber_vs_direct_markup_pct": pct_diff(uber, direct),
-    }
-
-
 def drip_reasons(
     result: UberResult, final: CartAndCheckoutState | None, c: Charges, added: list[Item],
-    expected_subtotal: float | None, service_pct: float | None, markup: dict[str, Any], preselected: list[str],
+    expected_subtotal: float | None, service_pct: float | None, preselected: list[str],
 ) -> list[str]:  # fmt: skip
     service_display, small_display, delivery_display = (
         (final.service_fee, final.small_order_fee, final.delivery_fee) if final else (None, None, None)
@@ -166,9 +151,6 @@ def drip_reasons(
         (f"delivery fee higher than advertised ({result.advertised_delivery_fee_display} -> {delivery_display})",
          positive(diff(c.delivery, result.advertised_delivery_fee))),
         ("other non-tax fees added", positive(other_total)),
-        (f"Uber Eats menu prices marked up +{markup['uber_vs_direct_markup_pct']}% "
-         f"(+${markup['uber_vs_direct_subtotal_diff'] or 0:.2f}) vs restaurant direct website",
-         positive(markup["uber_vs_direct_subtotal_diff"])),
         ("optional extras pre-selected: " + ", ".join(preselected), bool(preselected)),
     )  # fmt: skip
     return [reason for reason, hit in checks if hit]
@@ -191,18 +173,14 @@ def compare_prices(
 
     breakdown = fee_breakdown(result, final, c, base)
     record_checkout_fees(result, final, c, service_pct)
-    markup = direct_markup(added)
     extras = summarise_extras(result.extras)
-    reasons = drip_reasons(
-        result, final, c, added, expected_subtotal, service_pct, markup, extras["extras_preselected"]
-    )
+    reasons = drip_reasons(result, final, c, added, expected_subtotal, service_pct, extras["extras_preselected"])
 
     def shown(attr: str) -> Any:
         return getattr(final, attr) if final else None
 
     return {
         "store_name": result.store_name,
-        "direct_website_url": result.direct_website_url,
         "items_added": len(added),
         "expected_subtotal": expected_subtotal,
         "cart_subtotal_display": cart.subtotal if cart else None,
@@ -225,7 +203,6 @@ def compare_prices(
         "small_order_fee": c.small_order,
         "other_fees": fees,
         "other_fees_total": fees_total,
-        **markup,
         "fee_breakdown": breakdown,
         **extras,
         "tax_amount_display": shown("tax_amount"),
@@ -245,7 +222,7 @@ def compare_prices(
 
 
 def print_audit_tables(result: UberResult) -> None:
-    """Log the fee breakdown and the Uber-vs-direct price table of a finished run."""
+    """Log the fee breakdown of a finished run."""
     c = result.comparison
     log.info("\n  --- Extra Fees Breakdown (Uber Eats) ---")
     for row in c["fee_breakdown"]:
@@ -254,18 +231,8 @@ def print_audit_tables(result: UberResult) -> None:
             f"    {row['label']:<34} | Adv: {row['advertised_display']!s:<24} | Checkout: {row['checkout_display']}{pct_str}"
         )
 
-    log.info("\n  --- Menu Item Unit Price Comparison (Uber Eats vs Restaurant Direct) ---")
-    for item in result.added:
-        uber_p = item.get("shop_price_display") or item.get("selected_price_display")
-        delta, pct = item.get("uber_vs_direct_diff"), item.get("uber_vs_direct_markup_pct")
-        markup = f"{delta:+.2f} ({pct:+}%)" if delta is not None else "n/a"
-        log.info(
-            f"    {item['name']:<34} | Uber Eats: {uber_p!s:<10} "
-            f"| Direct: {item.get('direct_price_display') or 'not found':<10} | Diff: {markup}"
-        )
-
     log.info(
         f"\n  Summary: Uber Subtotal={c['expected_subtotal']} | Checkout Subtotal={c['checkout_subtotal_display']} "
         f"| Delivery={c['shipping']} | Service/Other Fees={c['other_fees_total']} | Total={c['checkout_total_display']}"
     )
-    log.info(f"  Drip / Markup Detected: {drip_verdict(c)}")
+    log.info(f"  Drip Detected: {drip_verdict(c)}")

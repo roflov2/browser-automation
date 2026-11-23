@@ -140,7 +140,7 @@ def test_freeze_is_per_host_and_pushed_to_the_page():
     guard, page = Guard(), FakePage("https://shop.test/checkouts/cn/abc")
     asyncio.run(guard.freeze(page))
     assert guard.mode_for("https://shop.test/anything") is Mode.FROZEN
-    assert guard.mode_for("https://restaurant.test/menu") is Mode.NORMAL  # the direct-site step may still run
+    assert guard.mode_for("https://restaurant.test/menu") is Mode.NORMAL  # other hosts are unaffected
     assert '"frozen": ["shop.test"]' in page.scripts[-1]
     asyncio.run(guard.restrict(page))
     assert guard.mode_for("https://shop.test/") is Mode.FROZEN  # restrict never loosens a freeze
