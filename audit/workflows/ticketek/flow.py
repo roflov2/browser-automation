@@ -201,6 +201,65 @@ JS_SWITCH_BEST_AVAILABLE = r"""() => {
 }"""
 
 
+# The event page's date dropdown ("---- Select date ----"): a <select> whose options are performance dates. Choose
+# the option sharing the most words with the session's date (the first date if none share any), unless the
+# wanted date is already chosen. Returns {label, changed} for the chosen date, or null when there is no such dropdown.
+JS_CHOOSE_DATE = r"""wanted => {
+    const DATE = /\b(mon|tue|wed|thu|fri|sat|sun)[a-z]*\b.*\d|\d{1,2}(st|nd|rd|th)?\s+(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)|\d{1,2}[\/.-]\d{1,2}[\/.-]\d{2,4}/i;
+    const words = s => (s || '').toLowerCase().replace(/(\d)\s*(am|pm)\b/g, '$1$2').split(/[^a-z0-9:]+/)
+        .map(w => w.replace(/^0+(\d)/, '$1')).filter(Boolean);
+    const want = new Set(words(wanted));
+    for (const sel of document.querySelectorAll('select')) {
+        if (!vis(sel, 40, 16) || sel.disabled) continue;
+        const dates = Array.from(sel.options).filter(o => !o.disabled && o.value !== '' && DATE.test(clean(o.text)));
+        if (!dates.length) continue;
+        const score = o => words(o.text).filter(w => want.has(w)).length;
+        const best = dates.reduce((a, b) => (score(b) > score(a) ? b : a), dates[0]);
+        const current = sel.options[sel.selectedIndex];
+        if (current && current === best) return { label: clean(current.text), changed: false };
+        if (!guardAllows(sel) || !safeSelect(sel, best.value)) return null;
+        return { label: clean(best.text), changed: true };
+    }
+    return null;
+}"""
+# The event page's 'Find tickets' button once a date is chosen. Never a link off Ticketek (the resale
+# Fan-to-Fan 'Find tickets' leads to Ticketek Marketplace) and never inside the resale box.
+JS_FIND_TICKETS = r"""host => {
+    const LABEL = /^(find|buy|get) tickets$/i;
+    const RESALE = /fan-to-fan|resale|marketplace/i;
+    const inResale = el => {
+        for (let n = el; n && n !== document.body; n = n.parentElement) {
+            if ((n.innerText || '').length > 600) break;
+            if (RESALE.test(n.innerText || '')) return true;
+        }
+        return false;
+    };
+    for (const b of document.querySelectorAll('button, a, [role="button"], input[type="submit"]')) {
+        const label = clean(txt(b) || b.value || '');
+        if (!LABEL.test(label) || !vis(b, 40, 20) || b.disabled || b.getAttribute('aria-disabled') === 'true') continue;
+        const link = b.closest('a');
+        if (link && link.href && !/^javascript:/i.test(link.href) && new URL(link.href, location.href).hostname !== host) continue;
+        if (inResale(b) || !guardAllows(b)) continue;
+        if (safeClick(b)) return label;
+    }
+    return null;
+}"""
+
+
+async def choose_date(page: Page, session: Session) -> bool:
+    """Choose the session's date in the event page's date dropdown and click 'Find tickets'; True if clicked."""
+    chosen = await js(page, JS_CHOOSE_DATE, session.date)
+    if not chosen:
+        return False
+    if chosen["changed"]:
+        log.info(f"    Chose date '{chosen['label']}'")
+        await settle(page, 1000)
+    clicked = await js(page, JS_FIND_TICKETS, TICKETEK_HOST)
+    if clicked:
+        log.info(f"    Clicked '{clicked}' for {chosen['label']}")
+    return bool(clicked)
+
+
 async def open_session(stagehand: Stagehand, page: Page, session: Session) -> TicketOptions:
     """Click through to the ticket selection page of `session` and read its prices."""
     described = f"the session on {session.date}" + (f" at {session.venue}" if session.venue else "")
@@ -209,6 +268,7 @@ async def open_session(stagehand: Stagehand, page: Page, session: Session) -> Ti
         "(summarise per tier, not per seat on the map), what the prices cover, and anything blocking progress. "
         "Do not interact with the page."
     )
+    date_clicks = 0
     for _ in range(MAX_SELECT_STEPS):
         await dismiss_ticketek_alert(page)
         switched = await js(page, JS_SWITCH_BEST_AVAILABLE)
@@ -222,15 +282,22 @@ async def open_session(stagehand: Stagehand, page: Page, session: Session) -> Ti
         if options.is_ticket_selection and options.options:
             return options
         before_url = await page.url()
+        # Without the model first: a DOM click that changed nothing is left to the model the next time round
+        if date_clicks < 2 and await choose_date(page, session):
+            date_clicks += 1
+            await settle(page, SETTLE_MS)
+            await wait_for_render(page)
+            continue
         try:
             step = await safe_act(
                 stagehand,
                 page,
                 f"Take the single next action to see ticket prices and quantity controls for {described}: if an "
                 "informational alert popup with an 'OK' button is covering the page, click 'OK'; if a "
-                "'Find Best available' or 'Best available' tab/button is visible on a seat map, click it; otherwise "
+                "'Find Best available' or 'Best available' tab/button is visible on a seat map, click it; if a date dropdown "
+                f"('Select date') is shown and '{session.date}' is not yet chosen in it, choose that date; otherwise "
                 "click the session's 'Find tickets', 'Buy tickets' or 'Get tickets' button (expand the session list "
-                "or choose the date first if needed). Do not choose resale tickets.",
+                "first if needed). Do not choose resale tickets.",
             )
             log.info(f"    Session: {step.description}")
             if not step.success and options.options:

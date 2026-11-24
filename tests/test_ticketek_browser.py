@@ -93,3 +93,55 @@ def test_each_plus_is_one_real_mouse_click_after_the_page_has_caught_up(seen):
 def test_a_real_mouse_click_is_vetted_first(seen):
     for got in seen.values():
         assert got["afterpay_refused"] and "afterpay" not in got["clicks"]
+
+
+async def pick_dates(chrome: str, port: int) -> dict:
+    from stagehand import Stagehand, local_browser
+
+    from audit.workflows.ticketek.flow import choose_date
+    from audit.workflows.ticketek.models import Session
+
+    seen: dict = {}
+    browser = await local_browser.launch(headless=True, executable_path=chrome, args=launch_args())
+    stagehand = await Stagehand.create(browser=browser)
+    try:
+        page = (await browser.context.pages())[0]
+        await safety.install(browser.context, page)
+        with safety.active_guard():
+            for wanted in ["Wed 02 Dec 2026, 7:00 pm", "Sat 14 Mar 2027"]:
+                await page.goto(f"http://127.0.0.1:{port}/ticketek-event.html")
+                session = Session(date=wanted, venue=None, status="on_sale", from_price=None)
+                seen[wanted] = {
+                    "clicked": await choose_date(page, session),
+                    "again": await choose_date(page, session),  # already chosen: the dropdown is left alone
+                    "chosen": await js(page, "() => window.chosen", default=[]),
+                    "found": await js(page, "() => window.found"),
+                    "resale": await js(page, "() => window.resale"),
+                }
+    finally:
+        await stagehand.close()
+        await browser.close()
+    return seen
+
+
+@pytest.fixture(scope="module")
+def dates() -> dict:
+    chrome = find_chrome()
+    if not chrome:
+        pytest.skip("no Chrome/Chromium found")
+    with serve(FIXTURE) as port:
+        return asyncio.run(pick_dates(chrome, port))
+
+
+def test_the_session_date_is_chosen_from_the_dropdown_and_find_tickets_clicked(dates):
+    got = dates["Wed 02 Dec 2026, 7:00 pm"]
+    assert got["clicked"] and got["again"]
+    assert got["chosen"] == ["s2"]
+    assert got["found"] == "s2"
+    assert got["resale"] is None
+
+
+def test_an_unmatched_date_falls_back_to_the_first_date(dates):
+    got = dates["Sat 14 Mar 2027"]
+    assert got["clicked"] and got["chosen"] == ["s1"] and got["found"] == "s1"
+    assert got["resale"] is None
