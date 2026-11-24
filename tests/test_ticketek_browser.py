@@ -6,7 +6,13 @@ from pathlib import Path
 import pytest
 
 from audit.page import js
-from audit.workflows.ticketek.flow import JS_CONTINUE_SELECTION, read_quantity, set_quantity
+from audit.workflows.ticketek.flow import (
+    JS_CONTINUE_SELECTION,
+    acknowledge_view_notice,
+    continue_checkout,
+    read_quantity,
+    set_quantity,
+)
 
 from .browser_support import find_chrome, launch_args, serve
 
@@ -137,3 +143,35 @@ def test_the_dropdown_dates_are_listed_with_the_one_chosen(dates):
 def test_the_not_enough_tickets_message_is_read_only_when_shown(dates):
     assert dates["Wed 02 Dec 2026, 7:00 pm"]["not_enough"] is None
     assert dates["sold_out"]["not_enough"] == ("There aren't enough tickets to meet your request right now.")
+
+
+async def restricted_view(chrome: str, port: int) -> dict:
+    from stagehand import Stagehand, local_browser
+
+    browser = await local_browser.launch(headless=True, executable_path=chrome, args=launch_args())
+    stagehand = await Stagehand.create(browser=browser)
+    try:
+        page = (await browser.context.pages())[0]
+        await page.goto(f"http://127.0.0.1:{port}/ticketek-restricted-view.html")
+        before = await continue_checkout(page)  # 'Go to checkout' is disabled until the box is ticked
+        ticked = await acknowledge_view_notice(page)
+        again = await acknowledge_view_notice(page)  # already ticked: left alone
+        after = await continue_checkout(page)
+        return {"before": before, "ticked": ticked, "again": again, "after": after,
+                "clicks": await js(page, "() => window.clicks", default=[])}  # fmt: skip
+    finally:
+        await stagehand.close()
+        await browser.close()
+
+
+def test_the_restricted_view_notice_is_ticked_and_checkout_continues():
+    chrome = find_chrome()
+    if not chrome:
+        pytest.skip("no Chrome/Chromium found")
+    with serve(FIXTURE) as port:
+        got = asyncio.run(restricted_view(chrome, port))
+    assert got["before"] is None
+    assert len(got["ticked"]) == 1 and "restricted view" in got["ticked"][0]
+    assert got["again"] == []
+    assert got["after"] == "Go to checkout"
+    assert got["clicks"] == ["ack:true", "go"]  # never the refund protection box

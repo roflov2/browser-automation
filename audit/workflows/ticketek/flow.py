@@ -505,6 +505,53 @@ JS_STEP_QUANTITY = r"""arg => {
     }
     return !!s.plus && enabled(s.plus) && clickEl(s.plus);
 }"""
+# Tick an unticked "I acknowledge that one or more of my seats has a restricted view" box: Ticketek keeps the
+# forward button ('Go to checkout') disabled until it is ticked. Only seat-view acknowledgements; never a refund
+# protection, insurance, marketing or newsletter box.
+VIEW_NOTICE = re.compile(r"(restricted|obstructed|limited|partial|side)[\s-]+view", re.IGNORECASE)
+JS_ACKNOWLEDGE_VIEW = r"""pattern => {
+    const NOTICE = new RegExp(pattern, 'i');
+    const NEVER = /refund|protect|insurance|newsletter|marketing|subscribe|offers|promotion/i;
+    const checked = el => el.checked === true || el.getAttribute('aria-checked') === 'true';
+    const context = el => {
+        const own = [...Array.from(el.labels || []).map(l => txt(l)), el.getAttribute('aria-label') || ''].join(' ');
+        if (NOTICE.test(own)) return own;
+        for (let n = el.parentElement; n && n !== document.body; n = n.parentElement) {
+            const text = clean(n.innerText || '');
+            if (text.length > 400) break;
+            if (NOTICE.test(text)) return text;
+        }
+        return own;
+    };
+    const ticked = [];
+    for (const box of document.querySelectorAll('input[type="checkbox"], [role="checkbox"]')) {
+        if (checked(box) || box.disabled) continue;
+        const text = clean(context(box));
+        if (!NOTICE.test(text) || NEVER.test(text)) continue;
+        clickEl(box);
+        if (!checked(box)) {
+            const label = (box.labels && box.labels[0]) || box.closest('label');
+            if (label) clickEl(label);
+        }
+        if (checked(box)) ticked.push(text.slice(0, 120));
+    }
+    return ticked.length ? ticked : null;
+}"""
+
+
+async def acknowledge_view_notice(page: Page, steps: list[str] | None = None) -> list[str]:
+    """Tick any restricted-view acknowledgement on the page; what was ticked (empty if nothing), also noted in
+    `steps` when given."""
+    ticked = await js(page, JS_ACKNOWLEDGE_VIEW, VIEW_NOTICE.pattern) or []
+    for text in ticked:
+        log.info(f"    Ticked the acknowledgement: {text}")
+        if steps is not None:
+            steps.append(f"ticked: {text}")
+    if ticked:
+        await settle(page, 500)
+    return list(ticked)
+
+
 # Click the button that reserves the chosen tickets. Only real buttons (never links, which is how the resale
 # 'Find tickets' leaves the site), never inside the Fan-to-Fan / resale / Marketplace box, never external links.
 JS_CONTINUE_SELECTION = r"""() => {
@@ -662,6 +709,7 @@ async def hold_tickets(stagehand: Stagehand, page: Page, option: PriceOption, qu
             log.info(f"    Tickets: quantity {stepper['before']} -> {stepper['after']} on '{stepper['row']}'")
             steps.append(f"set quantity {stepper['before']} -> {stepper['after']} on '{stepper['row']}'")
             await settle(page, 1000)
+            await acknowledge_view_notice(page, steps)
             clicked = await js(page, JS_CONTINUE_SELECTION)
             if clicked:
                 log.info(f"    Tickets: clicked '{clicked}'")
@@ -717,6 +765,7 @@ async def hold_tickets(stagehand: Stagehand, page: Page, option: PriceOption, qu
 # ---------------------------------------------------------------------------
 # Said on every page of the walk: the backwards / basket-emptying controls that sit next to the forward button.
 NEVER_BACK = (
+    "If a checkbox asks you to acknowledge that a seat has a restricted view, tick it. "
     "Never click the numbered progress steps, 'Back', 'Back to event details', 'Change', 'Read more', a "
     "trash/delete/remove icon, Qantas Points, Afterpay, or anything that edits or empties the basket."
 )
@@ -764,8 +813,8 @@ SELECTION = set(SELECTION_PAGES)
 # never a disabled one. The most specific label wins: 'Go to payment' before a generic 'Next'.
 JS_CONTINUE_CHECKOUT = r"""() => {
     const ORDER = ['go to payment', 'proceed to payment', 'continue to payment', 'continue to checkout',
-                   'checkout', 'continue', 'next'];
-    const LABEL = /^(go to payment|proceed to payment|continue( to payment| to checkout)?|checkout|next)$/i;
+                   'go to checkout', 'checkout', 'continue', 'next'];
+    const LABEL = /^(go to payment|proceed to payment|continue( to payment| to checkout)?|go to checkout|checkout|next)$/i;
     const numbered = list => {
         const items = Array.from(list.children).filter(li => li.tagName === 'LI');
         return items.length > 1 && items.every(li => /^\d\b/.test(clean(txt(li))));
@@ -858,6 +907,15 @@ async def continue_checkout(page: Page) -> str | None:
 async def take_step(stagehand: Stagehand, page: Page, state: StepState, page_type: str, steps: list[dict]) -> str:
     """Move one page forward: the forward button by script on checkout pages, the model otherwise. Returns what
     was done, for the step log."""
+    ticked = "; ".join(f"ticked: {text}" for text in await acknowledge_view_notice(page))
+    done = await take_forward_step(stagehand, page, state, page_type, steps)
+    return f"{ticked}; {done}" if ticked else done
+
+
+async def take_forward_step(
+    stagehand: Stagehand, page: Page, state: StepState, page_type: str, steps: list[dict]
+) -> str:
+    """take_step's forward move, once any restricted-view acknowledgement has been ticked."""
     if page_type in JS_CONTINUE_PAGES and not state.validation_errors:
         if page_type == "extras" and len(steps) >= 2:
             before, now = steps[-2].get("total"), steps[-1].get("total")
