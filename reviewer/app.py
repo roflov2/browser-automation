@@ -18,6 +18,7 @@ if str(REPO) not in sys.path:
 
 import streamlit as st  # noqa: E402
 
+from reviewer import theme  # noqa: E402
 from reviewer.views import common, history, overview, run_detail  # noqa: E402
 
 
@@ -46,6 +47,8 @@ def main() -> None:
         if not output.is_dir():
             st.error("That folder does not exist. Pass `-- --output <folder>`.")
             st.stop()
+    theme.apply()
+    theme.app_bar(page.title)
     page.run()
 
 

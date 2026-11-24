@@ -154,6 +154,8 @@ The review form (sidebar of a run) records a verdict (*Drip confirmed*, *No drip
 
 The app serves on `localhost` only (`.streamlit/config.toml`), since runs can hold addresses and account details.
 
+It is styled in Material Design with the NASC / Scamwatch palette: colours, font and radii in `.streamlit/config.toml`, and the app bar, elevated cards, contained buttons, tabs and chips in `reviewer/theme.py`. Alert orange, emerald green and progress cyan fall below 4.5:1 as text on white, so they are used for fills and indicators, with darker shades of the same hues for text.
+
 ## Code Layout
 
 ```

@@ -17,7 +17,8 @@ PAGES: dict[str, Any] = {}
 # Only the characters that change how text renders; escaping more shows stray backslashes in URLs.
 _MD_SPECIAL = re.compile(r"([\\`*_\[\]<>#|~$])")
 
-DRIP_COLOURS = {True: "red", False: "green", None: "gray"}
+# Drip is an alert (Safety Alert Orange), no drip a positive confirmation (Emerald Green).
+DRIP_COLOURS = {True: "orange", False: "green", None: "gray"}
 
 
 def output_dir() -> Path:

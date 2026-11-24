@@ -48,7 +48,7 @@ def _filters(frame: pd.DataFrame) -> pd.DataFrame:
 
 
 def render() -> None:
-    st.title("Evidence Reviewer")
+    st.title("Overview")
     st.caption("Drip-pricing audits: what the automation found, the evidence behind it, and the analyst's verdict.")
     all_runs = common.runs()
     if all_runs.empty:
