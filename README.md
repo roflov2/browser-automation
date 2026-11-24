@@ -136,6 +136,24 @@ python main.py ticketek https://premier.ticketek.com.au/shows/show.aspx?sh=... -
 
 Opens the event (by search, or from the URL), records the advertised "from" price, what the prices are said to include, and every session, then picks a session (`--session` matches words in its date and venue). On the ticket page it records every area and price type, holds the cheapest standard adult ticket on "Best available" (not child, concession, member or package tickets). If Ticketek answers "There aren't enough tickets to meet your request right now" (or the session has no tickets left), the run first retries the same session with fewer tickets (half each time, down to 1: 8 → 4 → 2 → 1), as the message suggests. If even one ticket cannot be held, it goes back to the event and tries another date, time or venue for the full quantity again (those matching `--session` first, then any other listed on the page or in its date dropdown), up to 4 sessions and 8 tries in all. Every try given up on is recorded in `sessions_tried` (date, venue, tickets, reason) in `price_comparison.json`, with a screenshot of each message, next to `tickets_requested` and the `tickets` actually held. It then walks cart → delivery → extras to the payment page, choosing free delivery and declining refund protection, parking and every other extra. A sign-in page pauses a headed run so you can sign in; a headless run without a saved login is recorded as `blocked`. An on-sale queue is waited out for up to 15 minutes. Drip pricing is flagged for booking/service/handling fees, a paid delivery method, pre-selected extras, card surcharges, a ticket price that rises in the cart, and an advertised "from" price lower than any ticket actually offered for the session.
 
+## Evidence Reviewer
+
+A small Streamlit app over `output/` for checking what an audit found against its evidence, and recording a verdict per run.
+
+```bash
+pip install -e ".[review]"
+streamlit run reviewer/app.py                          # reads ./output
+streamlit run reviewer/app.py -- --output /path/to/output
+```
+
+- **Overview**: headline numbers, the latest run of each target and every run, with filters and a CSV export of runs and reviews.
+- **Run detail**: the automation's verdict and reasons, then the evidence: each step's screenshot beside its price lines and running total, fees and extras (paid, optional, pre-selected ones highlighted), item tables, every model extraction (searchable), the session log, and the raw files.
+- **Target history**: one store, route or event over time (advertised price, checkout total and fees per run), and two runs compared side by side, screenshots paired step by step.
+
+The review form (sidebar of a run) records a verdict (*Drip confirmed*, *No drip* or *Inconclusive*), which of the automation's reasons the evidence supports, and notes. It is saved as `review.json` in the run's folder; nothing else is ever written. The analyst's verdict overrides `drip_detected` everywhere the app shows a final result, and the automated value stays beside it, marked *Overridden* when they differ (*Inconclusive* makes the final result unknown).
+
+The app serves on `localhost` only (`.streamlit/config.toml`), since runs can hold addresses and account details.
+
 ## Code Layout
 
 ```
@@ -159,6 +177,7 @@ audit/
         ├── store.py        # Uber Eats: address, store, menu items, cart, checkout
         └── pricing.py      # fee comparison
     └── ticketek/           # same split: models.py, flow.py (event → tickets → payment), pricing.py
+reviewer/                   # Evidence Reviewer (Streamlit): app.py, loader.py, reviews.py, views/
 ```
 
 A workflow holds only what is particular to its site: CLI options, prompts, schemas, navigation and its price comparison. The runner and shared modules know nothing about any site.

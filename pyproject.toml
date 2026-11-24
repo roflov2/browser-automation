@@ -20,6 +20,8 @@ dependencies = [
 dev = ["pytest==9.2.0", "ruff==0.17.5", "mypy==2.4.1"]
 # Azure OpenAI with Microsoft Entra ID sign-in (AZURE_OPENAI_* settings, audit/azure.py)
 azure = ["openai==3.55.1", "azure-identity==1.27.0"]
+# Evidence reviewer web app (streamlit run reviewer/app.py)
+review = ["streamlit==1.67.0", "pandas==3.0.5"]
 
 [project.scripts]
 drip-audit = "audit.cli:main"
@@ -28,7 +30,7 @@ drip-audit = "audit.cli:main"
 py-modules = ["main"]
 
 [tool.setuptools.packages.find]
-include = ["audit*"]
+include = ["audit*", "reviewer*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

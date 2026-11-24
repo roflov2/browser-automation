@@ -1,0 +1,10 @@
+# Evidence Reviewer (reviewer/app.py). Runs can hold addresses and account details: serve on this machine only.
+[server]
+address = "localhost"
+headless = true
+
+[browser]
+gatherUsageStats = false
+
+[theme]
+primaryColor = "#3b5bdb"
