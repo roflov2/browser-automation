@@ -165,6 +165,36 @@ def test_still_selecting_only_on_the_first_step_or_twice_in_a_row():
     assert not flow.still_selecting("cart", 1, None)
 
 
+def test_went_backwards_from_a_page_past_the_hold_to_ticket_selection():
+    assert flow.went_backwards("extras", "ticket_selection")
+    assert flow.went_backwards("extras", "seat_map")
+    assert flow.went_backwards("login_prompt", "event")
+    assert not flow.went_backwards("review", "extras")
+    assert not flow.went_backwards(None, "ticket_selection")  # step 1: the still_selecting rule covers it
+    assert flow.still_selecting("ticket_selection", 1, None)
+
+
+def test_extras_instruction_names_the_forward_button_and_every_instruction_forbids_going_back():
+    assert "Go to payment" in flow.NEXT_ACTIONS["extras"]
+    assert "Go to payment" in flow.NEXT_ACTIONS["review"]
+    for instruction in [*flow.NEXT_ACTIONS.values(), flow.DEFAULT_NEXT_ACTION, flow.DELIVERY_CHOICE]:
+        assert flow.NEVER_BACK in instruction
+
+
+def test_the_guard_allows_go_to_payment_but_not_paying():
+    from audit.safety import click_verdict
+
+    assert click_verdict("Go to payment") is None
+    assert click_verdict("Pay now") is not None
+
+
+def test_note_action_keeps_every_action_taken_on_a_step():
+    step = {"step": 2}
+    flow.note_action(step, "js: Go to payment")
+    flow.note_action(step, "clicked 'Next' [xpath=/a]")
+    assert step["action"] == "js: Go to payment | then: clicked 'Next' [xpath=/a]"
+
+
 # --- price comparison --------------------------------------------------------------------------------------
 def held(price="$89.90", quantity=2):
     item = new_item("C Reserve - Adult", price, quantity=quantity)
@@ -283,8 +313,10 @@ def step(**fields):
 def walk(monkeypatch):
     """walk_to_payment over a scripted sequence of steps; returns (run, reached, actions)."""
 
-    def go(states, tmp_path, interactive=False):
+    def go(states, tmp_path, interactive=False, continues=()):
+        """`continues`: what each JS forward click returns in turn (a label, or None: no button found)."""
         states = iter(states)
+        continues = iter(continues)
         actions: list[str] = []
 
         class Stagehand:
@@ -297,7 +329,14 @@ def walk(monkeypatch):
 
         async def fake_safe_act(stagehand, page, instruction, **options):
             actions.append(instruction)
-            return SimpleNamespace(description="clicked continue", success=True)
+            return SimpleNamespace(description="clicked continue", success=True, selector="xpath=/a")
+
+        async def fake_js(page, fn, arg=None, **options):
+            assert fn is flow.JS_CONTINUE_CHECKOUT
+            label = next(continues, None)
+            if label:
+                actions.append(f"js: {label}")
+            return label
 
         async def nothing(*args, **kwargs):
             return None
@@ -317,6 +356,7 @@ def walk(monkeypatch):
                 frozen.append(True)
 
         monkeypatch.setattr(flow, "safe_act", fake_safe_act)
+        monkeypatch.setattr(flow, "js", fake_js)
         monkeypatch.setattr(flow, "fingerprint", fake_fingerprint)
         monkeypatch.setattr(flow, "pause_for_login", no_pause)
         monkeypatch.setattr(flow, "current_guard", Guard)
@@ -341,7 +381,9 @@ def test_walk_records_fees_and_freezes_on_payment(walk, tmp_path):
     )
     assert reached is True and frozen == [True]
     assert [s["step_type"] for s in run.steps] == ["cart", "delivery", "payment"]
-    assert len(actions) == 2 and "free delivery method" in actions[1]
+    # no forward button found by script: the delivery choice, then the model's own continue
+    assert len(actions) == 3 and "Do not click any continue" in actions[1] and "Then click" in actions[2]
+    assert run.steps[0]["action"] == "clicked continue [xpath=/a]"
     assert {e["label"]: e["selected_by_default"] for e in run.extras} == {
         "Mobile ticket": False,
         "Refund protection": True,
@@ -377,5 +419,22 @@ def test_walk_refuses_to_act_on_the_ticket_selection_page(walk, tmp_path):
     run, reached, actions, _ = walk([selecting], tmp_path)
     assert reached is False and actions == []
     assert run.message == "Still on the ticket selection page: tickets were not held"
-    _, reached, actions, _ = walk([step(), step(page_type="delivery"), selecting, step(is_payment_page=True)], tmp_path)
-    assert reached is True and "below the ticket quantities" in actions[2]
+
+
+def test_walk_clicks_go_to_payment_on_the_extras_page_without_the_model(walk, tmp_path):
+    review = step(page_type="review", heading="Review", total="$300.20")
+    extras = step(page_type="extras", heading="Add to order", total="$300.20")
+    run, reached, actions, _ = walk(
+        [review, extras, step(is_payment_page=True)], tmp_path, continues=["Continue", "Go to payment"]
+    )
+    assert reached is True and actions == ["js: Continue", "js: Go to payment"]
+    assert [s.get("action") for s in run.steps] == ["js: Continue", "js: Go to payment", None]
+    assert "extra_added" not in run.steps[1]
+
+
+def test_walk_stops_and_names_the_action_that_sent_it_back_to_ticket_selection(walk, tmp_path):
+    extras = step(page_type="extras", heading="Add to order", total="$300.20")
+    selecting = step(page_type="ticket_selection", heading="Choose your tickets")
+    run, reached, actions, _ = walk([extras, selecting, step(is_payment_page=True)], tmp_path)
+    assert reached is False and len(actions) == 1  # nothing is clicked on the selection page
+    assert run.message == "Sent back to ticket selection from 'Add to order' by: clicked continue [xpath=/a]"
