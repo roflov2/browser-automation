@@ -1,0 +1,29 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>J. COLE tickets</title></head>
+<body>
+<h1>J. COLE tickets</h1>
+<p>Venue: Afterpay Arena, formerly known as Qudos Bank Arena, Sydney Olympic Park, NSW</p>
+<label>Date:
+  <select id="date" style="width:300px;height:30px">
+    <option value="">---- Select date ----</option>
+    <option value="s1">Tue 01 Dec 2026 7:00PM</option>
+    <option value="s2">Wed 02 Dec 2026 7:00PM</option>
+  </select>
+</label>
+<div id="find"></div>
+<div style="width:400px">
+  <p>Verified Fan-to-Fan resale on Ticketek Marketplace</p>
+  <a href="https://marketplace.ticketek.com.au/x" onclick="window.resale = 1; return false"
+     style="display:inline-block;width:120px;height:30px">Find tickets</a>
+</div>
+<script>
+  window.chosen = [];
+  document.getElementById('date').addEventListener('change', e => {
+    window.chosen.push(e.target.value);
+    document.getElementById('find').innerHTML = e.target.value
+      ? '<button id="go" style="width:200px;height:40px">Find Tickets</button>' : '';
+    const go = document.getElementById('go');
+    if (go) go.addEventListener('click', () => { window.found = e.target.value; });
+  });
+</script>
+</body></html>

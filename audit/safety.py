@@ -314,6 +314,7 @@ const safeSelect = (el, value) => {
     const why = auditElementVerdict(el) || (option ? auditClickVerdict([option.text], auditMode()) : null);
     if (why) { auditRefused.push({ why, kind: 'safeSelect' }); return false; }
     el.value = value;
+    el.dispatchEvent(new Event('input', { bubbles: true }));
     el.dispatchEvent(new Event('change', { bubbles: true }));
     return true;
 };
