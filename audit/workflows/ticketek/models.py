@@ -1,6 +1,6 @@
 """Extraction schemas for Ticketek pages, and the run result."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from pydantic import BaseModel, Field
 
@@ -200,3 +200,5 @@ class TicketekResult(SiteResult):
     advertised_from_price_display: str | None = None
     advertised_price_note: str | None = None
     cheapest_offered: float | None = None  # cheapest available ticket of any type on the ticket selection page
+    # Sessions given up on before the one audited, each with why: {date, venue, reason}
+    sessions_tried: list[dict] = field(default_factory=list)

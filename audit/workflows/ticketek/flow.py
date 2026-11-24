@@ -188,6 +188,78 @@ def choose_session(sessions: list[Session], hint: str | None) -> Session | None:
     return bookable[0] if bookable else None
 
 
+def date_words(text: str | None) -> set[str]:
+    """The words of a date as JS_CHOOSE_DATE compares them: '6:30 PM' and '06:30pm' read the same."""
+    text = re.sub(r"(\d)\s*(am|pm)\b", r"\1\2", (text or "").lower())
+    return {re.sub(r"^0+(\d)", r"\1", w) for w in re.split(r"[^a-z0-9:]+", text) if w}
+
+
+def same_session(a: Session, b: Session) -> bool:
+    """True when two readings name the same performance: one date's words all in the other's, same venue."""
+    wa, wb = date_words(a.date), date_words(b.date)
+    if not wa or not wb or not (wa <= wb or wb <= wa):
+        return False
+    return not (a.venue and b.venue) or date_words(a.venue) == date_words(b.venue)
+
+
+def other_sessions(sessions: list[Session], tried: list[Session], hint: str | None) -> list[Session]:
+    """The sessions still worth trying after `tried` had no tickets: bookable ones (or ones with no status read),
+    those matching `hint` first, then every other date and venue."""
+    candidates = [s for s in sessions if s.status in BOOKABLE or s.status is None]
+    candidates = [s for s in candidates if not any(same_session(s, t) for t in tried)]
+    if hint:
+        words = hint.lower().split()
+        candidates.sort(key=lambda s: not all(w in f"{s.date} {s.venue or ''}".lower() for w in words))
+    return candidates
+
+
+def fewer_tickets(quantity: int) -> int:
+    """The quantity to try after `quantity` could not be held: half, rounded up (8 -> 4 -> 2 -> 1, 3 -> 2 -> 1)."""
+    return max(1, (quantity + 1) // 2)
+
+
+# The performance dates offered in the date dropdown of the event or ticket selection page, as Sessions to try
+# when the event page's list was not read (or the chosen one has no tickets left).
+JS_LIST_DATES = r"""() => {
+    const DATE = /\b(mon|tue|wed|thu|fri|sat|sun)[a-z]*\b.*\d|\d{1,2}(st|nd|rd|th)?\s+(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)|\d{1,2}[\/.-]\d{1,2}[\/.-]\d{2,4}/i;
+    for (const sel of document.querySelectorAll('select')) {
+        if (!vis(sel, 40, 16) || sel.disabled) continue;
+        const dates = Array.from(sel.options).filter(o => !o.disabled && o.value !== '' && DATE.test(clean(o.text)));
+        if (!dates.length) continue;
+        const current = sel.options[sel.selectedIndex];
+        return { dates: dates.map(o => clean(o.text)), selected: dates.includes(current) ? clean(current.text) : null };
+    }
+    return { dates: [], selected: null };
+}"""
+
+
+async def dropdown_sessions(page: Page) -> tuple[list[Session], Session | None]:
+    """The dates in the page's date dropdown as Sessions, and the one currently chosen in it (None if none)."""
+    found = await js(page, JS_LIST_DATES, default=None) or {"dates": [], "selected": None}
+    as_session = lambda label: Session(date=label, venue=None, status=None, from_price=None)  # noqa: E731
+    return [as_session(d) for d in found["dates"]], as_session(found["selected"]) if found["selected"] else None
+
+
+# Ticketek's answer when the quantity asked for cannot be held for the session: "There aren't enough tickets to
+# meet your request right now ... all remaining tickets are being transacted by other customers."
+NOT_ENOUGH_TICKETS = re.compile(
+    r"(aren'?t|are not|not) enough tickets|being transacted by other customers",
+    re.IGNORECASE,
+)
+JS_PAGE_TEXT = "() => document.body ? document.body.innerText : ''"
+
+
+async def not_enough_tickets(page: Page) -> str | None:
+    """The sentence of Ticketek's 'not enough tickets' message when the page shows it, else None."""
+    text = await js(page, JS_PAGE_TEXT, default="") or ""
+    found = NOT_ENOUGH_TICKETS.search(text)
+    if not found:
+        return None
+    start = max(text.rfind("\n", 0, found.start()), text.rfind(".", 0, found.start())) + 1
+    end = text.find(".", found.end())
+    return " ".join(text[start : end + 1 if end >= 0 else None].split())
+
+
 JS_SWITCH_BEST_AVAILABLE = r"""() => {
     for (const el of document.querySelectorAll('button, a, [role="tab"], [role="button"]')) {
         if (!vis(el, 50, 20)) continue;
@@ -607,6 +679,13 @@ async def hold_tickets(stagehand: Stagehand, page: Page, option: PriceOption, qu
             await act(hold_instruction(described, option, ticket_type, quantity))
         await settle(page, SETTLE_MS)
 
+        unavailable = await not_enough_tickets(page)
+        if unavailable:
+            log.warning(f"    Tickets: {unavailable}")
+            steps.append(f"not enough tickets: {unavailable}")
+            item["status"], item["unavailable_message"] = "unavailable", unavailable
+            return item
+
         url = await page.url()
         if not on_ticketek(url):
             log.warning(f"    Tickets: left Ticketek for {url}; going back to the session")
@@ -912,6 +991,21 @@ JS_SELECT_VENUE = r"""hint => {
     }
     return null;
 }"""
+
+
+async def return_to_event(page: Page, event_url: str, session: Session) -> None:
+    """Go back to the event page to try `session` instead: its venue, then its date in the date dropdown."""
+    await try_goto(page, event_url)
+    await settle(page, SETTLE_MS)
+    await wait_for_render(page)
+    await dismiss_ticketek_alert(page)
+    if session.venue and (venue := await js(page, JS_SELECT_VENUE, session.venue)):
+        log.info(f"  Selected venue from dropdown: {venue}")
+        await settle(page, SETTLE_MS)
+        await wait_for_render(page)
+    if await choose_date(page, session):
+        await settle(page, SETTLE_MS)
+        await wait_for_render(page)
 
 
 async def read_event(

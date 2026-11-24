@@ -53,6 +53,34 @@ def test_a_session_with_no_status_read_may_still_be_bookable():
     assert no_status.status is None
 
 
+def test_after_a_session_runs_out_every_other_date_and_venue_is_tried_the_one_asked_for_first():
+    sessions = [session("Fri 04 Jun 2027 6:30PM"), session("Sun 06 Jun 2027 4:00PM", "sold_out"),
+                session("Sun 06 Jun 2027 6:30PM", None), session("Sat 05 Jun 2027 6:30PM", venue="Llewellyn Hall, Canberra"),
+                session("Mon 07 Jun 2027 7:00PM", "selling_fast")]  # fmt: skip
+    tried = [sessions[0]]
+    assert [s.date for s in flow.other_sessions(sessions, tried, None)] == [
+        "Sun 06 Jun 2027 6:30PM", "Sat 05 Jun 2027 6:30PM", "Mon 07 Jun 2027 7:00PM"]  # fmt: skip
+    assert flow.other_sessions(sessions, tried, "Canberra")[0].venue == "Llewellyn Hall, Canberra"
+    assert flow.other_sessions(sessions, sessions, None) == []
+
+
+def test_fewer_tickets_halves_down_to_one():
+    seen, quantity = [], 8
+    while quantity > 1:
+        quantity = flow.fewer_tickets(quantity)
+        seen.append(quantity)
+    assert seen == [4, 2, 1]
+    assert [flow.fewer_tickets(n) for n in (3, 2, 1)] == [2, 1, 1]
+
+
+def test_the_same_performance_read_two_ways_is_one_session():
+    dropdown = Session(date="Fri 04 Jun 2027 6:30PM", venue=None, status=None, from_price=None)
+    assert flow.same_session(session("Fri 4 Jun 2027, 6:30 pm"), dropdown)
+    assert not flow.same_session(session("Sun 06 Jun 2027 4:00PM"), session("Sun 06 Jun 2027 6:30PM"))
+    assert not flow.same_session(session("Fri 04 Jun 2027 6:30PM"), session("Fri 04 Jun 2027 6:30PM", venue="Perth"))
+    assert flow.other_sessions([dropdown], [session("Fri 04 Jun 2027 6:30pm")], None) == []
+
+
 def test_choose_option_prefers_the_cheapest_standard_adult_ticket():
     options = [option("Child", "$49.90"), option("Concession", "$59.90"), option("Adult", "$129.90"),
                option("Adult", "$89.90", area="C Reserve"), option("Adult", "$69.90", area="D Reserve", available=False),
@@ -438,3 +466,66 @@ def test_walk_stops_and_names_the_action_that_sent_it_back_to_ticket_selection(w
     run, reached, actions, _ = walk([extras, selecting, step(is_payment_page=True)], tmp_path)
     assert reached is False and len(actions) == 1  # nothing is clicked on the selection page
     assert run.message == "Sent back to ticket selection from 'Add to order' by: clicked continue [xpath=/a]"
+
+
+# --- not enough tickets: fewer tickets, then another session ---------------------------------------------------
+def hold_with(tmp_path, monkeypatch, sessions, held_at, tickets=4, dropdown=None):
+    """Run hold_any_session where `held_at(date, tickets)` says whether a hold works; returns (result, item, tries)."""
+    import audit.workflows.ticketek as ticketek
+
+    tries = []
+
+    async def try_session(self, stagehand, page, result, session, quantity):
+        tries.append((session.date, quantity))
+        item = new_item("A Reserve - Adult", "$89.90", quantity=quantity)
+        if held_at(session.date, quantity):
+            item["status"] = "added"
+            return item, None
+        item["status"], item["unavailable_message"] = "unavailable", "There aren't enough tickets"
+        return item, f"Not enough tickets for {quantity} on {session.date}"
+
+    async def nothing(*args, **kwargs):
+        return None
+
+    async def listed(page):
+        return (dropdown or [], None)
+
+    monkeypatch.setattr(TicketekWorkflow, "try_session", try_session)
+    monkeypatch.setattr(ticketek, "return_to_event", nothing)
+    monkeypatch.setattr(ticketek, "dropdown_sessions", listed)
+    workflow = TicketekWorkflow(argparse.Namespace(tickets=tickets, session=None), Settings())
+    run = TicketekResult(site="s", out_dir=tmp_path, shop_url="https://premier.ticketek.com.au/shows/x")
+    event = SimpleNamespace(sessions=sessions)
+    item = asyncio.run(workflow.hold_any_session(None, None, run, event, sessions[0]))
+    return run, item, tries
+
+
+def test_not_enough_tickets_retries_the_same_session_with_fewer(tmp_path, monkeypatch):
+    sessions = [session("Fri 04 Jun 2027 6:30PM"), session("Sun 06 Jun 2027 4:00PM")]
+    run, item, tries = hold_with(tmp_path, monkeypatch, sessions, lambda date, n: n <= 2)
+    assert tries == [("Fri 04 Jun 2027 6:30PM", 4), ("Fri 04 Jun 2027 6:30PM", 2)]
+    assert item["quantity"] == 2 and run.session == "Fri 04 Jun 2027 6:30PM"
+    assert [t["tickets"] for t in run.sessions_tried] == [4]
+
+
+def test_when_not_even_one_ticket_is_left_another_session_is_tried_for_the_full_quantity(tmp_path, monkeypatch):
+    sessions = [session("Fri 04 Jun 2027 6:30PM"), session("Sun 06 Jun 2027 4:00PM")]
+    run, item, tries = hold_with(tmp_path, monkeypatch, sessions, lambda date, n: date.startswith("Sun"))
+    assert tries == [("Fri 04 Jun 2027 6:30PM", 4), ("Fri 04 Jun 2027 6:30PM", 2), ("Fri 04 Jun 2027 6:30PM", 1),
+                     ("Sun 06 Jun 2027 4:00PM", 4)]  # fmt: skip
+    assert item["quantity"] == 4 and run.session == "Sun 06 Jun 2027 4:00PM"
+
+
+def test_a_dropdown_date_is_tried_and_the_run_gives_up_when_nothing_is_left(tmp_path, monkeypatch):
+    dropdown = [Session(date="Sun 06 Jun 2027 6:30PM", venue=None, status=None, from_price=None)]
+    run, item, tries = hold_with(tmp_path, monkeypatch, [session("Fri 04 Jun 2027 6:30PM")], lambda d, n: False,
+                                 tickets=1, dropdown=dropdown)  # fmt: skip
+    assert tries == [("Fri 04 Jun 2027 6:30PM", 1), ("Sun 06 Jun 2027 6:30PM", 1)]
+    assert item is None and run.status == "no_items_found" and "no other session to try" in run.message
+    assert len(run.items) == 1 and len(run.sessions_tried) == 2
+
+
+def test_the_tries_are_capped(tmp_path, monkeypatch):
+    sessions = [session(f"Day {d} Jun 2027 6:30PM") for d in range(1, 9)]
+    run, item, tries = hold_with(tmp_path, monkeypatch, sessions, lambda d, n: False, tickets=8)
+    assert len(tries) == 8 and item is None and run.status == "no_items_found"
