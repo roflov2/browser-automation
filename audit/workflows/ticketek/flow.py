@@ -112,12 +112,14 @@ async def dismiss_ticketek_alert(page: Page) -> None:
         await settle(page, 1000)
 
 
-async def find_event(
-    stagehand: Stagehand, page: Page, query: str | None, session_hint: str | None = None
-) -> None:
+async def find_event(stagehand: Stagehand, page: Page, query: str | None, session_hint: str | None = None) -> None:
     """From the homepage or a search page, reach the event page of an on-sale event matching `query`."""
     venue_clause = f" at '{session_hint}'" if session_hint else ""
-    wanted = f"an on-sale event matching '{query}'{venue_clause}" if query else "the first on-sale event featured on the page"
+    wanted = (
+        f"an on-sale event matching '{query}'{venue_clause}"
+        if query
+        else "the first on-sale event featured on the page"
+    )
     question = (
         f"We are looking for {wanted}. What kind of page is this, and which matching on-sale events are listed? "
         "Report anything blocking progress."
@@ -568,12 +570,23 @@ async def hold_tickets(stagehand: Stagehand, page: Page, option: PriceOption, qu
 # ---------------------------------------------------------------------------
 # 2. Cart to payment
 # ---------------------------------------------------------------------------
+# Said on every page of the walk: the backwards / basket-emptying controls that sit next to the forward button.
+NEVER_BACK = (
+    "Never click the numbered progress steps, 'Back', 'Back to event details', 'Change', 'Read more', a "
+    "trash/delete/remove icon, Qantas Points, Afterpay, or anything that edits or empties the basket."
+)
+FORWARD = (
+    "click the main forward button ('Go to payment', 'Continue', 'Next'). 'Go to payment' only opens the "
+    "payment/sign-in page and is allowed."
+)
 NEXT_ACTIONS = {
     "cart": "Click the button that continues from the cart towards checkout (e.g. 'Checkout', 'Continue', 'Next').",
+    "review": f"Do not change anything in the order; {FORWARD}",
     "delivery": "Choose the free delivery method (e.g. 'Mobile ticket', 'eTicket', 'Print at home'); if none is free, "
     "choose the cheapest one. Then click the button that continues to the next step.",
-    "extras": "Do not add any extra (no refund protection, insurance, parking, merchandise or donation). If an "
-    "explicit choice is required, choose the decline option (e.g. 'No thanks', 'I don't want ...'), then continue.",
+    "extras": "Do not add any extra (no refund protection, insurance, parking, merchandise or donation). Leave every "
+    "add-on/donation quantity at 0 and never click 'Add to Basket'. There is usually no decline button: just "
+    f"{FORWARD}",
     "upsell_modal": "Decline the offer in the open popup (e.g. 'No thanks', 'Skip', 'Continue without') without adding "
     "anything.",
     "ticket_selection": "Click the 'Next' / 'Continue' button below the ticket quantities; do not change anything "
@@ -581,18 +594,78 @@ NEXT_ACTIONS = {
     "seat_map": "Do not pick seats by hand. Accept the seats offered (e.g. 'Accept seats', 'Continue') or choose "
     "'Best available'.",
 }
+NEXT_ACTIONS = {page_type: f"{instruction} {NEVER_BACK}" for page_type, instruction in NEXT_ACTIONS.items()}
 DEFAULT_NEXT_ACTION = (
     "Do not add any optional extra (no refund protection, insurance, parking, merchandise, upgrades or donations). "
     "If the page requires an explicit choice, choose the decline option. Otherwise click the button that continues "
-    "towards payment (e.g. 'Continue', 'Next', 'Proceed to payment'). Never click a button that pays or completes "
-    "the purchase, and never sign up for anything. Never click Afterpay, or anything in a resale / 'Verified "
-    "Fan-to-Fan' / Ticketek Marketplace box."
+    "towards payment (e.g. 'Continue', 'Next', 'Proceed to payment'). Never click a button that pays, places or "
+    "completes the order ('Pay now', 'Place order', 'Confirm and pay'); 'Go to payment' / 'Proceed to payment' is "
+    "fine. Never sign up for anything. Never click Afterpay, or anything in a resale / 'Verified Fan-to-Fan' / "
+    f"Ticketek Marketplace box. {NEVER_BACK}"
 )
+# Delivery: the model picks the option only; the forward button is then clicked by JS_CONTINUE_CHECKOUT.
+DELIVERY_CHOICE = (
+    "Choose the free delivery method (e.g. 'Mobile ticket', 'eTicket', 'Print at home'); if none is free, choose "
+    f"the cheapest one. Do not click any continue / next / payment button yet. {NEVER_BACK}"
+)
+# Pages past the hold whose forward button is clicked directly rather than by the model.
+JS_CONTINUE_PAGES = ("review", "cart", "extras", "delivery")
+# Pages that are past the hold: landing on a selection page straight after one of these means we were sent back.
+BACKWARD_FROM = {"review", "cart", "delivery", "extras", "upsell_modal", "login_prompt"}
+SELECTION = set(SELECTION_PAGES)
+
+# Click the checkout's forward button ('Go to payment', 'Continue', ...). Never one in the header / progress
+# stepper (its numbered links go back to ticket selection and release the basket), never 'Add to Basket',
+# never a disabled one. The most specific label wins: 'Go to payment' before a generic 'Next'.
+JS_CONTINUE_CHECKOUT = r"""() => {
+    const ORDER = ['go to payment', 'proceed to payment', 'continue to payment', 'continue to checkout',
+                   'checkout', 'continue', 'next'];
+    const LABEL = /^(go to payment|proceed to payment|continue( to payment| to checkout)?|checkout|next)$/i;
+    const numbered = list => {
+        const items = Array.from(list.children).filter(li => li.tagName === 'LI');
+        return items.length > 1 && items.every(li => /^\d\b/.test(clean(txt(li))));
+    };
+    const inStepper = el => !!el.closest('header, nav, ol, [class*="stepper" i], [class*="progress" i], '
+        + '[class*="breadcrumb" i]') || (!!el.closest('ul') && numbered(el.closest('ul')));
+    const disabled = el => el.disabled || el.getAttribute('aria-disabled') === 'true'
+        || /\bdisabled\b/i.test(el.className && el.className.baseVal === undefined ? el.className : '');
+    const found = [];
+    for (const b of document.querySelectorAll('button, a, [role="button"], input[type="submit"]')) {
+        const label = clean(txt(b) || b.value || b.getAttribute('aria-label') || '');
+        if (!LABEL.test(label) || /add to basket/i.test(label) || !vis(b, 40, 20) || disabled(b)) continue;
+        if (inStepper(b) || !guardAllows(b)) continue;
+        found.push({ b, label, rank: ORDER.indexOf(label.toLowerCase()) });
+    }
+    found.sort((x, y) => x.rank - y.rank);
+    for (const { b, label } of found) if (safeClick(b)) return label;
+    return null;
+}"""
 
 
 def still_selecting(page_type: str, step_index: int, last_type: str | None) -> bool:
     """True when the walk is still on a ticket choosing page on its first step, or twice in a row: nothing is held."""
     return page_type in SELECTION_PAGES and (step_index == 1 or last_type in SELECTION_PAGES)
+
+
+def went_backwards(prev_type: str | None, cur_type: str) -> bool:
+    """True when the last action left a page past the hold for a ticket choosing page: the basket was released."""
+    return prev_type in BACKWARD_FROM and cur_type in SELECTION
+
+
+def wrong_turn(
+    page_type: str, index: int, prev_type: str | None, last_type: str | None, prev_heading: str | None, action: str
+) -> str | None:
+    """Why the walk must stop because it is on a ticket choosing page (the message for the run), or None."""
+    if went_backwards(prev_type, page_type):
+        return f"Sent back to ticket selection from '{prev_heading or prev_type}' by: {action}"
+    if still_selecting(page_type, index, last_type):
+        return "Still on the ticket selection page: tickets were not held"
+    return None
+
+
+def note_action(step: dict, action: str) -> None:
+    """Record on a step's dict what was clicked on it (a repeat on the same page is appended)."""
+    step["action"] = f"{step['action']} | then: {action}" if step.get("action") else action
 
 
 async def wait_in_queue(stagehand: Stagehand, page: Page) -> None:
@@ -611,8 +684,11 @@ async def wait_in_queue(stagehand: Stagehand, page: Page) -> None:
     raise Blocked(f"Still in the Ticketek queue after {QUEUE_LIMIT_S // 60} minutes")
 
 
-async def next_action(stagehand: Stagehand, page: Page, state: StepState, page_type: str) -> None:
-    instruction = NEXT_ACTIONS.get(page_type, DEFAULT_NEXT_ACTION)
+async def next_action(
+    stagehand: Stagehand, page: Page, state: StepState, page_type: str, instruction: str | None = None
+) -> str:
+    """Let the model take the page's next step; returns what it clicked, for the step log."""
+    instruction = instruction or NEXT_ACTIONS.get(page_type, DEFAULT_NEXT_ACTION)
     if state.validation_errors:
         instruction = (
             f"The page shows these errors: {'; '.join(state.validation_errors[:3])}. Fix the first one if it is a "
@@ -621,6 +697,38 @@ async def next_action(stagehand: Stagehand, page: Page, state: StepState, page_t
     step = await safe_act(stagehand, page, instruction)
     log.info(f"    {step.description}")
     await settle(page, SETTLE_MS)
+    action = step.description if step.success else f"nothing done: {step.description}"
+    return f"{action} [{step.selector}]" if step.selector else action
+
+
+async def continue_checkout(page: Page) -> str | None:
+    """Click the checkout's forward button by script; its label, or None if there is none to click."""
+    label = await js(page, JS_CONTINUE_CHECKOUT)
+    if label:
+        log.info(f"    Continued via '{label}'")
+        await settle(page, SETTLE_MS)
+    return label
+
+
+async def take_step(stagehand: Stagehand, page: Page, state: StepState, page_type: str, steps: list[dict]) -> str:
+    """Move one page forward: the forward button by script on checkout pages, the model otherwise. Returns what
+    was done, for the step log."""
+    if page_type in JS_CONTINUE_PAGES and not state.validation_errors:
+        if page_type == "extras" and len(steps) >= 2:
+            before, now = steps[-2].get("total"), steps[-1].get("total")
+            if before is not None and now is not None and now > before + 0.005:
+                # Never touch a stepper to undo it; record it so the comparison shows the basket changed.
+                steps[-1]["extra_added"] = True
+                log.warning(f"  Total rose from {before} to {now} on the extras page: something was added")
+        done = ""
+        if page_type == "delivery":
+            url = await page.url()
+            done = await next_action(stagehand, page, state, page_type, DELIVERY_CHOICE)
+            if await page.url() != url:
+                return done  # the choice itself moved the page on; the next step reads where we are
+        if label := await continue_checkout(page):
+            return f"{done}; js: {label}" if done else f"js: {label}"
+    return await next_action(stagehand, page, state, page_type)
 
 
 async def walk_to_payment(stagehand: Stagehand, page: Page, result: SiteResult, interactive: bool) -> bool:
@@ -631,6 +739,9 @@ async def walk_to_payment(stagehand: Stagehand, page: Page, result: SiteResult, 
     last_seen: str | None = None
     login_paused = False
     last_type: str | None = None
+    prev_type: str | None = None  # the page type of the previous step read, whatever it was
+    prev_heading: str | None = None
+    last_action = "no action recorded"
     for index in range(1, MAX_BOOKING_STEPS + 1):
         await wait_for_render(page, 10)
         seen = await fingerprint(page)
@@ -642,7 +753,8 @@ async def walk_to_payment(stagehand: Stagehand, page: Page, result: SiteResult, 
                     "; ".join(last_state.validation_errors) or last_state.summary or "no summary"
                 )
                 return False
-            await next_action(stagehand, page, last_state, last_state.page_type)
+            last_action = await take_step(stagehand, page, last_state, last_state.page_type, result.steps)
+            note_action(result.steps[-1], last_action)
             continue
 
         state = (
@@ -680,6 +792,10 @@ async def walk_to_payment(stagehand: Stagehand, page: Page, result: SiteResult, 
             return True
         if page_type == "confirmation":
             raise FlowChanged("Reached a confirmation page unexpectedly; stopping")
+        if stop := wrong_turn(page_type, index, prev_type, last_type, prev_heading, last_action):
+            result.message = stop
+            return False
+        prev_type, prev_heading = page_type, state.heading
         if state.in_queue or page_type == "waiting_room":
             await wait_in_queue(stagehand, page)
             last_state = None
@@ -697,9 +813,6 @@ async def walk_to_payment(stagehand: Stagehand, page: Page, result: SiteResult, 
             last_state = None
             continue
 
-        if still_selecting(page_type, index, last_type):
-            result.message = "Still on the ticket selection page: tickets were not held"
-            return False
         last_type = page_type
 
         signature = (page_type, state.heading, await page.url())
@@ -711,7 +824,8 @@ async def walk_to_payment(stagehand: Stagehand, page: Page, result: SiteResult, 
             )
             return False
         last_state, last_seen = state, seen
-        await next_action(stagehand, page, state, page_type)
+        last_action = await take_step(stagehand, page, state, page_type, result.steps)
+        note_action(result.steps[-1], last_action)
 
     result.message = f"Payment page not reached within {MAX_BOOKING_STEPS} steps"
     return False

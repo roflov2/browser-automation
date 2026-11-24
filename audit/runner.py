@@ -475,6 +475,7 @@ async def audit_and_record(
         "metrics": delta,
         "metrics_cumulative": (after or before).model_dump(mode="json"),
         "resource_usage": monitor.summary(),
+        "steps": result.steps,
         "history": list(session_log.history),
         **describe_browser(),
     }

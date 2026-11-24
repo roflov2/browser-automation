@@ -468,6 +468,7 @@ class Acted:
 
     success: bool
     description: str
+    selector: str = field(default="", compare=False)  # what was acted on, for the run's step log
 
 
 # The Stagehand client, the runner's recording wrapper around it, or a test double: anything with observe() and act().
@@ -544,7 +545,9 @@ async def act_on(stagehand: _Actions, page: _Evaluates, action: Any, **options: 
     options.setdefault("timeout", LLM_TIMEOUT_MS)
     result = await stagehand.act(action, **options)
     await drain_blocked(page)
-    return Acted(bool(result.data.success), result.data.action_description or action.description)
+    return Acted(
+        bool(result.data.success), result.data.action_description or action.description, str(action.selector or "")
+    )
 
 
 async def dismiss_on(stagehand: _Actions, page: _Evaluates, action: Any, **options: Any) -> Acted | None:
