@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Choose your tickets</title>
+<style>
+  body { font-family: sans-serif; width: 900px; }
+  .row { display: flex; gap: 12px; align-items: center; padding: 8px; border: 1px solid #ccc; margin: 6px 0; }
+  .row button { width: 32px; height: 32px; }
+  .box { border: 1px solid #999; padding: 12px; margin: 12px 0; }
+  .wide { padding: 10px 24px; }
+</style>
+</head>
+<body>
+<!-- A local copy of the shape of Ticketek's "Choose your tickets" step (2 of 5): nothing is held until the
+     quantity is above 0 and 'Next' is clicked; a countdown runs from the start; resale sits right below. -->
+<div class="timer">Time remaining 8:22</div>
+<div class="stepper">2 of 5</div>
+<h1>Choose your tickets</h1>
+<div class="area">C Reserve Seating <button class="wide" id="change">Change</button></div>
+<div id="rows"></div>
+<div class="box"><button class="wide" id="companion">Do you need a ticket for a Companion Card holder?</button></div>
+<div id="next-slot"></div>
+<div class="box" id="resale">
+  <h3>Verified Fan-to-Fan Tickets</h3>
+  <p>Buy tickets from other fans on Ticketek Marketplace.</p>
+  <a href="https://marketplace.example/" target="_blank" id="resale-link">Find tickets ↗</a>
+  <button class="wide" id="resale-button">Find tickets</button>
+</div>
+<fieldset>
+  <label><input type="radio" name="delivery" checked> Mobile Ticket $8.90</label>
+  <label><input type="radio" name="delivery"> Print-At-Home $8.90</label>
+  <label><input type="radio" name="delivery"> Venue collection $12.25</label>
+</fieldset>
+<div class="box">Don't miss it. Afterpay it. <button class="wide" id="afterpay" aria-label="afterpay-logo">afterpay</button></div>
+<a href="#">Pricing and fee information</a>
+<a href="#" id="back">Back to event details</a>
+<script>
+  const params = new URLSearchParams(location.search);
+  window.clicks = [];
+  const types = params.has('child') ? [['Child', '$99.00'], ['Admit', '$145.65']] : [['Admit', '$145.65']];
+  const qty = {};
+  const rows = document.getElementById('rows');
+  for (const [name, price] of types) {
+    qty[name] = 0;
+    const row = document.createElement('div');
+    row.className = 'row';
+    if (params.has('select')) {
+      row.innerHTML = `<span>${name}</span><span>${price}</span><select aria-label="Quantity">` +
+        [0, 1, 2, 3, 4].map(n => `<option value="${n}">${n}</option>`).join('') + '</select>';
+      row.querySelector('select').addEventListener('change', e => { qty[name] = +e.target.value; render(); });
+    } else {
+      row.innerHTML = `<span>${name}</span><span>${price}</span>` +
+        `<button aria-label="Decrease ${name}">-</button><span class="q">0</span>` +
+        `<button aria-label="Increase ${name}">+</button>`;
+      const [minus, plus] = row.querySelectorAll('button');
+      // Re-render after the click, as a framework would, so each click must be read back
+      minus.addEventListener('click', () => setTimeout(() => { qty[name] = Math.max(0, qty[name] - 1); render(); }, 50));
+      plus.addEventListener('click', () => setTimeout(() => { qty[name] += 1; render(); }, 50));
+    }
+    row.dataset.name = name;
+    rows.appendChild(row);
+  }
+  function render() {
+    for (const row of rows.children) {
+      const q = row.querySelector('.q');
+      if (q) q.textContent = String(qty[row.dataset.name]);
+    }
+    const total = Object.values(qty).reduce((a, b) => a + b, 0);
+    const slot = document.getElementById('next-slot');
+    if (total > 0 && !slot.firstChild) {
+      const next = document.createElement('button');
+      next.className = 'wide';
+      next.id = 'next';
+      next.textContent = 'Next';
+      slot.appendChild(next);
+    } else if (total === 0) {
+      slot.innerHTML = '';
+    }
+  }
+  document.addEventListener('click', e => { if (e.target.id) window.clicks.push(e.target.id); }, true);
+  document.getElementById('resale-link').addEventListener('click', e => e.preventDefault());
+</script>
+</body>
+</html>

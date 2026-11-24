@@ -12,6 +12,7 @@ from audit.core import Blocked, Fee, drip_verdict, new_item
 from audit.workflows.ticketek import TicketekWorkflow, flow, pricing
 from audit.workflows.ticketek.models import (
     CheckoutDetails,
+    HeldTickets,
     PriceOption,
     Session,
     StepState,
@@ -121,6 +122,47 @@ def test_a_surcharge_with_no_fee_shown_is_recorded_but_not_charged(tmp_path):
     assert [(e["label"], e["price_display"], e["price"]) for e in run.extras] == [("Amex", None, None)]
     report = pricing.compare_prices(run, checkout(payment_surcharges=[Surcharge(payment_method="Amex")]))
     assert not any("payment surcharge" in r for r in report["drip_reasons"])
+
+
+# --- holding the tickets ---------------------------------------------------------------------------------
+def reading(tickets_held=True, quantity=2, unit_price="$145.65"):
+    return HeldTickets(tickets_held=tickets_held, area="C Reserve Seating", seats=None, price_type="Admit",
+                       quantity=quantity, unit_price=unit_price, total=None)  # fmt: skip
+
+
+SELECTION = "https://premier.ticketek.com.au/shows/show.aspx?sh=EVANESCE26"
+
+
+def test_a_hold_counts_only_when_the_page_shows_it():
+    assert flow.hold_confirmed(reading(), 2, SELECTION, 2)
+    assert flow.hold_confirmed(reading(), 2, SELECTION, None)  # moved on past the quantity controls
+    assert not flow.hold_confirmed(reading(quantity=None), 2, SELECTION, None)  # a countdown timer, nothing listed
+    assert not flow.hold_confirmed(reading(), 2, "https://marketplace.ticketek.com.au/listing/1", None)
+    assert not flow.hold_confirmed(reading(), 2, SELECTION, 0)  # the stepper still reads 0
+    assert not flow.hold_confirmed(reading(quantity=1), 2, SELECTION, None)
+    assert not flow.hold_confirmed(reading(tickets_held=False), 2, SELECTION, None)
+
+
+def test_a_held_price_far_from_the_one_chosen_is_not_our_ticket():
+    assert flow.price_matches("$150.00", "$145.65")  # resale was only 3% dearer: the other checks must catch it
+    assert not flow.price_matches("$166.40", "$145.65")
+    assert flow.price_matches(None, "$145.65") and flow.price_matches("$150.00", None)
+
+
+def test_the_hold_instructions_never_lead_to_resale_or_afterpay():
+    text = flow.hold_instruction("2 x 'Admit'", option("Admit", "$145.65"), "'Admit'", 2)
+    assert "'Find tickets'" not in text
+    for words in ("Fan-to-Fan", "Afterpay", "'Change'", "Companion Card"):
+        assert words in text and words in flow.CONTINUE_INSTRUCTION
+    assert "Afterpay" in flow.DEFAULT_NEXT_ACTION and "Fan-to-Fan" in flow.DEFAULT_NEXT_ACTION
+    assert "Afterpay" in flow.NEXT_ACTIONS["ticket_selection"]
+
+
+def test_still_selecting_only_on_the_first_step_or_twice_in_a_row():
+    assert flow.still_selecting("ticket_selection", 1, None)
+    assert flow.still_selecting("seat_map", 4, "ticket_selection")
+    assert not flow.still_selecting("ticket_selection", 3, "delivery")  # one later selection step is acted on
+    assert not flow.still_selecting("cart", 1, None)
 
 
 # --- price comparison --------------------------------------------------------------------------------------
@@ -328,3 +370,12 @@ def test_walk_waits_out_a_queue(walk, tmp_path, monkeypatch):
     monkeypatch.setattr(flow, "wait_in_queue", fake_wait)
     _, reached, actions, _ = walk([step(page_type="waiting_room", in_queue=True), step(is_payment_page=True)], tmp_path)
     assert reached is True and waited == [True] and actions == []
+
+
+def test_walk_refuses_to_act_on_the_ticket_selection_page(walk, tmp_path):
+    selecting = step(page_type="ticket_selection", heading="Choose your tickets")
+    run, reached, actions, _ = walk([selecting], tmp_path)
+    assert reached is False and actions == []
+    assert run.message == "Still on the ticket selection page: tickets were not held"
+    _, reached, actions, _ = walk([step(), step(page_type="delivery"), selecting, step(is_payment_page=True)], tmp_path)
+    assert reached is True and "below the ticket quantities" in actions[2]

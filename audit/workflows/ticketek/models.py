@@ -97,8 +97,10 @@ class TicketOptions(BaseModel):
 
 class HeldTickets(BaseModel):
     tickets_held: bool = Field(
-        description="True if tickets are now reserved/held: a cart, basket, order summary or countdown timer for "
-        "the held tickets is shown"
+        description="True only if a cart, basket or order summary lists the tickets with a quantity above 0. A "
+        "countdown timer alone does not count: Ticketek shows one as soon as the ticket selection page opens, before "
+        "anything is held. A quantity selector still at 0 means nothing is held. Resale, 'Verified Fan-to-Fan' or "
+        "Ticketek Marketplace listings never count."
     )
     area: str | None = Field(description="Seating area of the held tickets")
     seats: str | None = Field(description="Seat or row numbers if shown")
