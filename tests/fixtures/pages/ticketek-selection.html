@@ -4,7 +4,8 @@
 <style>
   body { font-family: sans-serif; width: 900px; }
   .row { display: flex; gap: 12px; align-items: center; padding: 8px; border: 1px solid #ccc; margin: 6px 0; }
-  .row button { width: 32px; height: 32px; }
+  .qty { display: flex; gap: 16px; align-items: center; margin-left: auto; }
+  .qty .plus, .qty .minus { width: 28px; height: 28px; padding: 0; border: 0; background: none; cursor: pointer; }
   .box { border: 1px solid #999; padding: 12px; margin: 12px 0; }
   .wide { padding: 10px 24px; }
 </style>
@@ -16,8 +17,8 @@
 <div class="stepper">2 of 5</div>
 <h1>Choose your tickets</h1>
 <div class="area">C Reserve Seating <button class="wide" id="change">Change</button></div>
-<div id="rows"></div>
-<div class="box"><button class="wide" id="companion">Do you need a ticket for a Companion Card holder?</button></div>
+<div class="card"><div id="rows"></div>
+<div class="box"><button class="wide" id="companion">Do you need a ticket for a Companion Card holder?</button></div></div>
 <div id="next-slot"></div>
 <div class="box" id="resale">
   <h3>Verified Fan-to-Fan Tickets</h3>
@@ -48,13 +49,25 @@
         [0, 1, 2, 3, 4].map(n => `<option value="${n}">${n}</option>`).join('') + '</select>';
       row.querySelector('select').addEventListener('change', e => { qty[name] = +e.target.value; render(); });
     } else {
-      row.innerHTML = `<span>${name}</span><span>${price}</span>` +
-        `<button aria-label="Decrease ${name}">-</button><span class="q">0</span>` +
-        `<button aria-label="Increase ${name}">+</button>`;
-      const [minus, plus] = row.querySelectorAll('button');
-      // Re-render after the click, as a framework would, so each click must be read back
-      minus.addEventListener('click', () => setTimeout(() => { qty[name] = Math.max(0, qty[name] - 1); render(); }, 50));
-      plus.addEventListener('click', () => setTimeout(() => { qty[name] += 1; render(); }, 50));
+      // Like Ticketek: unlabelled round icons either side of the number, which sits in its own wrapper. With
+      // ?divs=1 they are <div>s holding an <svg>, not buttons.
+      const icon = sign => `<svg width="28" height="28" viewBox="0 0 28 28"><circle cx="14" cy="14" r="13"/>` +
+        `<text x="9" y="19" fill="#fff">${sign}</text></svg>`;
+      const tag = params.has('divs') ? 'div' : 'button';
+      row.innerHTML = `<div><strong>${name}</strong><div>${price}</div></div><div class="qty">` +
+        `<${tag} class="minus" id="minus-${name}">${icon('-')}</${tag}><div><span class="q">0</span></div>` +
+        `<${tag} class="plus" id="plus-${name}">${icon('+')}</${tag}></div>`;
+      const minus = row.querySelector('.minus'), plus = row.querySelector('.plus');
+      // Each change goes to the server first, as on Ticketek: a 'Sit tight' message, then the new number
+      const change = by => {
+        const wait = document.createElement('div');
+        wait.id = 'busy';
+        wait.textContent = 'Sit tight, we are processing your request';
+        document.body.appendChild(wait);
+        setTimeout(() => { wait.remove(); qty[name] = Math.max(0, qty[name] + by); render(); }, 1200);
+      };
+      minus.addEventListener('click', () => change(-1));
+      plus.addEventListener('click', () => change(1));
     }
     row.dataset.name = name;
     rows.appendChild(row);
@@ -76,7 +89,12 @@
       slot.innerHTML = '';
     }
   }
-  document.addEventListener('click', e => { if (e.target.id) window.clicks.push(e.target.id); }, true);
+  window.trusted = 0;
+  document.addEventListener('click', e => {
+    const el = e.target.closest('[id]');
+    if (el) window.clicks.push(el.id);
+    if (e.isTrusted) window.trusted += 1;
+  }, true);
   document.getElementById('resale-link').addEventListener('click', e => e.preventDefault());
 </script>
 </body>

@@ -20,7 +20,7 @@ from ...core import (
     slug,
 )
 from ...page import dismiss_popups, fingerprint, js, pause_for_login, settle, shot, try_goto, wait_for_render
-from ...safety import current_guard, safe_act, try_act
+from ...safety import current_guard, safe_act, safe_click_at, try_act
 from .models import (
     EventPage,
     FindState,
@@ -275,61 +275,95 @@ def cheapest_offered(options: list[PriceOption]) -> float | None:
     return min(prices, default=None)
 
 
-# The ticket quantity controls, set without the model. `row` is a ticket type's row: the smallest element around a
-# quantity (a number leaf next to the -/+ buttons, a number input or a <select>) that also shows a price.
+# The ticket quantity controls, set without the model. A quantity is a small element that shows just a number
+# (or a number input, or a <select>); its + is the clickable thing just right of it on the same line, whatever it
+# is made of (a <button>, a <div>, an <svg> icon). Its row is the smallest element around it that shows a price.
 QUANTITY_JS = r"""
-const INCREASE = /increase|increment|\bplus\b|\badd\b|^\s*\+\s*$/i;
-const ctrlLabel = b => [b.getAttribute('aria-label'), b.getAttribute('title'), txt(b),
-    ...Array.from(b.querySelectorAll('svg title, [aria-label]'), n => n.textContent || n.getAttribute('aria-label'))]
-    .filter(Boolean).join(' ');
-const enabled = b => !b.disabled && b.getAttribute('aria-disabled') !== 'true';
-// The quantity control inside `el`: a <select>, a number input, or a number leaf next to a button
-const qtyControl = el => el.querySelector('select')
-    || Array.from(el.querySelectorAll('input')).find(i => /^\d{1,2}$/.test(i.value || '') && i.type !== 'hidden')
-    || Array.from(el.querySelectorAll('span, div, p, output, strong')).find(
-        n => n.children.length === 0 && /^\d{1,2}$/.test(txt(n)) && !!n.parentElement
-            && !!n.parentElement.querySelector('button, [role="button"]'));
+const CLICKABLE = 'button, [role="button"], a, [tabindex], svg, img, [class*="plus" i], [class*="increase" i], '
+    + '[class*="increment" i], [class*="add" i], [class*="btn" i], [class*="button" i]';
+const BUSY = /sit tight|processing your request/i;
+const busy = () => BUSY.test(document.body.innerText || '')
+    || Array.from(document.querySelectorAll('[aria-busy="true"]')).some(el => vis(el, 20, 20));
+const asHtml = el => { while (el && !(el instanceof HTMLElement)) el = el.parentElement; return el; };
+const enabled = b => !!b && !b.disabled && b.getAttribute('aria-disabled') !== 'true'
+    && !/\bdisabled\b/i.test(typeof b.className === 'string' ? b.className : '');
+const isNumber = el => {
+    if (el.tagName === 'SELECT') return true;
+    if (el.tagName === 'INPUT') return el.type !== 'hidden' && /^\d{1,2}$/.test(el.value || '');
+    if (!/^\d{1,2}$/.test(txt(el)) || el.getBoundingClientRect().width > 90) return false;
+    return !Array.from(el.children).some(c => /^\d{1,2}$/.test(txt(c)));  // the innermost element showing it
+};
 const qtyOf = c => parseInt(c.tagName === 'SELECT' || c.tagName === 'INPUT' ? c.value : txt(c), 10);
-const quantityRows = () => {
-    const rows = [];
-    for (const c of document.querySelectorAll('select, input, span, div, p, output, strong')) {
-        if (!vis(c, 4, 4) || qtyControl(c.parentElement || c) !== c) continue;
+// The clickable things on the number's line, left (-) and right (+) of it
+const sideControls = c => {
+    const r = c.getBoundingClientRect();
+    const mid = (r.top + r.bottom) / 2;
+    const near = [];
+    for (const el of document.querySelectorAll(CLICKABLE)) {
+        const h = asHtml(el.closest('button, [role="button"], a, [tabindex]') || el);
+        if (!h || h.contains(c) || c.contains(h) || !vis(h, 6, 6) || near.some(n => n.el === h)) continue;
+        const b = h.getBoundingClientRect();
+        if (b.width > 120 || b.height > 120 || Math.abs((b.top + b.bottom) / 2 - mid) > 24) continue;
+        const gap = b.left >= r.right - 2 ? b.left - r.right : r.left - b.right;
+        if (gap < -2 || gap > 140) continue;
+        near.push({ el: h, right: b.left >= r.right - 2, gap });
+    }
+    return near;
+};
+const steppers = () => {
+    const found = [];
+    for (const c of document.querySelectorAll('select, input, span, div, p, output, strong, b, label')) {
+        if (!vis(c, 4, 4) || !isNumber(c)) continue;
+        const sides = c.tagName === 'SELECT' ? [] : sideControls(c);
+        const plus = sides.filter(n => n.right).sort((x, y) => x.gap - y.gap)[0];
+        if (c.tagName !== 'SELECT' && !plus) continue;
         let row = c.parentElement;
         for (let i = 0; row && i < 6 && !/\$\s*\d/.test(row.innerText || ''); i++) row = row.parentElement;
         if (!row || !/\$\s*\d/.test(row.innerText || '') || (row.innerText || '').length > 400) continue;
-        if (c.tagName !== 'SELECT' && !row.querySelector('button, [role="button"]')) continue;
-        if (!rows.some(r => r.row === row)) rows.push({ row, control: c });
+        found.push({ row, control: c, plus: plus ? plus.el : null });
     }
-    return rows;
+    return found;
 };
-"""
-# {label, quantity, restricted}: set the chosen ticket type's quantity to `quantity` with ONE + click (or a <select>
-# choice) per call, so the page can re-render between clicks; `quantity: null` only reads. Prefers the row that
-# names `label` or reads 'Admit' / 'Adult' / 'Standard' / 'General'; never a restricted (companion, child, ...)
-# row. Returns {row, before, after}, or null when no quantity control is on the page.
-JS_SET_QUANTITY = r"""({ label, quantity, restricted }) => {
+// The chosen ticket type's stepper: the row that names `label`, else Admit/Adult/Standard/General; never restricted
+const chosenStepper = ({ label, restricted }) => {
     const banned = new RegExp(restricted, 'i');
-    const rows = quantityRows().filter(r => !banned.test(clean(txt(r.row)).split('$')[0]));
-    if (!rows.length) return null;
-    const head = r => clean(txt(r.row)).toLowerCase();
+    const head = s => clean(txt(s.row)).toLowerCase();
+    const rows = steppers().filter(s => !banned.test(head(s).split('$')[0]));
     const wanted = (label || '').toLowerCase();
-    const pick = rows.find(r => wanted && head(r).startsWith(wanted))
-        || rows.find(r => /^(admit|adult|standard|general)\b/.test(head(r)))
-        || rows.find(r => wanted && head(r).includes(wanted))
-        || rows[0];
-    const name = clean(txt(pick.row)).slice(0, 60);
-    const before = qtyOf(pick.control);
-    if (quantity === null || before === quantity) return { row: name, before, after: before };
-    if (pick.control.tagName === 'SELECT') {
-        const opt = Array.from(pick.control.options).find(o => parseInt(o.value || o.text, 10) === quantity);
-        if (opt && guardAllows(pick.control)) safeSelect(pick.control, opt.value);
-    } else if (before < quantity) {
-        const buttons = Array.from(pick.row.querySelectorAll('button, [role="button"]')).filter(b => vis(b, 6, 6));
-        const plus = buttons.find(b => INCREASE.test(ctrlLabel(b))) || buttons[buttons.length - 1];
-        if (plus && enabled(plus) && guardAllows(plus)) safeClick(plus);
+    return rows.find(s => wanted && head(s).startsWith(wanted))
+        || rows.find(s => /^(admit|adult|standard|general)\b/.test(head(s)))
+        || rows.find(s => wanted && head(s).includes(wanted))
+        || rows[0] || null;
+};
+const describe = s => ({
+    row: clean(txt(s.row)).slice(0, 60),
+    value: qtyOf(s.control),
+    kind: s.control.tagName === 'SELECT' ? 'select' : 'stepper',
+    busy: busy(),
+    html: s.row.outerHTML.replace(/\s+/g, ' ').slice(0, 1500),
+});
+"""
+# Read the chosen ticket type's quantity, and where its + is on screen for a real mouse click (null: no quantity).
+JS_READ_QUANTITY = r"""arg => {
+    const s = chosenStepper(arg);
+    if (!s) return null;
+    const out = describe(s);
+    if (s.plus) {
+        s.plus.scrollIntoView({ block: 'center', inline: 'nearest' });
+        const b = s.plus.getBoundingClientRect();
+        out.plus = { x: b.left + b.width / 2, y: b.top + b.height / 2, enabled: enabled(s.plus) && guardAllows(s.plus) };
     }
-    const now = qtyControl(pick.row);
-    return { row: name, before, after: now ? qtyOf(now) : before };
+    return out;
+}"""
+# A DOM click on the chosen ticket type's +, or its <select> set to `quantity`; true if anything was clicked/chosen
+JS_STEP_QUANTITY = r"""arg => {
+    const s = chosenStepper(arg);
+    if (!s) return false;
+    if (s.control.tagName === 'SELECT') {
+        const opt = Array.from(s.control.options).find(o => parseInt(o.value || o.text, 10) === arg.quantity);
+        return !!opt && guardAllows(s.control) && safeSelect(s.control, opt.value);
+    }
+    return !!s.plus && enabled(s.plus) && guardAllows(s.plus) && safeClick(s.plus);
 }"""
 # Click the button that reserves the chosen tickets. Only real buttons (never links, which is how the resale
 # 'Find tickets' leaves the site), never inside the Fan-to-Fan / resale / Marketplace box, never external links.
@@ -376,23 +410,59 @@ def price_matches(held_price: str | None, chosen_price: str | None) -> bool:
     return abs(held_value - chosen_value) / chosen_value <= PRICE_TOLERANCE
 
 
+QUANTITY_WAIT_S = 10  # Ticketek checks each + with the server ("Sit tight, we are processing your request")
+
+
+async def read_quantity(page: Page, label: str | None) -> dict | None:
+    """The chosen ticket type's quantity control as the page shows it now; None if there is none."""
+    arg = {"label": label, "restricted": RESTRICTED_TYPES.pattern}
+    return await js(page, JS_READ_QUANTITY, arg, lib=QUANTITY_JS)
+
+
+async def wait_for_quantity(page: Page, label: str | None, old: int) -> dict | None:
+    """Wait until the quantity moves off `old` and the page is no longer busy; the last reading either way."""
+    state = None
+    deadline = time.monotonic() + QUANTITY_WAIT_S
+    while time.monotonic() < deadline:
+        await settle(page, 300)
+        state = await read_quantity(page, label)
+        if state is None or (state["value"] != old and not state["busy"]):
+            break
+    return state
+
+
 async def set_quantity(page: Page, label: str | None, quantity: int | None) -> dict | None:
-    """Set (or with `quantity=None`, read) the chosen ticket type's quantity. None if no quantity control is shown."""
-    arg = {"label": label, "quantity": quantity, "restricted": RESTRICTED_TYPES.pattern}
-    state = await js(page, JS_SET_QUANTITY, arg, lib=QUANTITY_JS)
-    if quantity is None or not state:
-        return state
-    first = state["before"]
-    for _ in range(quantity + 2):  # one click per call; stop once it holds or stops moving
-        if state["after"] == quantity:
+    """Set (or with `quantity=None`, read) the chosen ticket type's quantity, one + at a time like a person would.
+
+    Each + is a real mouse click on it (a DOM click only if that changed nothing), then a wait for the page to show
+    the new number. Returns {row, before, after, html}, or None if no quantity control is shown.
+    """
+    state = await read_quantity(page, label)
+    if not state:
+        return None
+    before = value = state["value"]
+    arg = {"label": label, "restricted": RESTRICTED_TYPES.pattern, "quantity": quantity}
+    dom_clicks = 0
+    while quantity is not None and value != quantity:
+        plus = state.get("plus")
+        if state["kind"] == "select":
+            if not await js(page, JS_STEP_QUANTITY, arg, lib=QUANTITY_JS):
+                break
+        elif value > quantity or not plus or not plus["enabled"]:
             break
-        await settle(page, 400)
-        moved = await js(page, JS_SET_QUANTITY, arg, lib=QUANTITY_JS)
-        if not moved or moved["after"] == state["after"]:
-            state = moved or state
+        elif dom_clicks:
+            await js(page, JS_STEP_QUANTITY, arg, lib=QUANTITY_JS)
+        else:
+            await safe_click_at(page, plus["x"], plus["y"])
+        moved = await wait_for_quantity(page, label, value)
+        if moved is None:
             break
-        state = moved
-    return {**state, "before": first}
+        if moved["value"] == value:  # the click changed nothing: try a DOM click once, then give up
+            if state["kind"] == "select" or dom_clicks:
+                break
+            dom_clicks += 1
+        state, value = moved, moved["value"]
+    return {"row": state["row"], "before": before, "after": value, "html": state.get("html")}
 
 
 HOLD_RULES = (
@@ -459,8 +529,12 @@ async def hold_tickets(stagehand: Stagehand, page: Page, option: PriceOption, qu
             else:
                 await act(CONTINUE_INSTRUCTION)
         else:
-            if stepper:
+            if stepper:  # keep the row's markup so the next diagnosis can see what the + is made of
                 log.info(f"    Tickets: quantity stuck at {stepper['after']} on '{stepper['row']}'")
+                log.debug(f"    Quantity row: {stepper['html']}")
+                steps.append(f"quantity stuck at {stepper['after']} on '{stepper['row']}': {stepper['html']}")
+            else:
+                steps.append("no quantity control found")
             await act(hold_instruction(described, option, ticket_type, quantity))
         await settle(page, SETTLE_MS)
 
@@ -473,8 +547,8 @@ async def hold_tickets(stagehand: Stagehand, page: Page, option: PriceOption, qu
             await wait_for_render(page)
             continue
         held = (await stagehand.extract(question, HeldTickets)).data
-        shown = await set_quantity(page, price_type, None)
-        confirmed = hold_confirmed(held, quantity, url, shown["after"] if shown else None)
+        shown = await read_quantity(page, price_type)
+        confirmed = hold_confirmed(held, quantity, url, shown["value"] if shown else None)
         if confirmed and not price_matches(held.unit_price, option.price):
             log.warning(f"    Tickets: held at {held.unit_price}, not the {option.price} chosen; not our tickets")
             confirmed = False
