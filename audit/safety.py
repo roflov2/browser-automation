@@ -563,6 +563,39 @@ async def dismiss_on(stagehand: _Actions, page: _Evaluates, action: Any, **optio
     return await act_on(stagehand, page, action, **options)
 
 
+class _Clicks(_Evaluates, Protocol):
+    async def click(self, x: float, y: float) -> None: ...
+
+
+_AT_POINT_JS = r"""([x, y]) => {
+    const el = document.elementFromPoint(x, y);
+    if (!el) return { why: 'nothing on screen at that point' };
+    return { why: auditElementVerdict(el), label: auditParts(el).join(' ').slice(0, 80) };
+}"""
+
+
+async def safe_click_at(page: _Clicks, x: float, y: float) -> None:
+    """A real mouse click at viewport point (x, y), for controls that ignore a DOM click.
+
+    The element under the point (and every actionable ancestor) is vetted with the same rules as
+    safeClick first; the in-page blocker still sees the click itself. Raises UnsafeActionRefused
+    instead of clicking anything the guard refuses.
+    """
+    guard = current_guard()
+    if guard.mode_for(await page.url()) is Mode.FROZEN:
+        raise UnsafeActionRefused(f"{FROZEN_REASON} (click at {x:.0f},{y:.0f})")
+    script = f"(() => {{ {_state_js(guard)}\n{RULES_JS}\nreturn ({_AT_POINT_JS})({json.dumps([x, y])}); }})()"
+    try:
+        found = await page.evaluate(script)
+    except BROWSER_ERRORS as error:  # cannot say what is there: fail closed
+        raise UnsafeActionRefused(f"could not check the element at {x:.0f},{y:.0f}: {error}") from error
+    if not isinstance(found, dict) or found.get("why"):
+        why = found.get("why") if isinstance(found, dict) else "unknown element"
+        raise UnsafeActionRefused(f"{why} (click at {x:.0f},{y:.0f})")
+    await page.click(x, y)
+    await drain_blocked(page)
+
+
 async def safe_act(
     stagehand: _Actions, page: _Evaluates, instruction: str, *, follow_up: bool = False, **options: Any
 ) -> Acted:
