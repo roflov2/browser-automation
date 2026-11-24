@@ -39,8 +39,8 @@ async def observe_page(chrome: str, port: int, tmp: Path) -> dict:
                 return str(error)
             return None
 
-        # The checkout page's own script submits a form as it loads: cancelled and logged, the run goes on.
-        # The same on an ordinary page may be the late effect of a click of ours, so it still ends the run.
+        # A page's own script submitting a form: an ordinary form goes through; one submitted through a
+        # 'Buy now' button is cancelled and logged, and the run goes on either way.
         await safety.install(browser.context, page)
         with safety.active_guard():
             for name, path in (("checkout", "/checkout/"), ("ordinary", "/self-submit.html")):
@@ -161,16 +161,16 @@ def test_screenshot_and_navigation_helpers(seen):
     assert seen["goto_ok"] is True
 
 
-def test_a_checkout_page_submitting_its_own_form_does_not_end_the_run(seen):
+def test_a_checkout_page_submitting_its_own_plain_form_is_left_alone(seen):
     outcome, url = seen["self_submit_checkout"]
     assert outcome == "went on"
-    assert url.endswith("/checkout/")  # the submit was cancelled: the page did not navigate away
+    assert "/static.html" in url  # no purchase control in the form, so nothing to cancel
 
 
-def test_a_page_submitting_its_own_form_elsewhere_still_ends_the_run(seen):
-    outcome, why = seen["self_submit_ordinary"]
-    assert outcome == "refused"
-    assert "Buy now" in why and "requestSubmit" in why
+def test_a_page_submitting_its_own_buy_now_form_is_cancelled_without_ending_the_run(seen):
+    outcome, url = seen["self_submit_ordinary"]
+    assert outcome == "went on"
+    assert url.endswith("/self-submit.html")  # the submit was cancelled: the page did not navigate away
 
 
 @pytest.mark.parametrize(

@@ -75,13 +75,17 @@ If your network requires a Microsoft (Azure) sign-in before the browser can reac
 
 The audits drive real checkouts, so every click goes through `audit/safety.py`:
 
-1. **In-page blocker.** A script installed on every page and frame cancels any click, Enter/Space key press or form submit on a control labelled like a purchase ("Place order", "Pay now", "Pay $54.20", "Confirm and pay", "Complete booking", "Buy now", wallet buttons such as Shop Pay, PayPal, Apple/Google Pay), a trial or membership ("Start free trial", "Join Uber One", "Subscribe", "Sign up"), and any typing into card, CVV, expiry, gift-card, voucher or discount fields. It catches LLM clicks, the workflows' own JavaScript clicks and mis-clicks alike.
-2. **Vetted LLM actions.** Every LLM action is first *observed*; the proposed element and its real label are checked against the same rules before anything is clicked.
+It covers the basics: never pay, never place an order, never start a paid trial or membership, never type card details.
+
+1. **In-page blocker.** A script installed on every page and frame cancels any click, Enter/Space key press or form submit on a control labelled like a purchase ("Place order", "Pay now", "Pay $54.20", "Confirm and pay", "Complete booking", "Buy now", wallet and pay-later buttons such as Shop Pay, PayPal, Apple/Google Pay, Afterpay), or a trial or membership ("Start free trial", "Join Uber One"), and any typing into card number, CVV or expiry fields. It catches LLM clicks, the workflows' own JavaScript clicks and mis-clicks alike.
+2. **Vetted LLM actions.** Every LLM action is first *observed*; the proposed element and its real label are checked against the same rules before anything is clicked, and typing anything that looks like a card number is refused.
 3. **Guarded JavaScript.** Workflow scripts can click and type only through `safeClick`, `safeSelect` and `safeFill`, which apply the same rules.
-4. **Hard stop.** On a checkout or payment URL only dismiss controls (Skip, No thanks, Close) can be clicked, and once a workflow has identified the final page nothing on it can be: only reads and screenshots.
+4. **Hard stop.** Once a workflow has identified the final checkout/payment page, nothing more can be clicked or typed on that site: only reads and screenshots.
 5. **Prompts.** Each workflow still tells the model never to buy anything.
 
-A refused action ends that site's run with `status: error` and `failure_reason: unsafe_action_refused`, and the run moves on to the next site. A test fails if any LLM action or raw click is added outside `safety.py`.
+A refused action of ours ends that site's run with `status: error` and `failure_reason: unsafe_action_refused`, and the run moves on to the next site. Something the page cancels by itself (its own script submitting a form) is logged and the run goes on. A test fails if any LLM action or raw click is added outside `safety.py`.
+
+Not guarded on purpose: sign-up, sign-in, subscribe and account buttons, and voucher/promo/gift-card fields. None of them spends money; the prompts still tell the model to leave them alone.
 
 What it does not cover: labels in languages other than English, unlabelled icon-only buttons inside closed shadow roots or canvas, a site that submits a purchase by itself (a timer or wallet callback), the browser's own payment sheets, and a person clicking in a headed window.
 

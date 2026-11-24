@@ -20,7 +20,7 @@ MUST_BLOCK = [
     "Buy it now", "Buy with Shop Pay", "Book with Apple Pay", "Checkout · Pay $54.20", "Checkout with PayPal",
     "Shop Pay", "G Pay", "Google Pay", "Apple Pay", "PayPal", "Afterpay", "Zip", "PayID",
     "Try Uber One free for 4 weeks", "Save an extra $4.99 on this order with a free trial of Uber One",
-    "Join now", "Join for free", "Start your free trial", "Subscribe & save 10%", "Sign up", "Create account",
+    "Start your free trial", "Start membership", "Become a member",
 ]  # fmt: skip
 # Labels the workflows legitimately click. The first seven are the brief's list.
 MUST_ALLOW = [
@@ -29,15 +29,16 @@ MUST_ALLOW = [
     "One-time purchase", "Purchase options", "Skip", "No thanks", "Not now", "Maybe later", "Close", "Accept all cookies",
     "Find flights", "Select", "Continue as guest", "Skip seat selection", "Shop", "Shop Coffee", "Menu", "Order online",
     "Pickup", "Clear cart", "250g", "Standard", "Payment", "Proceed to payment", "Deliver now", "Zip code", "Sign in",
+    "Go to payment", "Sign up", "Create account", "Subscribe", "Join Velocity", "Order now", "Book now", "Confirm",
 ]  # fmt: skip
 SENSITIVE_FIELDS = [
     "cc-number cardnumber Card number", "Card number", "cardNumber", "cc-csc cvv CVV", "Security code", "CVC",
-    "cc-exp exp-date MM / YY", "Expiry date", "Expiration date (MM / YY)", "Discount code or gift card", "Gift card",
-    "Voucher code", "Promo code", "Coupon", "Travel Bank",
+    "cc-exp exp-date MM / YY", "Expiry date", "Expiration date (MM / YY)",
 ]  # fmt: skip
 ORDINARY_FIELDS = [
     "email Email", "given-name firstName First name", "Last name", "tel Phone number", "Date of birth",
-    "Delivery address", "Search Uber Eats", "postal-code Postcode", "Fly from", "Add an order note",
+    "Delivery address", "Search Uber Eats", "postal-code Postcode", "Fly from", "Add an order note", "Promo code",
+    "Gift card",
 ]  # fmt: skip
 
 
@@ -59,25 +60,6 @@ def test_deny_wins_over_any_other_part():
 def test_long_labels_are_read_from_the_start():
     assert click_verdict("Place order " + "x" * 500) is not None
     assert click_verdict("x" * 500 + " Place order") is None  # e.g. a whole card; its own button is checked separately
-
-
-@pytest.mark.parametrize("label", ["Order now", "Book now", "Confirm", "Submit"])
-def test_ambiguous_labels_are_denied_only_on_checkout_urls(label):
-    assert click_verdict(label, url="https://restaurant.test/menu") is None
-    assert click_verdict(label, url="https://shop.test/checkouts/cn/abc") is not None
-    assert click_verdict(label, url="https://book.air.test/dx/#/payment?x=1") is not None
-
-
-@pytest.mark.parametrize(
-    "label", ["Skip", "No thanks", "No, thanks", "Not now", "Maybe later", "Close", "×", "Close dialog"]
-)
-def test_restricted_mode_allows_dismissals(label):
-    assert click_verdict(label, mode=Mode.RESTRICTED) is None
-
-
-@pytest.mark.parametrize("label", ["Continue", "Next", "Edit", "Go to checkout", "Add to cart", "", "Place order"])
-def test_restricted_mode_refuses_everything_else(label):
-    assert click_verdict(label, mode=Mode.RESTRICTED) is not None
 
 
 def test_frozen_mode_refuses_everything():
@@ -126,14 +108,10 @@ class FakePage:
         return self.element
 
 
-def test_checkout_urls_are_restricted_without_being_asked():
+def test_checkout_urls_are_not_restricted_until_frozen():
     guard = Guard()
-    assert guard.mode_for("https://shop.test/collections/all") is Mode.NORMAL
-    assert guard.mode_for("https://shop.test/cart") is Mode.NORMAL
-    assert guard.mode_for("https://shop.test/pages/payment-options") is Mode.NORMAL
-    assert guard.mode_for("https://shop.test/checkouts/cn/abc/en-au?x=1") is Mode.RESTRICTED
-    assert guard.mode_for("https://www.ubereats.com/au/checkout?ps=1") is Mode.RESTRICTED
-    assert guard.mode_for("https://book.air.test/dx/VADX/#/payment?journeyType=one-way") is Mode.RESTRICTED
+    assert guard.mode_for("https://shop.test/checkouts/cn/abc/en-au?x=1") is Mode.NORMAL
+    assert guard.mode_for("https://www.ubereats.com/au/checkout?ps=1") is Mode.NORMAL
 
 
 def test_freeze_is_per_host_and_pushed_to_the_page():
@@ -142,8 +120,6 @@ def test_freeze_is_per_host_and_pushed_to_the_page():
     assert guard.mode_for("https://shop.test/anything") is Mode.FROZEN
     assert guard.mode_for("https://restaurant.test/menu") is Mode.NORMAL  # other hosts are unaffected
     assert '"frozen": ["shop.test"]' in page.scripts[-1]
-    asyncio.run(guard.restrict(page))
-    assert guard.mode_for("https://shop.test/") is Mode.FROZEN  # restrict never loosens a freeze
 
 
 def test_active_guard_is_scoped_to_the_run():
@@ -155,8 +131,8 @@ def test_active_guard_is_scoped_to_the_run():
 
 # --- Vetting an observed action --------------------------------------------------------------------
 def vet(description="Go to checkout button", selector="xpath=/html/body/button[1]", method="click", arguments=(),
-        element=None, url="https://shop.test/cart", mode=Mode.NORMAL):  # fmt: skip
-    check_action(description, selector, method, list(arguments), element, url=url, mode=mode)
+        element=None, mode=Mode.NORMAL):  # fmt: skip
+    check_action(description, selector, method, list(arguments), element, mode=mode)
 
 
 def test_element_label_is_trusted_over_the_description():
@@ -173,7 +149,6 @@ def test_unresolved_element_falls_back_to_the_description():
     with pytest.raises(UnsafeActionRefused):
         vet(description="Pay now", element={"found": False})
     vet(description="Go to checkout button", element=None)
-    vet(description="Close the 'Start free trial' popup", element=None)  # reads as a dismissal
 
 
 def test_unlabelled_element_falls_back_to_the_description():
@@ -193,7 +168,7 @@ def test_selector_is_checked_too():
 
 
 def test_typing_into_payment_fields_is_refused():
-    card = {"found": True, "labelled": True, "click": None, "field": "payment or voucher field: cc-number"}
+    card = {"found": True, "labelled": True, "click": None, "field": "payment card field: cc-number"}
     with pytest.raises(UnsafeActionRefused, match="cc-number"):
         vet(description="Email field", method="fill", arguments=["x"], element=card)
     with pytest.raises(UnsafeActionRefused):
@@ -205,19 +180,12 @@ def test_typing_into_payment_fields_is_refused():
         element={"found": True, "labelled": True, "click": None, "field": None})  # fmt: skip
 
 
-def test_restricted_and_frozen_modes():
+def test_frozen_mode_refuses_every_action():
     ok = {"found": True, "labelled": True, "click": None, "field": None}
-    refused = {**ok, "click": "only dismiss controls may be clicked on a checkout page: Continue"}
-    vet(description="Skip button", element=ok, mode=Mode.RESTRICTED)  # the page already applied the mode
-    with pytest.raises(UnsafeActionRefused):
-        vet(description="Continue button", element=refused, mode=Mode.RESTRICTED)
-    with pytest.raises(UnsafeActionRefused):
-        vet(description="Continue button", element=None, mode=Mode.RESTRICTED)  # unresolved: fail closed
-    vet(description="Close the upsell dialog", element=None, mode=Mode.RESTRICTED)
-    with pytest.raises(UnsafeActionRefused):
-        vet(description="Order note", method="fill", arguments=["hi"], element=ok, mode=Mode.RESTRICTED)
     with pytest.raises(UnsafeActionRefused, match="final checkout"):
         vet(description="Skip button", element=ok, mode=Mode.FROZEN)
+    with pytest.raises(UnsafeActionRefused, match="final checkout"):
+        vet(description="Order note", method="fill", arguments=["hi"], element=ok, mode=Mode.FROZEN)
 
 
 # --- safe_act ----------------------------------------------------------------------------------
@@ -385,22 +353,9 @@ def test_dismiss_popups_skips_subscribe_and_presses_escape(monkeypatch):
     assert page.keys == ["Escape"]
 
 
-def test_a_submit_the_checkout_page_makes_itself_is_logged_not_fatal(caplog):
-    blocked = [{"why": "form submit on a checkout page", "kind": "submit"}]
-    with safety.active_guard(), caplog.at_level("INFO"):
-        safety.raise_if_page_refused("https://shop.example/checkouts/cn/abc", blocked)
-        safety.raise_if_page_refused("https://shop.example/anything", [])  # nothing cancelled, nothing to do
-    assert "nothing was sent" in caplog.text
-
-
-def test_a_page_side_block_on_an_ordinary_page_still_ends_the_run():
-    blocked = [{"why": "purchase, payment or membership control: Buy now", "kind": "click"}]
-    with safety.active_guard(), pytest.raises(UnsafeActionRefused, match="Buy now"):
-        safety.raise_if_page_refused("https://shop.example/products/kenya", blocked)
-
-
-def test_a_page_side_block_on_a_frozen_host_is_not_fatal():
-    blocked = [{"why": safety.FROZEN_REASON, "kind": "submit"}]
-    with safety.active_guard() as guard:
-        guard.frozen.add("pay.example")
-        safety.raise_if_page_refused("https://pay.example/summary", blocked)
+def test_what_the_page_cancels_by_itself_is_logged_not_fatal(caplog):
+    blocked = [{"why": "purchase, payment or membership control: Buy now", "kind": "submit"}]
+    with caplog.at_level("INFO"):
+        safety.log_page_refusals(blocked)
+        safety.log_page_refusals([])  # nothing cancelled, nothing to do
+    assert "nothing was sent" in caplog.text and "Buy now" in caplog.text

@@ -1,15 +1,16 @@
-"""The purchase guard: nothing in this package may place an order, pay, or start a membership.
+"""The purchase guard: nothing in this package may place an order, pay, or start a paid membership.
 
-Every click the package makes goes through this module, in layers:
+It covers the basics only:
 
-1. `GUARD_JS`, an init script installed on every page, cancels denied clicks, key presses, form
-   submits and typing into payment fields in the capture phase, whoever caused them.
-2. `safe_act()` is the only way to run an LLM action: it observes first, vets the proposed action
-   and the element it targets, and only then acts.
-3. `safeClick()` / `safeSelect()` / `safeFill()` are the only way in-page JavaScript may click or type.
-4. `Guard.restrict()` and `Guard.freeze()` are the hard stop: on a checkout page only dismiss
-   controls may be clicked, and once the final page has been identified nothing may be.
-5. The LLM system prompts remain as a last layer.
+- Clicks on controls that pay, place an order or start a trial/membership are refused.
+- Typing into card fields, or typing anything that looks like a card number, is refused.
+- `Guard.freeze()`: once a workflow has reached the final checkout/payment page, nothing more may be
+  clicked or typed on that site; the page is only read.
+
+These are enforced in three places: `GUARD_JS` (an init script that cancels denied clicks, key presses,
+form submits and typing on every page, whoever caused them), `safe_act()` (the only way to run an LLM
+action: observe, vet, act), and `safeClick()` / `safeSelect()` / `safeFill()` (the only way in-page
+JavaScript may click or type).
 
 The rules are data, written once here and injected into the page scripts, so Python and JavaScript
 cannot drift. Patterns use only syntax that Python `re` and JavaScript `RegExp` read the same way.
@@ -67,23 +68,7 @@ DENY = (
     r"\bfree\s+trial\b",
     r"\bstart\s+(your\s+|my\s+)?(free\s+)?(trial|membership)\b",
     r"\b(join|try)\s+uber\s+one\b",
-    r"\bjoin\s+(now|for\s+free|today|velocity)\b",
     r"\bbecome\s+a\s+member\b",
-    r"\bsubscribe\b",
-    r"\bsign\s+up\b",
-    r"\bcreate\s+(an\s+|my\s+)?account\b",
-)
-# Also denied when the page URL looks like a checkout or payment page.
-DENY_ON_CHECKOUT = (
-    r"\border\s+now\b",
-    r"\bbook\s+now\b",
-    r"^(confirm|submit|order|book)$",
-)
-CHECKOUT_URL = r"[/#](checkouts?|payment|pay|billing|order-review)([/?#]|$)"
-# In restricted mode a control may be clicked only if a part of its label matches one of these in full.
-ALLOW_RESTRICTED = (
-    r"^(skip|no,?\s*thanks?|not\s+now|maybe\s+later|close|dismiss|×|x)$",
-    r"^(close|dismiss)\b.{0,40}$",
 )
 # Searched in a form field's autocomplete, name, id, placeholder, aria-label and <label> text.
 SENSITIVE_FIELD = (
@@ -91,28 +76,17 @@ SENSITIVE_FIELD = (
     r"card[-_ ]?(number|num|no|holder)",
     r"\bcvv|\bcvc|security[-_ ]?code",
     r"expir|\bexp[-_ ]?(date|month|year)|\bmm\s*/\s*yy",
-    r"gift[-_ ]?card|voucher|promo|coupon|discount|redeem|travel[-_ ]?bank",
 )
-# A description the model wrote for a control that has no readable label; these verbs mark a dismissal.
-DISMISS_DESCRIPTION = r"^(click\s+)?(the\s+)?(close|dismiss|decline|skip|no\s+thanks)\b"
 
 TYPING_METHODS = frozenset({"fill", "type"})  # Stagehand's text-entry methods; everything else is treated as a click
 FROZEN_REASON = "the final checkout/payment page has been identified; no further actions are allowed on it"
 
-_RULES: dict[str, tuple[str, ...]] = {
-    "deny": DENY,
-    "denyOnCheckout": DENY_ON_CHECKOUT,
-    "checkoutUrl": (CHECKOUT_URL,),
-    "allowRestricted": ALLOW_RESTRICTED,
-    "sensitiveField": SENSITIVE_FIELD,
-}
+_RULES: dict[str, tuple[str, ...]] = {"deny": DENY, "sensitiveField": SENSITIVE_FIELD}
 _COMPILED = {name: tuple(re.compile(p, re.IGNORECASE) for p in patterns) for name, patterns in _RULES.items()}
-_DISMISS = re.compile(DISMISS_DESCRIPTION, re.IGNORECASE)
 
 
 class Mode(StrEnum):
     NORMAL = "normal"
-    RESTRICTED = "restricted"  # a checkout page: only dismiss controls
     FROZEN = "frozen"  # the final page: nothing
 
 
@@ -124,24 +98,20 @@ def _hit(rules: str, parts: Iterable[str]) -> str | None:
     return next((part for part in parts for pattern in _COMPILED[rules] if pattern.search(part)), None)
 
 
-def click_verdict(parts: str | Sequence[str], *, url: str = "", mode: Mode = Mode.NORMAL) -> str | None:
+def click_verdict(parts: str | Sequence[str], *, mode: Mode = Mode.NORMAL) -> str | None:
     """Why a click on a control labelled `parts` must be refused, or None if it may go ahead."""
     labels = [p for p in map(normalise, [parts] if isinstance(parts, str) else parts) if p]
     if mode is Mode.FROZEN:
         return FROZEN_REASON
     if hit := _hit("deny", labels):
         return f"purchase, payment or membership control: {hit}"
-    if _COMPILED["checkoutUrl"][0].search(url) and (hit := _hit("denyOnCheckout", labels)):
-        return f"order control on a checkout page: {hit}"
-    if mode is Mode.RESTRICTED and not _hit("allowRestricted", labels):
-        return f"only dismiss controls may be clicked on a checkout page: {labels[0] if labels else '(unlabelled)'}"
     return None
 
 
 def field_verdict(descriptor: str | None) -> str | None:
     """Why typing into a field described by `descriptor` must be refused, or None."""
     text = normalise(descriptor)
-    return f"payment or voucher field: {text}" if _hit("sensitiveField", [text]) else None
+    return f"payment card field: {text}" if _hit("sensitiveField", [text]) else None
 
 
 def looks_like_card_number(text: str) -> bool:
@@ -153,7 +123,7 @@ def looks_like_card_number(text: str) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# Per-run state: which hosts are restricted or frozen
+# Per-run state: which hosts are frozen
 # ---------------------------------------------------------------------------
 class _Evaluates(Protocol):
     async def evaluate(self, expression: str) -> Any: ...
@@ -167,37 +137,22 @@ def _host(url: str) -> str:
 
 @dataclass
 class Guard:
-    """The hard stop for one audited site. `restrict` and `freeze` only ever tighten.
+    """The hard stop for one audited site. `freeze` only ever tightens."""
 
-    Any URL that looks like a checkout or payment page is restricted without being asked.
-    """
-
-    restricted: set[str] = field(default_factory=set)
     frozen: set[str] = field(default_factory=set)
 
     def mode_for(self, url: str) -> Mode:
-        host = _host(url)
-        if host in self.frozen:
-            return Mode.FROZEN
-        on_checkout = host in self.restricted or bool(_COMPILED["checkoutUrl"][0].search(url))
-        return Mode.RESTRICTED if on_checkout else Mode.NORMAL
+        return Mode.FROZEN if _host(url) in self.frozen else Mode.NORMAL
 
     def state_json(self) -> str:
-        return json.dumps({"frozen": sorted(self.frozen), "restricted": sorted(self.restricted)})
-
-    async def restrict(self, page: _Evaluates) -> None:
-        """We are on a checkout page: from now on only dismiss controls may be clicked on this host."""
-        await self._tighten(page, self.restricted, Mode.RESTRICTED)
+        return json.dumps({"frozen": sorted(self.frozen)})
 
     async def freeze(self, page: _Evaluates) -> None:
         """The final checkout/payment page: from now on only reads and screenshots on this host."""
-        await self._tighten(page, self.frozen, Mode.FROZEN)
-
-    async def _tighten(self, page: _Evaluates, hosts: set[str], mode: Mode) -> None:
         host = _host(await page.url())
-        if host and host not in hosts:
-            hosts.add(host)
-            log.info("  Guard: %s is now %s", host, mode.value)
+        if host and host not in self.frozen:
+            self.frozen.add(host)
+            log.info("  Guard: %s is now frozen", host)
         await push_state(page, self)
 
 
@@ -235,19 +190,15 @@ RULES_JS = (
 const auditRx = Object.fromEntries(Object.entries(AUDIT_RULES).map(([k, list]) => [k, list.map(s => new RegExp(s, 'i'))]));
 const auditNorm = s => (s || '').replace(/\s+/g, ' ').trim().slice(0, AUDIT_LIMIT);
 const auditHit = (rules, parts) => { for (const p of parts) for (const r of auditRx[rules]) if (r.test(p)) return p; return null; };
-const auditClickVerdict = (parts, url, mode) => {
+const auditClickVerdict = (parts, mode) => {
     const labels = parts.map(auditNorm).filter(Boolean);
     if (mode === 'frozen') return AUDIT_FROZEN;
-    let hit = auditHit('deny', labels);
-    if (hit) return 'purchase, payment or membership control: ' + hit;
-    if (auditRx.checkoutUrl[0].test(url) && (hit = auditHit('denyOnCheckout', labels))) return 'order control on a checkout page: ' + hit;
-    if (mode === 'restricted' && !auditHit('allowRestricted', labels))
-        return 'only dismiss controls may be clicked on a checkout page: ' + (labels.length ? labels[0] : '(unlabelled)');
-    return null;
+    const hit = auditHit('deny', labels);
+    return hit ? 'purchase, payment or membership control: ' + hit : null;
 };
 const auditFieldVerdict = descriptor => {
     const text = auditNorm(descriptor);
-    return auditHit('sensitiveField', [text]) ? 'payment or voucher field: ' + text : null;
+    return auditHit('sensitiveField', [text]) ? 'payment card field: ' + text : null;
 };
 const AUDIT_ACTIONABLE = 'button, a, summary, label, select, input[type="submit"], input[type="button"], input[type="image"], '
     + 'input[type="checkbox"], input[type="radio"], [role="button"], [role="link"], [role="menuitem"], [role="option"], '
@@ -265,13 +216,9 @@ const auditEditable = el => el.matches(
     'input:not([type="button"]):not([type="submit"]):not([type="checkbox"]):not([type="radio"]):not([type="image"]), textarea, [contenteditable]');
 const auditState = () => {
     try { if (window.top.__auditGuard) return window.top.__auditGuard.state; } catch (e) { /* cross-origin frame */ }
-    return window.__auditGuard ? window.__auditGuard.state : { frozen: [], restricted: [] };
+    return window.__auditGuard ? window.__auditGuard.state : { frozen: [] };
 };
-const auditMode = () => {
-    const state = auditState();
-    if (state.frozen.includes(location.host)) return 'frozen';
-    return state.restricted.includes(location.host) || auditRx.checkoutUrl[0].test(location.href) ? 'restricted' : 'normal';
-};
+const auditMode = () => auditState().frozen.includes(location.host) ? 'frozen' : 'normal';
 // The element and every actionable ancestor, nearest first, through open shadow roots.
 const auditChain = el => {
     const chain = [];
@@ -281,11 +228,8 @@ const auditChain = el => {
 };
 // Why a click on `el` must be refused, or null.
 const auditElementVerdict = el => {
-    const mode = auditMode(), url = location.href, chain = auditChain(el);
-    if (mode === 'frozen') return AUDIT_FROZEN;
-    for (const n of chain) { const why = auditClickVerdict(auditParts(n), url, 'normal'); if (why) return why; }
-    if (mode === 'restricted' && !chain.some(n => auditHit('allowRestricted', auditParts(n))))
-        return auditClickVerdict(auditParts(el), url, mode);
+    if (auditMode() === 'frozen') return AUDIT_FROZEN;
+    for (const n of auditChain(el)) { const why = auditClickVerdict(auditParts(n), 'normal'); if (why) return why; }
     return null;
 };
 """
@@ -297,7 +241,7 @@ GUARD_JS = (
     + RULES_JS
     + r"""
 const G = window.__auditGuard = {
-    state: { frozen: [], restricted: [] },
+    state: { frozen: [] },
     blocked: [],
     drain() { const out = this.blocked; this.blocked = []; return out; },
 };
@@ -336,8 +280,7 @@ window.addEventListener('keydown', event => {
 const submitVerdict = (form, submitter) => {
     if (auditMode() === 'frozen') return AUDIT_FROZEN;
     const button = submitter || form.querySelector('button:not([type="button"]):not([type="reset"]), input[type="submit"], input[type="image"]');
-    if (button) return auditElementVerdict(button);
-    return auditMode() === 'restricted' ? 'form submit on a checkout page' : null;
+    return button ? auditElementVerdict(button) : null;
 };
 window.addEventListener('submit', event => {
     const why = event.target && event.target.querySelector ? submitVerdict(event.target, event.submitter) : null;
@@ -368,14 +311,14 @@ const safeClick = el => {
 };
 const safeSelect = (el, value) => {
     const option = Array.from(el.options || []).find(o => o.value === value);
-    const why = auditElementVerdict(el) || (option ? auditClickVerdict([option.text], location.href, auditMode()) : null);
+    const why = auditElementVerdict(el) || (option ? auditClickVerdict([option.text], auditMode()) : null);
     if (why) { auditRefused.push({ why, kind: 'safeSelect' }); return false; }
     el.value = value;
     el.dispatchEvent(new Event('change', { bubbles: true }));
     return true;
 };
 const safeFill = (el, text) => {
-    const why = auditMode() !== 'normal' ? 'typing is not allowed on a checkout page' : auditFieldVerdict(auditField(el));
+    const why = auditMode() === 'frozen' ? AUDIT_FROZEN : auditFieldVerdict(auditField(el));
     if (why) { auditRefused.push({ why, kind: 'safeFill' }); return false; }
     el.focus();
     const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value');
@@ -422,24 +365,18 @@ def raise_if_refused(refused: Sequence[Mapping[str, Any]] | None) -> None:
         raise UnsafeActionRefused("; ".join(f"{r.get('why')} [{r.get('kind')}]" for r in refused))
 
 
-def raise_if_page_refused(page_url: str, blocked: Sequence[Mapping[str, Any]] | None) -> None:
-    """Handle what the in-page blocker cancelled on its own while no action of ours was running.
+def log_page_refusals(blocked: Sequence[Mapping[str, Any]] | None) -> None:
+    """Log what the in-page blocker cancelled on its own while no action of ours was running.
 
-    On an ordinary page that still ends the run: it may be the late effect of an earlier click. On a
-    checkout page we only read, so a cancelled submit or click there is the checkout's own script at
-    work (Shopify's checkout submits a form as it loads). It was cancelled and nothing was sent, so it
-    is logged and the run goes on to read the page it came to read.
+    That is usually the page's own script (Shopify's checkout submits a form as it loads). It was
+    cancelled and nothing was sent, so the run goes on.
     """
-    if not blocked:
-        return
-    if current_guard().mode_for(page_url) is Mode.NORMAL:
-        raise_if_refused(blocked)
-    for refusal in blocked:
+    for refusal in blocked or ():
         log.info(f"  Guard cancelled the page's own {refusal.get('kind')} ({refusal.get('why')}); nothing was sent")
 
 
 async def push_state(page: _Evaluates, guard: Guard) -> None:
-    """Tell the page which hosts are restricted or frozen."""
+    """Tell the page which hosts are frozen."""
     await page.evaluate(f"(() => {{ {_state_js(guard)} }})()")
 
 
@@ -487,7 +424,6 @@ def check_action(
     arguments: Sequence[str],
     element: Mapping[str, Any] | None,
     *,
-    url: str,
     mode: Mode,
 ) -> None:
     """Raise UnsafeActionRefused unless the action proposed by observe() is safe to run.
@@ -503,16 +439,10 @@ def check_action(
         why = None if found else field_verdict(description)
         if not why and any(looks_like_card_number(a) for a in arguments):
             why = "typing what looks like a card number"
-        if not why and mode is not Mode.NORMAL:
-            why = "typing is not allowed on a checkout page"
     elif not why:
-        why = info.get("click") or click_verdict(_selector_words(selector), url=url)
-        if not why and not info.get("labelled"):
-            # No readable label: fall back to the model's description, failing closed.
-            dismissal = bool(_DISMISS.search(normalise(description)))
-            why = None if dismissal else click_verdict(description, url=url)
-            if not why and mode is Mode.RESTRICTED and not dismissal:
-                why = "only dismiss controls may be clicked on a checkout page"
+        why = info.get("click") or click_verdict(_selector_words(selector))
+        if not why and not info.get("labelled"):  # no readable label: go by the model's description
+            why = click_verdict(description)
     if why:
         raise UnsafeActionRefused(f"{why} (proposed action: {description!r}, {selector!r})")
 
@@ -531,11 +461,10 @@ async def describe_element(page: _Evaluates, guard: Guard, selector: str) -> Map
 async def vet(page: _Evaluates, action: Any) -> None:
     """Raise UnsafeActionRefused unless `action` (from observe()) is safe to run. Never acts."""
     guard = current_guard()
-    url = await page.url()
+    mode = guard.mode_for(await page.url())
     element = await describe_element(page, guard, action.selector)
     check_action(
-        action.description, action.selector, action.method, list(action.arguments or []), element,
-        url=url, mode=guard.mode_for(url),
+        action.description, action.selector, action.method, list(action.arguments or []), element, mode=mode
     )  # fmt: skip
 
 

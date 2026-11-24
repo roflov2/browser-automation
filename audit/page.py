@@ -111,7 +111,7 @@ async def js(page: Page, fn: str, arg: Any = None, default: Any = None, lib: str
 
     Snippets may click and type only through safeClick/safeSelect/safeFill (see audit.safety). If the
     guard refused anything in the snippet, UnsafeActionRefused is raised. Anything the in-page blocker cancelled
-    since the last call raises too, except on a checkout page (see safety.raise_if_page_refused).
+    since the last call is only logged (see safety.log_page_refusals).
     """
     script = safety.wrap_snippet(safety.current_guard(), JS_LIB + lib, f"({fn})({json.dumps(arg)})")
     try:
@@ -125,7 +125,7 @@ async def js(page: Page, fn: str, arg: Any = None, default: Any = None, lib: str
         raise PageScriptError(f"unexpected evaluate result {out!r} (in: {fn[:80]!r})")
     safety.raise_if_refused(cast(list[dict[str, Any]], out["refused"]))
     if background := out.get("background"):
-        safety.raise_if_page_refused(await page.url(), cast(list[dict[str, Any]], background))
+        safety.log_page_refusals(cast(list[dict[str, Any]], background))
     if out["error"]:
         raise PageScriptError(f"{out['error']} (in: {fn[:80]!r})")
     return default if out["value"] is None else out["value"]

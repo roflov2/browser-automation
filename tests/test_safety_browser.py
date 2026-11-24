@@ -101,12 +101,12 @@ async def observe_guard(chrome: str, port: int) -> dict:
         # Layer 3: the helpers snippets must use
         seen["safe_click_denied"] = await refusal(js(page, "() => safeClick(document.getElementById('place'))"))
         seen["safe_click_allowed"] = await js(page, "() => safeClick(document.getElementById('checkout'))")
-        seen["safe_fill_denied"] = await refusal(js(page, "() => safeFill(document.getElementById('gift'), 'SAVE10')"))
+        seen["safe_fill_denied"] = await refusal(js(page, "() => safeFill(document.getElementById('card'), '4111')"))
         seen["safe_fill_allowed"] = await js(page, "() => safeFill(document.getElementById('email'), 'a@b.test')")
         seen["guard_allows"] = await js(
             page, "() => ['place', 'checkout'].map(id => guardAllows(document.getElementById(id)))"
         )
-        seen["after_helpers"] = {"log": await take_log(), "gift": await run("return document.getElementById('gift').value;"),
+        seen["after_helpers"] = {"log": await take_log(), "card": await run("return document.getElementById('card').value;"),
                                  "email": await run("return document.getElementById('email').value;")}  # fmt: skip
 
         # Layer 2 against the real client: act(Action) with no model
@@ -125,9 +125,8 @@ async def observe_guard(chrome: str, port: int) -> dict:
 
         # Python and JavaScript read the rules the same way
         labels = MUST_BLOCK + MUST_ALLOW
-        cases = [[label, url, mode] for label in labels for url, mode in (("https://shop.test/cart", "normal"),
-                 ("https://shop.test/checkouts/x", "normal"), ("https://shop.test/cart", "restricted"))]  # fmt: skip
-        script = f"{safety.RULES_JS}\nreturn {json.dumps(cases)}.map(([l, u, m]) => auditClickVerdict([l], u, m));"
+        cases = [[label, mode] for label in labels for mode in ("normal", "frozen")]
+        script = f"{safety.RULES_JS}\nreturn {json.dumps(cases)}.map(([l, m]) => auditClickVerdict([l], m));"
         seen["parity_clicks"] = (cases, await run(script))
         fields = SENSITIVE_FIELDS + ORDINARY_FIELDS
         seen["parity_fields"] = (
@@ -135,12 +134,12 @@ async def observe_guard(chrome: str, port: int) -> dict:
             await run(f"{safety.RULES_JS}\nreturn {json.dumps(fields)}.map(auditFieldVerdict);"),
         )
 
-        # Navigation: the script is re-installed, and a checkout URL is restricted without being asked
+        # Navigation: the script is re-installed; a checkout URL gets the same rules as any page
         await page.locator("#next").click()
         await page.wait_for_load_state("load")
         seen["checkout_url"] = await page.url()
         seen["checkout_installed"] = await run("return Boolean(window.__auditGuard);")
-        seen["restricted"] = {
+        seen["checkout"] = {
             i: await attempt(real_click(i)) for i in ("skip", "close", "dialog-continue", "edit", "place")
         }
 
@@ -205,23 +204,24 @@ def test_enter_key_and_programmatic_submits_are_cancelled(seen):
     assert seen["url_after_submits"].endswith("/index.html")  # form.submit() did not navigate
 
 
-@pytest.mark.parametrize("field", ["card", "cvv", "expiry", "gift"])
+@pytest.mark.parametrize("field", ["card", "cvv", "expiry"])
 def test_typing_into_payment_fields_is_cancelled(seen, field):
     assert seen[f"typed_{field}"]["value"] == ""
     assert seen[f"typed_{field}"]["blocked"]
 
 
-def test_typing_elsewhere_still_works(seen):
-    assert seen["typed_email"] == {"value": "4111", "blocked": []}
+@pytest.mark.parametrize("field", ["email", "gift"])
+def test_typing_elsewhere_still_works(seen, field):
+    assert seen[f"typed_{field}"] == {"value": "4111", "blocked": []}
 
 
 def test_safe_helpers(seen):
     assert "Place order" in seen["safe_click_denied"]
     assert seen["safe_click_allowed"] is True
-    assert "gift card" in seen["safe_fill_denied"].lower()
+    assert "card" in seen["safe_fill_denied"].lower()
     assert seen["safe_fill_allowed"] is True
     assert seen["guard_allows"] == [False, True]
-    assert seen["after_helpers"] == {"log": ["checkout"], "gift": "", "email": "a@b.test"}
+    assert seen["after_helpers"] == {"log": ["checkout"], "card": "", "email": "a@b.test"}
 
 
 def test_act_on_vets_the_real_element_and_makes_no_llm_call(seen):
@@ -234,20 +234,18 @@ def test_act_on_vets_the_real_element_and_makes_no_llm_call(seen):
 
 def test_python_and_javascript_agree_on_every_rule(seen):
     cases, verdicts = seen["parity_clicks"]
-    for (label, url, mode), verdict in zip(cases, verdicts, strict=True):
-        assert verdict == safety.click_verdict(label, url=url, mode=safety.Mode(mode)), (label, url, mode)
+    for (label, mode), verdict in zip(cases, verdicts, strict=True):
+        assert verdict == safety.click_verdict(label, mode=safety.Mode(mode)), (label, mode)
     fields, verdicts = seen["parity_fields"]
     for descriptor, verdict in zip(fields, verdicts, strict=True):
         assert verdict == safety.field_verdict(descriptor), descriptor
 
 
-def test_guard_survives_navigation_and_restricts_checkout_urls(seen):
+def test_guard_survives_navigation_and_only_denies_paying_on_a_checkout_url(seen):
     assert "/checkout/" in seen["checkout_url"] and seen["checkout_installed"] is True
-    assert seen["restricted"]["skip"] == {"log": ["skip"], "blocked": []}
-    assert seen["restricted"]["close"] == {"log": ["close"], "blocked": []}
-    for element_id in ("dialog-continue", "edit", "place"):
-        assert seen["restricted"][element_id]["log"] == [], element_id
-        assert seen["restricted"][element_id]["blocked"], element_id
+    for element_id in ("skip", "close", "dialog-continue", "edit"):
+        assert seen["checkout"][element_id] == {"log": [element_id], "blocked": []}, element_id
+    assert seen["checkout"]["place"]["log"] == [] and seen["checkout"]["place"]["blocked"]
 
 
 def test_frozen_page_allows_only_reads(seen):
@@ -256,4 +254,4 @@ def test_frozen_page_allows_only_reads(seen):
         assert seen["frozen"][element_id]["blocked"]
     assert "final checkout" in seen["frozen_safe_click"]
     assert "final checkout" in seen["frozen_act"]
-    assert seen["frozen_reads_work"] == "Guard fixture: checkout page (the URL makes it restricted)"
+    assert seen["frozen_reads_work"] == "Guard fixture: checkout page"
