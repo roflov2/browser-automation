@@ -103,6 +103,7 @@ def compare_prices(result: TicketekResult, checkout: CheckoutDetails | None) -> 
         "event_name": result.event_name,
         "session": result.session,
         "venue": result.venue,
+        "sessions_tried": result.sessions_tried,
         "advertised_from_price_display": result.advertised_from_price_display,
         "advertised_from_price": advertised_from,
         "advertised_price_note": result.advertised_price_note,

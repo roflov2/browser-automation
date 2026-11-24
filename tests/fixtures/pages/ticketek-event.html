@@ -11,6 +11,9 @@
   </select>
 </label>
 <div id="find"></div>
+<div id="notice" hidden>There aren't enough tickets to meet your request right now. Please try a different ticket
+  category or type, with a reduced quantity of tickets.<br>If you receive this message even when selecting only one
+  ticket, all remaining tickets are being transacted by other customers.</div>
 <div style="width:400px">
   <p>Verified Fan-to-Fan resale on Ticketek Marketplace</p>
   <a href="https://marketplace.ticketek.com.au/x" onclick="window.resale = 1; return false"
@@ -18,6 +21,7 @@
 </div>
 <script>
   window.chosen = [];
+  if (location.search.includes('soldout')) document.getElementById('notice').hidden = false;
   document.getElementById('date').addEventListener('change', e => {
     window.chosen.push(e.target.value);
     document.getElementById('find').innerHTML = e.target.value

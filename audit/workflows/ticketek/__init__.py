@@ -19,7 +19,7 @@ from urllib.parse import parse_qs, urlparse
 from stagehand import Page, Stagehand
 
 from ...config import Settings
-from ...core import BROWSER_ERRORS, ITEM_FIELDS, SiteResult, Status, slug, write_csv
+from ...core import BROWSER_ERRORS, ITEM_FIELDS, Item, SiteResult, Status, slug, write_csv
 from ...page import settle, shot, wait_for_render
 from ...workflow import Workflow
 from . import pricing
@@ -31,10 +31,13 @@ from .flow import (
     choose_option,
     choose_session,
     dismiss_ticketek_popups,
+    dropdown_sessions,
     find_event,
     hold_tickets,
     open_session,
+    other_sessions,
     read_event,
+    return_to_event,
     walk_to_payment,
 )
 from .models import CheckoutDetails, PriceOption, Session, TicketekResult
@@ -47,6 +50,9 @@ SAFETY_PROMPT = (
     "'Complete purchase', 'Place order', 'Buy now'). Never sign in, sign up, create an account or join a membership."
 )
 ANY_SESSION = Session(date="the next available date", venue=None, status="on_sale", from_price=None)
+# Sessions tried in all when the one chosen has no tickets left ("There aren't enough tickets ..."); each try costs
+# a few model calls, so a long run of sold out dates is cut short.
+MAX_SESSION_TRIES = 4
 
 
 async def read_payment_page(stagehand: Stagehand, page: Page, result: TicketekResult) -> CheckoutDetails:
@@ -144,22 +150,36 @@ class TicketekWorkflow(Workflow):
                 wanted = f" matching '{args.session}'" if args.session else ""
                 result.fail(Status.NO_ITEMS_FOUND, f"No session on sale{wanted}")
                 return
-            result.session, result.venue = session.date, session.venue
-            log.info(f"  Session: {session.date} {session.venue or ''} ({session.status})")
 
-            options = await open_session(stagehand, page, session)
-            await shot(page, out / "tickets.png")
-            write_csv(out / "ticket_options.csv", list(PriceOption.model_fields),
-                      [o.model_dump() for o in options.options])  # fmt: skip
-            result.cheapest_offered = cheapest_offered(options.options)
-            option = choose_option(options.options)
-            if option is None:
-                result.fail(Status.NO_ITEMS_FOUND, "No tickets available for the session")
-                return
-
-            log.info(f"  Holding {args.tickets} x {option.area or ''} {option.price_type or ''} ({option.price})")
-            item = await hold_tickets(stagehand, page, option, args.tickets)
-            item["price_basis"] = options.price_basis
+            tried: list[Session] = []
+            event_url = result.shop_url
+            while True:
+                if tried:  # the last session had no tickets: go back and pick another date or venue
+                    await return_to_event(page, event_url, session)
+                tried.append(session)
+                result.session, result.venue = session.date, session.venue
+                log.info(f"  Session: {session.date} {session.venue or ''} ({session.status})")
+                item, no_tickets = await self.try_session(stagehand, page, result, session)
+                if no_tickets is None:
+                    break
+                result.sessions_tried.append({"date": session.date, "venue": session.venue, "reason": no_tickets})
+                # The date dropdown can list performances the event page's list left out; the date it shows is
+                # the one just tried, however differently the event page wrote it
+                listed, shown = await dropdown_sessions(page)
+                if shown:
+                    tried.append(shown)
+                fallback = event.sessions + listed
+                remaining = other_sessions(fallback, tried, args.session)
+                if not remaining or len(result.sessions_tried) >= MAX_SESSION_TRIES:
+                    if item is not None:
+                        result.items.append(item)
+                    stopped = (
+                        "no other session to try" if not remaining else f"tried {len(result.sessions_tried)} sessions"
+                    )
+                    result.fail(Status.NO_ITEMS_FOUND, f"{no_tickets} ({stopped})")
+                    return
+                session = remaining[0]
+                log.warning(f"  {no_tickets}; trying {session.date} {session.venue or ''} instead")
             result.items.append(item)
             if item["status"] != "added":
                 result.fail(Status.ADD_TO_CART_FAILED, "The tickets could not be held")
@@ -180,6 +200,29 @@ class TicketekWorkflow(Workflow):
             self.conclude(result, lambda: pricing.compare_prices(result, checkout))
             with contextlib.suppress(*BROWSER_ERRORS):  # the browser may be gone; the URL is a nicety
                 result.checkout_url = await page.url()
+
+    async def try_session(
+        self, stagehand: Stagehand, page: Page, result: TicketekResult, session: Session
+    ) -> tuple[Item | None, str | None]:
+        """Open `session` and hold the tickets. Returns the item, and why the session has no tickets for us
+        (None when it had some, held or not), so the caller can try another date or venue."""
+        args, out = self.args, result.out_dir
+        options = await open_session(stagehand, page, session)
+        await shot(page, out / "tickets.png")
+        write_csv(out / "ticket_options.csv", list(PriceOption.model_fields),
+                  [o.model_dump() for o in options.options])  # fmt: skip
+        result.cheapest_offered = cheapest_offered(options.options)
+        option = choose_option(options.options)
+        if option is None:
+            return None, "No tickets available for the session"
+
+        log.info(f"  Holding {args.tickets} x {option.area or ''} {option.price_type or ''} ({option.price})")
+        item = await hold_tickets(stagehand, page, option, args.tickets)
+        item["price_basis"] = options.price_basis
+        if item["status"] == "unavailable":
+            await shot(page, out / f"unavailable-{len(result.sessions_tried) + 1}.png")
+            return item, f"Not enough tickets for {session.date}: {item['unavailable_message']}"
+        return item, None
 
     def target_key(self, url: str, result: SiteResult) -> str:
         """The event and session audited, so different events started from the homepage keep separate rows."""

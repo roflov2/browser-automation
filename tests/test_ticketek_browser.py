@@ -98,7 +98,7 @@ def test_a_real_mouse_click_is_vetted_first(seen):
 async def pick_dates(chrome: str, port: int) -> dict:
     from stagehand import Stagehand, local_browser
 
-    from audit.workflows.ticketek.flow import choose_date
+    from audit.workflows.ticketek.flow import choose_date, dropdown_sessions, not_enough_tickets
     from audit.workflows.ticketek.models import Session
 
     seen: dict = {}
@@ -117,7 +117,11 @@ async def pick_dates(chrome: str, port: int) -> dict:
                     "chosen": await js(page, "() => window.chosen", default=[]),
                     "found": await js(page, "() => window.found"),
                     "resale": await js(page, "() => window.resale"),
+                    "listed": await dropdown_sessions(page),
+                    "not_enough": await not_enough_tickets(page),
                 }
+            await page.goto(f"http://127.0.0.1:{port}/ticketek-event.html?soldout=1")
+            seen["sold_out"] = {"not_enough": await not_enough_tickets(page), "listed": await dropdown_sessions(page)}
     finally:
         await stagehand.close()
         await browser.close()
@@ -145,3 +149,15 @@ def test_an_unmatched_date_falls_back_to_the_first_date(dates):
     got = dates["Sat 14 Mar 2027"]
     assert got["clicked"] and got["chosen"] == ["s1"] and got["found"] == "s1"
     assert got["resale"] is None
+
+
+def test_the_dropdown_dates_are_listed_with_the_one_chosen(dates):
+    listed, shown = dates["Wed 02 Dec 2026, 7:00 pm"]["listed"]
+    assert [s.date for s in listed] == ["Tue 01 Dec 2026 7:00PM", "Wed 02 Dec 2026 7:00PM"]
+    assert shown.date == "Wed 02 Dec 2026 7:00PM"
+    assert dates["sold_out"]["listed"][1] is None  # nothing chosen yet: '---- Select date ----'
+
+
+def test_the_not_enough_tickets_message_is_read_only_when_shown(dates):
+    assert dates["Wed 02 Dec 2026, 7:00 pm"]["not_enough"] is None
+    assert dates["sold_out"]["not_enough"] == ("There aren't enough tickets to meet your request right now.")

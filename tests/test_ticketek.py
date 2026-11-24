@@ -53,6 +53,25 @@ def test_a_session_with_no_status_read_may_still_be_bookable():
     assert no_status.status is None
 
 
+def test_after_a_session_runs_out_every_other_date_and_venue_is_tried_the_one_asked_for_first():
+    sessions = [session("Fri 04 Jun 2027 6:30PM"), session("Sun 06 Jun 2027 4:00PM", "sold_out"),
+                session("Sun 06 Jun 2027 6:30PM", None), session("Sat 05 Jun 2027 6:30PM", venue="Llewellyn Hall, Canberra"),
+                session("Mon 07 Jun 2027 7:00PM", "selling_fast")]  # fmt: skip
+    tried = [sessions[0]]
+    assert [s.date for s in flow.other_sessions(sessions, tried, None)] == [
+        "Sun 06 Jun 2027 6:30PM", "Sat 05 Jun 2027 6:30PM", "Mon 07 Jun 2027 7:00PM"]  # fmt: skip
+    assert flow.other_sessions(sessions, tried, "Canberra")[0].venue == "Llewellyn Hall, Canberra"
+    assert flow.other_sessions(sessions, sessions, None) == []
+
+
+def test_the_same_performance_read_two_ways_is_one_session():
+    dropdown = Session(date="Fri 04 Jun 2027 6:30PM", venue=None, status=None, from_price=None)
+    assert flow.same_session(session("Fri 4 Jun 2027, 6:30 pm"), dropdown)
+    assert not flow.same_session(session("Sun 06 Jun 2027 4:00PM"), session("Sun 06 Jun 2027 6:30PM"))
+    assert not flow.same_session(session("Fri 04 Jun 2027 6:30PM"), session("Fri 04 Jun 2027 6:30PM", venue="Perth"))
+    assert flow.other_sessions([dropdown], [session("Fri 04 Jun 2027 6:30pm")], None) == []
+
+
 def test_choose_option_prefers_the_cheapest_standard_adult_ticket():
     options = [option("Child", "$49.90"), option("Concession", "$59.90"), option("Adult", "$129.90"),
                option("Adult", "$89.90", area="C Reserve"), option("Adult", "$69.90", area="D Reserve", available=False),
