@@ -213,6 +213,11 @@ def other_sessions(sessions: list[Session], tried: list[Session], hint: str | No
     return candidates
 
 
+def fewer_tickets(quantity: int) -> int:
+    """The quantity to try after `quantity` could not be held: half, rounded up (8 -> 4 -> 2 -> 1, 3 -> 2 -> 1)."""
+    return max(1, (quantity + 1) // 2)
+
+
 # The performance dates offered in the date dropdown of the event or ticket selection page, as Sessions to try
 # when the event page's list was not read (or the chosen one has no tickets left).
 JS_LIST_DATES = r"""() => {

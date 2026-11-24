@@ -109,6 +109,7 @@ def compare_prices(result: TicketekResult, checkout: CheckoutDetails | None) -> 
         "advertised_price_note": result.advertised_price_note,
         "cheapest_ticket_offered": result.cheapest_offered,
         "items_added": len(added),
+        "tickets_requested": (result.search or {}).get("tickets"),
         "tickets": sum(i.get("quantity") or 1 for i in added),
         "expected_subtotal": expected,
         "cart_subtotal_display": added[0].get("cart_total_display") if added else None,
