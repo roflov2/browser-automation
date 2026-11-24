@@ -1,7 +1,0 @@
-<!doctype html>
-<html><head><meta charset="utf-8"><title>Self-submitting page</title></head>
-<body>
-<!-- Like Shopify's checkout: the page's own script submits a form as it loads, with no button in it -->
-<form id="f" action="/static.html" method="get"><input type="hidden" name="token" value="1"></form>
-<script>window.addEventListener('load', () => document.getElementById('f').requestSubmit());</script>
-</body></html>

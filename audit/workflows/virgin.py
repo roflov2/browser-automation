@@ -17,6 +17,7 @@ from datetime import date, datetime, timedelta
 from pydantic import BaseModel, Field
 from stagehand import Page, Stagehand
 
+from ..actions import llm_act
 from ..config import Settings
 from ..core import (
     BROWSER_ERRORS,
@@ -42,7 +43,6 @@ from ..core import (
     write_csv,
 )
 from ..page import dismiss_popups, fingerprint, js, settle, shot, wait_for_render
-from ..safety import current_guard, safe_act
 from ..workflow import Workflow
 
 log = logging.getLogger(__name__)
@@ -62,7 +62,7 @@ JS_CLOSE_SEARCH_DIALOG = r"""() => {
         const buttons = Array.from(d.querySelectorAll('button'));
         const b = buttons.find(x => /^(cancel|close)$/i.test(clean(txt(x))))
             || d.querySelector('button[aria-label*="close" i]');
-        if (b && guardAllows(b)) return safeClick(b);
+        if (b) return clickEl(b);
         pressEsc();
         return true;
     }
@@ -354,9 +354,8 @@ async def search_flights(stagehand: Stagehand, page: Page, trip: Trip) -> None:
             if state.on_results_page:
                 return
             break
-        step = await safe_act(
+        step = await llm_act(
             stagehand,
-            page,
             f"Take the single next action needed to search for {goal} using the flight search form. "
             f"Current form state: trip type={state.trip_type}, from={state.origin}, to={state.destination}, "
             f"date={state.depart_date}, guests={state.guests}, using points={state.using_points}. "
@@ -414,9 +413,8 @@ async def select_flight(stagehand: Stagehand, page: Page, flight: Flight) -> dic
     selected = None
     for _ in range(4):
         await close_search_dialog(page)
-        step = await safe_act(
+        step = await llm_act(
             stagehand,
-            page,
             f"Take the single next action to select {described} with its CHEAPEST fare (usually the first/lowest fare "
             "brand such as 'Lite' in Economy). If the fare options for that flight are not visible yet, click the "
             "flight's lowest price to reveal them; if the 'Choose a fare' dialog is open, click 'Select' on the "
@@ -472,9 +470,8 @@ async def fill_passenger_details(stagehand: Stagehand, page: Page, passenger: Pa
                 continue
             instruction, variables = planned
             try:
-                step = await safe_act(
+                step = await llm_act(
                     stagehand,
-                    page,
                     instruction,
                     follow_up=not variables,  # a custom dropdown needs opening before the option can be picked
                     **({"variables": variables} if variables else {}),
@@ -515,7 +512,7 @@ async def next_booking_action(
             f"The page shows these errors: {'; '.join(state.validation_errors[:3])}. Fix the first one if it is a "
             f"missing choice or field (never by adding a paid extra). Otherwise: {instruction}"
         )
-    step = await safe_act(stagehand, page, f"{instruction} {NO_RESEARCH}")
+    step = await llm_act(stagehand, f"{instruction} {NO_RESEARCH}")
     log.info(f"    {step.description}")
     await settle(page, SETTLE_MS)
 
@@ -579,7 +576,6 @@ async def walk_to_payment(stagehand: Stagehand, page: Page, passenger: Passenger
         if state.blocked_reason:
             raise Blocked(state.blocked_reason)
         if state.is_payment_page or step_type == "payment":
-            await current_guard().freeze(page)  # hard stop: the payment page is only read from here on
             return True
         if step_type == "confirmation":
             raise FlowChanged("Reached a confirmation page unexpectedly; stopping")

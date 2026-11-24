@@ -14,6 +14,7 @@ from pydantic import BaseModel
 from stagehand import Page, Stagehand
 
 from ... import page as page_helpers
+from ...actions import llm_act, try_act
 from ...core import (
     BROWSER_ERRORS,
     Blocked,
@@ -29,7 +30,6 @@ from ...core import (
     slug,
 )
 from ...page import is_sso_redirect, pause_for_login, settle, shot, wait_for_render, wait_out_sso
-from ...safety import Mode, current_guard, safe_act, try_act
 from .models import (
     AddressAndFeedState,
     CartAndCheckoutState,
@@ -226,7 +226,7 @@ JS_SET_ADDRESS = r"""({ target, tokens }) => {
                        '[data-testid*="address" i] li', '[role="dialog"] ul li']) {
         for (const el of document.querySelectorAll(sel)) {
             if (vis(el, 80, 20) && hasTokens(txt(el))) {
-                safeClick(el);
+                clickEl(el);
                 return 'Clicked autocomplete suggestion: ' + txt(el).split('\n')[0];
             }
         }
@@ -236,9 +236,9 @@ JS_SET_ADDRESS = r"""({ target, tokens }) => {
     const openDialogs = dialogs().filter(d => vis(d, 200, 150));
     for (const d of openDialogs) {
         const confirmBtn = Array.from(d.querySelectorAll('button')).find(
-            b => vis(b, 60, 25) && /^(save( and continue)?|done|update|confirm( address)?)$/i.test(clean(txt(b))) && guardAllows(b));
+            b => vis(b, 60, 25) && /^(save( and continue)?|done|update|confirm( address)?)$/i.test(clean(txt(b))));
         if (confirmBtn) {
-            safeClick(confirmBtn);
+            clickEl(confirmBtn);
             return 'Clicked address confirmation button: ' + clean(txt(confirmBtn));
         }
     }
@@ -253,9 +253,9 @@ JS_SET_ADDRESS = r"""({ target, tokens }) => {
         if (inp.value && !hasTokens(inp.value)) {
             const box = inp.closest('[role="dialog"], [aria-modal="true"]') || inp.parentElement?.parentElement;
             const clear = box?.querySelector('button[aria-label*="clear" i], button[aria-label*="reset" i]');
-            if (clear) safeClick(clear);
+            if (clear) clickEl(clear);
         }
-        safeFill(inp, target);
+        fillInput(inp, target);
         return 'Typed target address into input: ' + target;
     }
 
@@ -270,7 +270,7 @@ JS_SET_ADDRESS = r"""({ target, tokens }) => {
         'header button, header a, [data-testid*="location" i], [data-testid*="address" i], button[aria-label*="deliver" i]')) {
         const label = (txt(btn) + ' ' + (btn.getAttribute('aria-label') || '')).trim();
         if (vis(btn, 50, 20) && /deliver|address|now|•|\d+\s+[a-z]/i.test(label) && !/cart|bag|sign\s*in|log\s*in|search/i.test(label)) {
-            safeClick(btn);
+            clickEl(btn);
             return 'Clicked header address button: ' + txt(btn).split('\n')[0];
         }
     }
@@ -287,17 +287,17 @@ JS_DISMISS_LOCATION_PROMPT = r"""({ addressConfirmed }) => {
     const EDITS = /edit|delete|remove|change|add (a |new )?address|\$\s*\d/i;
     const disabled = b => b.disabled || b.getAttribute('aria-disabled') === 'true';
     const buttons = d => Array.from(d.querySelectorAll('button, [role="button"]')).filter(b => vis(b, 20, 15));
-    const closeControl = d => buttons(d).find(b => guardAllows(b) && (
+    const closeControl = d => buttons(d).find(b => (
         /close|dismiss/i.test(b.getAttribute('aria-label') || '') || (!clean(txt(b)) && b.querySelector('svg'))));
 
     const prompt = locationPrompt();
     if (prompt) {
         const all = buttons(prompt);
-        const skip = all.find(b => SKIP.test(clean(txt(b))) && !disabled(b) && guardAllows(b));
-        if (skip) { safeClick(skip); return 'clicked ' + clean(txt(skip)); }
-        const saves = all.filter(b => SAVE.test(clean(txt(b))) && guardAllows(b));
+        const skip = all.find(b => SKIP.test(clean(txt(b))) && !disabled(b));
+        if (skip) { clickEl(skip); return 'clicked ' + clean(txt(skip)); }
+        const saves = all.filter(b => SAVE.test(clean(txt(b))));
         const save = saves.find(b => !disabled(b));
-        if (save) { safeClick(save); return 'clicked ' + clean(txt(save)); }
+        if (save) { clickEl(save); return 'clicked ' + clean(txt(save)); }
         if (saves.length || all.some(b => SKIP.test(clean(txt(b))))) {
             // Save waits for a building type: choose the first one offered
             for (const el of prompt.querySelectorAll('[role="radio"], input[type="radio"], [role="option"], li, button')) {
@@ -306,13 +306,12 @@ JS_DISMISS_LOCATION_PROMPT = r"""({ addressConfirmed }) => {
                 if (!vis(target, 5, 5) || SKIP.test(label) || SAVE.test(label) || EDITS.test(label)) continue;
                 if (el.matches('li, button') && (!label || el.querySelector('button, li, input'))) continue;
                 if ((el.checked || el.getAttribute('aria-checked') === 'true' || el.getAttribute('aria-selected') === 'true')) continue;
-                if (!guardAllows(target)) continue;
-                safeClick(target);
+                clickEl(target);
                 return 'chose option ' + (label || '(unlabelled)');
             }
         }
         const close = closeControl(prompt);
-        if (close) { safeClick(close); return 'clicked close (X)'; }
+        if (close) { clickEl(close); return 'clicked close (X)'; }
         return 'STUCK: ' + clean(txt(prompt)).slice(0, 160);
     }
 
@@ -324,7 +323,7 @@ JS_DISMISS_LOCATION_PROMPT = r"""({ addressConfirmed }) => {
             || (location.href.includes('mod=locationManager') && d.querySelector('input'));
         if (!isAddresses) continue;
         const close = closeControl(d);
-        if (close) { safeClick(close); return 'closed the Addresses dialog'; }
+        if (close) { clickEl(close); return 'closed the Addresses dialog'; }
     }
     return null;
 }"""
@@ -371,7 +370,7 @@ JS_CLICK_MENU_ITEM = r"""({ name, price }) => {
     const card = cards.find(c => cents && txt(c).includes(cents)) || cards[0];
     if (!card) return null;
     card.scrollIntoView({ block: 'center', behavior: 'instant' });
-    return safeClick(card) ? clean(txt(card)).slice(0, 80) : null;
+    return clickEl(card) ? clean(txt(card)).slice(0, 80) : null;
 }"""
 
 # Why the open store page cannot take an order now (closed, opens later, scheduled orders only, or outside the
@@ -460,7 +459,7 @@ JS_OPEN_CART = r"""() => {
     const btn = cartButtons().find(el => vis(el, 20, 20))
         || Array.from(document.querySelectorAll('header button')).find(
             b => /\d+\s*item/i.test(txt(b) + ' ' + (b.getAttribute('aria-label') || '')));
-    return !!btn && safeClick(btn);
+    return !!btn && clickEl(btn);
 }"""
 
 CART_DRAWER_JS = r"""
@@ -524,7 +523,7 @@ JS_CLEAR_CART_STEP = r"""() => {
     for (const d of dialogs().filter(d => vis(d, 150, 80) && !/subtotal|checkout/i.test(d.innerText || '')).reverse()) {
         const yes = Array.from(d.querySelectorAll('button')).find(
             b => vis(b, 30, 20) && /^(remove( item)?|delete( item)?|clear( cart)?|empty cart|yes,? (remove|clear|delete)\b.*)$/i.test(clean(txt(b))));
-        if (yes) { safeClick(yes); return 'confirm'; }
+        if (yes) { clickEl(yes); return 'confirm'; }
     }
 
     // 1b. An open cart menu (from the '...' button): its 'Clear cart' / 'Delete cart' entry
@@ -532,7 +531,7 @@ JS_CLEAR_CART_STEP = r"""() => {
         '[role="menu"] *, [role="menuitem"], [role="listbox"] *, [role="option"], [data-baseweb="popover"] *, [role="dialog"] li, [role="dialog"] button'));
     const entry = entries.find(e => vis(e, 30, 12) && CLEAR_CART.test(clean(txt(e)))
         && !Array.from(e.children).some(c => CLEAR_CART.test(clean(txt(c)))));
-    if (entry) { safeClick(entry.closest('button, [role="menuitem"], [role="option"], li') || entry); return 'menu_clear'; }
+    if (entry) { clickEl(entry.closest('button, [role="menuitem"], [role="option"], li') || entry); return 'menu_clear'; }
 
     // Scope strictly to the open cart drawer so page/header buttons are never clicked
     const drawer = cartDrawer();
@@ -542,12 +541,12 @@ JS_CLEAR_CART_STEP = r"""() => {
     // 2. A 'Clear cart' / 'Remove all' button
     const clear = buttons.find(b => /^(clear cart|empty cart|remove all|clear all)$/i.test(clean(txt(b)))
         || /^(clear|empty) cart$/i.test(ctrlLabel(b).trim()));
-    if (clear) { safeClick(clear); return 'clear_button'; }
+    if (clear) { clickEl(clear); return 'clear_button'; }
 
     // 3. A quantity <select> that can be set to 0 / 'Remove'
     for (const sel of drawer.querySelectorAll('select')) {
         const zero = Array.from(sel.options).find(o => o.value === '0' || /^remove$/i.test((o.text || '').trim()));
-        if (zero && sel.value !== zero.value) { safeSelect(sel, zero.value); return 'select_zero'; }
+        if (zero && sel.value !== zero.value) { selectOption(sel, zero.value); return 'select_zero'; }
     }
 
     // 4. A labelled remove / delete / trash / decrease control (not the '+' next to it)
@@ -555,7 +554,7 @@ JS_CLEAR_CART_STEP = r"""() => {
         const label = ctrlLabel(b) + ' ' + clean(txt(b));
         return REMOVE.test(label) && !INCREASE.test(label);
     });
-    if (labelled) { safeClick(labelled); return 'remove_button'; }
+    if (labelled) { clickEl(labelled); return 'remove_button'; }
 
     // 5. An unlabelled icon-only button in a cart row: the first one of the quantity stepper is the
     //    trash can (quantity 1) or the '-' (quantity > 1). The '+' comes after it, so never pick the last
@@ -564,13 +563,13 @@ JS_CLEAR_CART_STEP = r"""() => {
         const icons = Array.from(row.querySelectorAll('button')).filter(
             b => vis(b, 8, 8) && !b.disabled && !clean(txt(b)).replace(/[−–-]/g, '') && b.querySelector('svg, img')
                 && !INCREASE.test(ctrlLabel(b)));
-        if (icons.length) { safeClick(icons[0]); return 'stepper_button'; }
+        if (icons.length) { clickEl(icons[0]); return 'stepper_button'; }
     }
 
     // 6. The drawer's '...' menu, which holds 'Clear cart' (opened at most a few times per page)
     window.__auditCartMenus = (window.__auditCartMenus || 0) + 1;
     const more = window.__auditCartMenus <= 3 && buttons.find(b => MORE.test(ctrlLabel(b) + ' ' + clean(txt(b))));
-    if (more) { safeClick(more); return 'menu_open'; }
+    if (more) { clickEl(more); return 'menu_open'; }
     return null;
 }"""
 
@@ -589,7 +588,7 @@ JS_CLOSE_CART_DRAWER = r"""how => {
             && b.getBoundingClientRect().top - top < 80
             && !MORE.test(ctrlLabel(b)) && !INCREASE.test(ctrlLabel(b)) && !REMOVE.test(ctrlLabel(b)));
         const btn = labelled || icon;
-        if (btn && safeClick(btn)) return labelled ? 'close_button' : 'x_icon';
+        if (btn && clickEl(btn)) return labelled ? 'close_button' : 'x_icon';
         return null;
     }
     // The backdrop: a point on the side of the viewport away from the drawer, never a control
@@ -597,7 +596,7 @@ JS_CLOSE_CART_DRAWER = r"""how => {
     const x = r.left > 120 ? r.left / 2 : (r.right + window.innerWidth) / 2;
     const el = document.elementFromPoint(x, window.innerHeight / 2);
     if (!el || drawer.contains(el) || el.closest(AUDIT_ACTIONABLE)) return null;
-    return safeClick(el) ? 'backdrop' : null;
+    return clickEl(el) ? 'backdrop' : null;
 }"""
 
 # What a cart clear that left items behind leaves for the run folder: the open panel's HTML (cut short)
@@ -612,8 +611,8 @@ JS_CONFIRM_NEW_ORDER = r"""() => {
     for (const d of dialogs().filter(d => vis(d, 150, 80)).reverse()) {
         if (!NEW_ORDER_PROMPT.test(clean(txt(d)))) continue;
         const yes = Array.from(d.querySelectorAll('button')).find(
-            b => vis(b, 30, 20) && NEW_ORDER_YES.test(clean(txt(b))) && guardAllows(b));
-        if (yes && safeClick(yes)) return clean(txt(yes));
+            b => vis(b, 30, 20) && NEW_ORDER_YES.test(clean(txt(b))));
+        if (yes && clickEl(yes)) return clean(txt(yes));
     }
     return null;
 }"""
@@ -644,7 +643,7 @@ JS_SELECT_REQUIRED = r"""() => {
         }
         const target = best.closest('label') || best;
         target.scrollIntoView({ block: 'center', behavior: 'instant' });
-        safeClick(target);
+        clickEl(target);
         if (bestLabel) chosen.push(bestLabel);
     }
     return chosen;
@@ -654,14 +653,14 @@ JS_CLICK_ADD = r"""() => {
     const btn = addButton();
     if (!btn) return { clicked: false, price: null };
     const m = txt(btn).match(/(A?\$[\d.,]+)/);
-    return { clicked: safeClick(btn), price: m ? m[1] : null };
+    return { clicked: clickEl(btn), price: m ? m[1] : null };
 }"""
 
 # Click the cart's checkout button. Returns what was clicked ({tag, text, href, inDrawer}), or null.
 JS_CLICK_CHECKOUT = r"""() => {
     // Exact labels only: 'Checkout · Pay $54.20' or 'Checkout with PayPal' must never match
     const el = Array.from(document.querySelectorAll('a[href*="/checkout"], button')).find(
-        e => /^(Go to checkout|Checkout|Continue to checkout)$/i.test(clean(txt(e))) && guardAllows(e));
+        e => /^(Go to checkout|Checkout|Continue to checkout)$/i.test(clean(txt(e))));
     if (!el) return null;
     const drawer = cartDrawer();
     const clicked = {
@@ -670,7 +669,7 @@ JS_CLICK_CHECKOUT = r"""() => {
         href: (el.closest('a') || el).getAttribute('href') || null,
         inDrawer: !!drawer && drawer.contains(el),
     };
-    return safeClick(el) ? clicked : null;
+    return clickEl(el) ? clicked : null;
 }"""
 
 JS_DECLINE_UPSELL = r"""() => {
@@ -679,13 +678,13 @@ JS_DECLINE_UPSELL = r"""() => {
     const DECLINE = /^(skip|no,? thanks?|not now|maybe later|continue( to checkout)?|go to checkout|next|done)$/i;
     for (const d of dialogs().filter(d => vis(d, 200, 150)).reverse()) {
         const closeBtn = d.querySelector('button[aria-label*="close" i]');
-        if (closeBtn && vis(closeBtn, 20, 20) && !closeBtn.form && guardAllows(closeBtn)) {
-            safeClick(closeBtn);
+        if (closeBtn && vis(closeBtn, 20, 20) && !closeBtn.form) {
+            clickEl(closeBtn);
             return 'Close (X)';
         }
         const btn = Array.from(d.querySelectorAll('button, a')).find(
-            b => vis(b, 30, 20) && !b.form && DECLINE.test(clean(txt(b))) && guardAllows(b));
-        if (btn) { safeClick(btn); return clean(txt(btn)); }
+            b => vis(b, 30, 20) && !b.form && DECLINE.test(clean(txt(b))));
+        if (btn) { clickEl(btn); return clean(txt(btn)); }
     }
     return null;
 }"""
@@ -804,7 +803,7 @@ async def close_item_modal(stagehand: Stagehand, page: Page) -> None:
     await js(page, "() => { pressEsc(); closeDialog(); }")
     await settle(page, 1000)
     if await is_item_modal_open(page):
-        await try_act(stagehand, page, "Click the 'X' close button in the top-left corner of the open item modal.")
+        await try_act(stagehand, "Click the 'X' close button in the top-left corner of the open item modal.")
         await settle(page, 1000)
 
 
@@ -949,7 +948,7 @@ async def clear_existing_cart(
             llm_steps += 1
             if llm_steps > MAX_CART_CLEAR_LLM_STEPS:
                 break
-            taken = "llm" if await try_act(stagehand, page, CLEAR_CART_INSTRUCTION) else "llm_failed"
+            taken = "llm" if await try_act(stagehand, CLEAR_CART_INSTRUCTION) else "llm_failed"
         await settle(page, 1000)
         steps.append({"step": taken, "left": await items_left_in_cart(page)})
 
@@ -1078,7 +1077,7 @@ async def confirm_address_step(stagehand: Stagehand, page: Page, address: str, u
         log.info(
             f"  Header shows previous address '{state.displayed_address}' (expected '{address}'); updating delivery address..."
         )
-    act_res = await safe_act(stagehand, page, address_instruction(state, address))
+    act_res = await llm_act(stagehand, address_instruction(state, address))
     log.info(f"  Address step {step_no}: {act_res.description}")
     await settle(page, 2200)
     return False
@@ -1176,9 +1175,8 @@ async def open_store_from_feed(
         await settle(page, 2800)
         await dismiss_location_prompt(page, result.out_dir, address_confirmed=True)
     else:
-        await safe_act(
+        await llm_act(
             stagehand,
-            page,
             f"Click on the restaurant card '{chosen.name}' to open its menu page."
             if chosen
             else "Scroll down and click on the first open restaurant card (not a grocery store).",
@@ -1305,9 +1303,8 @@ async def open_item_modal(stagehand: Stagehand, page: Page, menu_item: MenuItem,
         if await item_popup_open_without_add(page):  # clicking the menu behind the popup would not help
             return False
 
-    step = await safe_act(
+    step = await llm_act(
         stagehand,
-        page,
         f"Click on the menu item '{menu_item.name}' (priced around {menu_item.price}) to open its customization modal.",
     )
     log.info(f"    Open item: {step.description}")
@@ -1319,8 +1316,8 @@ async def open_item_modal(stagehand: Stagehand, page: Page, menu_item: MenuItem,
     if await item_popup_open_without_add(page):
         return False
 
-    retry = await safe_act(
-        stagehand, page, f"Scroll to and click directly on the menu item title '{menu_item.name}' to open its popup."
+    retry = await llm_act(
+        stagehand, f"Scroll to and click directly on the menu item title '{menu_item.name}' to open its popup."
     )
     log.info(f"    Retry open item: {retry.description}")
     await settle(page, 1800)
@@ -1356,9 +1353,8 @@ async def modal_round(
 
     if modal_state.has_unmet_required_choices and modal_state.next_required_group:
         cheapest = modal_state.cheapest_option_in_required_group
-        act_mod = await safe_act(
+        act_mod = await llm_act(
             stagehand,
-            page,
             f"In the required section '{modal_state.next_required_group}', "
             f"select '{cheapest or 'the first $0 / cheapest option'}'.",
         )
@@ -1372,8 +1368,8 @@ async def modal_round(
     if add["clicked"]:
         log.info(f"    Clicked Add to order button ({item['selected_price_display'] or menu_item.price})")
     else:
-        add_act = await safe_act(
-            stagehand, page, "Click the black 'Add 1 to order' / 'Add to order' button at the bottom of the item modal."
+        add_act = await llm_act(
+            stagehand, "Click the black 'Add 1 to order' / 'Add to order' button at the bottom of the item modal."
         )
         log.info(f"    Click Add: {add_act.description}")
     await settle(page, 1800)
@@ -1497,8 +1493,8 @@ async def read_checkout_step(
 async def decline_upsell(stagehand: Stagehand, page: Page, declines: int) -> None:
     """Dismiss an upsell popup without adding anything: DOM first, then the LLM, then just close the dialog.
 
-    On a checkout URL, avoid in-page JS clicks (Uber Eats' checkout page submits background forms on load
-    that trip the checkout submit guard); instead dismiss via Escape / stripping `mod=magicUpsell`.
+    On a checkout URL, avoid in-page JS clicks (the 'Place order' button is on that page); instead dismiss via
+    Escape / stripping `mod=magicUpsell`.
     """
     curr_url = await page.url()
     if "/checkout" in curr_url:
@@ -1519,10 +1515,9 @@ async def decline_upsell(stagehand: Stagehand, page: Page, declines: int) -> Non
     clicked = await js(page, JS_DECLINE_UPSELL)
     if clicked:
         log.info(f"    Declining upsell: clicked '{clicked}'")
-    elif declines <= 2 and current_guard().mode_for(curr_url) is Mode.NORMAL:
-        act_res = await safe_act(
+    elif declines <= 2:
+        act_res = await llm_act(
             stagehand,
-            page,
             "An upsell popup ('Complete your meal', 'Add more items', 'Try Uber One') is blocking checkout. "
             "Dismiss it WITHOUT adding anything: click 'Skip', 'No thanks', 'Not now', 'Next' or "
             "'Continue to checkout', or its X close button. Never start an Uber One trial or place the order.",
@@ -1544,9 +1539,8 @@ async def open_cart_or_checkout(stagehand: Stagehand, page: Page, cart_visible: 
         if await open_cart_drawer(page):
             log.info("    Opening cart via DOM click on header cart button")
         else:
-            act_res = await safe_act(
+            act_res = await llm_act(
                 stagehand,
-                page,
                 "Click the green cart button in the top-right header (or 'View cart') to open the cart drawer.",
             )
             log.info(f"    Opening cart: {act_res.description}")
@@ -1560,9 +1554,8 @@ async def open_cart_or_checkout(stagehand: Stagehand, page: Page, cart_visible: 
             f"href={clicked.get('href')} in_drawer={clicked.get('inDrawer')}"
         )
     else:
-        act_res = await safe_act(
+        act_res = await llm_act(
             stagehand,
-            page,
             "Click the 'Go to checkout' / 'Checkout' button in the cart drawer. Never click 'Place order' or 'Pay'.",
         )
         log.info(f"    Proceeding to checkout via act: {act_res.description}")
@@ -1642,7 +1635,6 @@ async def walk_to_checkout(
         upsell = state.is_upsell_modal or state.step_type == "upsell_modal"
         has_fees = state.delivery_fee is not None or state.service_fee is not None
         if (state.is_checkout_page or "/checkout" in curr_url) and (has_fees or not upsell):
-            await current_guard().freeze(page)  # hard stop: the page with 'Place order' is only read from here on
             await shot(page, out / "checkout.png")
             return cart_snapshot, state
 

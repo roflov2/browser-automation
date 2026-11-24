@@ -6,7 +6,6 @@ from pathlib import Path
 
 import pytest
 
-from audit import safety
 from audit.workflows.ubereats.store import (
     JS_DISMISS_LOCATION_PROMPT,
     confirm_address_step,
@@ -49,43 +48,41 @@ async def run_steps(chrome: str, port: int) -> dict:
     open_dialog = "() => Array.from(document.querySelectorAll('[role=\"dialog\"]')).map(d => d.id)"
     try:
         page = (await browser.context.pages())[0]
-        await safety.install(browser.context, page)
         no_model = NoModel()
 
         async def confirm(page) -> bool:
             return await confirm_address_step(no_model, page, ADDRESS, await page.url(), 1)  # type: ignore[arg-type]
 
-        with safety.active_guard():
-            await page.goto(base)
-            seen["skip_acted"] = await dismiss_location_prompt(page)
-            seen["skip_clicks"] = await js(page, "() => window.clicks")
-            seen["skip_dialogs"] = await js(page, open_dialog)
+        await page.goto(base)
+        seen["skip_acted"] = await dismiss_location_prompt(page)
+        seen["skip_clicks"] = await js(page, "() => window.clicks")
+        seen["skip_dialogs"] = await js(page, open_dialog)
 
-            await page.goto(f"{base}?noskip=1")
-            seen["save_acted"] = await dismiss_location_prompt(page)
-            seen["save_clicks"] = await js(page, "() => window.clicks")
-            seen["saved"] = await js(page, "() => window.saved")
-            seen["save_dialogs"] = await js(page, open_dialog)
+        await page.goto(f"{base}?noskip=1")
+        seen["save_acted"] = await dismiss_location_prompt(page)
+        seen["save_clicks"] = await js(page, "() => window.clicks")
+        seen["saved"] = await js(page, "() => window.saved")
+        seen["save_dialogs"] = await js(page, open_dialog)
 
-            await page.goto(f"{base}?stuck=1&pl={PL}")
-            seen["stuck_confirmed"] = await confirm(page)
-            seen["stuck_dialogs"] = await js(page, open_dialog)
+        await page.goto(f"{base}?stuck=1&pl={PL}")
+        seen["stuck_confirmed"] = await confirm(page)
+        seen["stuck_dialogs"] = await js(page, open_dialog)
 
-            await page.goto(f"{base}?pl={PL}")
-            seen["open_confirmed"] = await confirm(page)
-            seen["open_dialogs"] = await js(page, open_dialog)
+        await page.goto(f"{base}?pl={PL}")
+        seen["open_confirmed"] = await confirm(page)
+        seen["open_dialogs"] = await js(page, open_dialog)
 
-            for case in ("item", "cart"):
-                await page.goto(f"{base}?{case}=1")
-                seen[f"{case}_step"] = await js(page, JS_DISMISS_LOCATION_PROMPT, {"addressConfirmed": True})
-                seen[f"{case}_clicks"] = await js(page, "() => window.clicks")
-                seen[f"{case}_dialogs"] = await js(page, open_dialog)
+        for case in ("item", "cart"):
+            await page.goto(f"{base}?{case}=1")
+            seen[f"{case}_step"] = await js(page, JS_DISMISS_LOCATION_PROMPT, {"addressConfirmed": True})
+            seen[f"{case}_clicks"] = await js(page, "() => window.clicks")
+            seen[f"{case}_dialogs"] = await js(page, open_dialog)
 
-            await page.goto(f"{base}?addresses=1")
-            seen["addresses_unconfirmed"] = await js(page, JS_DISMISS_LOCATION_PROMPT, {"addressConfirmed": False})
-            seen["addresses_confirmed"] = await confirm(page)
-            seen["addresses_dialogs"] = await js(page, open_dialog)
-            seen["addresses_clicks"] = await js(page, "() => window.clicks")
+        await page.goto(f"{base}?addresses=1")
+        seen["addresses_unconfirmed"] = await js(page, JS_DISMISS_LOCATION_PROMPT, {"addressConfirmed": False})
+        seen["addresses_confirmed"] = await confirm(page)
+        seen["addresses_dialogs"] = await js(page, open_dialog)
+        seen["addresses_clicks"] = await js(page, "() => window.clicks")
         seen["model_calls"] = no_model.calls
     finally:
         await client.close()

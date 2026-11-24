@@ -32,7 +32,7 @@ from stagehand import (
     browserbase as stagehand_browserbase,
 )
 
-from . import safety
+from . import actions
 from .azure import open_azure_llm
 from .config import Settings
 from .core import (
@@ -44,7 +44,6 @@ from .core import (
     SiteResult,
     Status,
     StepTimeout,
-    UnsafeActionRefused,
     classify_failure,
     is_timeout,
     update_summary,
@@ -190,7 +189,7 @@ class RecordingStagehand:
         self._log.extractions = path
 
     async def extract(self, instruction: str, schema: type[BaseModel], **options: Any) -> Any:
-        options.setdefault("timeout", safety.LLM_TIMEOUT_MS)
+        options.setdefault("timeout", actions.LLM_TIMEOUT_MS)
         if self._page is not None and "locator" not in options:
             options.setdefault("ignore_locators", [self._page.locator(selector) for selector in EXTRACT_IGNORE])
         for attempt in range(2):
@@ -408,13 +407,7 @@ async def audit_once(workflow: Workflow, stagehand: Any, page: Page, browser: St
     await clear_cookies(workflow, browser, urlparse(url).hostname or "")
 
     try:
-        with safety.active_guard():
-            await workflow.run(stagehand, page, url, result)
-    except UnsafeActionRefused as error:
-        # The purchase guard stopped the run. Record it and move on to the next site.
-        result.status, result.failure_reason, result.message = error.status, error.reason, f"Guard refused: {error}"
-        log.error(f"  UNSAFE ACTION REFUSED: {error}")
-        await shot(page, out_dir / "error.png", full_page=False)
+        await workflow.run(stagehand, page, url, result)
     except AuditError as error:
         result.status, result.failure_reason, result.message = error.status, error.reason, str(error)
         log.error(f"  {error.status.capitalize()} ({error.reason}): {result.message}")
@@ -537,8 +530,6 @@ async def run(
             interactive = not settings.headless and sys.stdin.isatty()
             if targets:
                 await check_network_login(page, targets[0], interactive)
-            # The in-page purchase blocker, on every page from here on (not for --login, where a person signs in).
-            await safety.install(browser.context, page)
             stagehand = RecordingStagehand(client, session_log, page)
             usages = []
             for url in targets:

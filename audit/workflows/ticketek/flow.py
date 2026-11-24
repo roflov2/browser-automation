@@ -7,6 +7,7 @@ from urllib.parse import urlparse
 
 from stagehand import Page, Stagehand
 
+from ...actions import click_at, llm_act, try_act
 from ...core import (
     BROWSER_ERRORS,
     Blocked,
@@ -20,7 +21,6 @@ from ...core import (
     slug,
 )
 from ...page import dismiss_popups, fingerprint, js, pause_for_login, settle, shot, try_goto, wait_for_render
-from ...safety import current_guard, safe_act, safe_click_at, try_act
 from .models import (
     EventPage,
     FindState,
@@ -80,12 +80,12 @@ async def dismiss_ticketek_popups(stagehand: Stagehand, page: Page) -> None:
 JS_SEARCH_EVENT = r"""query => {
     for (const inp of document.querySelectorAll('input[type="search"], input[placeholder*="search" i], input[aria-label*="search" i], header input[type="text"]')) {
         if (!vis(inp, 80, 20)) continue;
-        if (!safeFill(inp, query)) continue;
+        if (!fillInput(inp, query)) continue;
         return 'typed';
     }
     for (const btn of document.querySelectorAll('header button, header a, [aria-label*="search" i]')) {
         const label = ((btn.getAttribute('aria-label') || '') + ' ' + txt(btn)).trim();
-        if (vis(btn, 18, 18) && /search/i.test(label) && safeClick(btn)) return 'opened';
+        if (vis(btn, 18, 18) && /search/i.test(label) && clickEl(btn)) return 'opened';
     }
     return null;
 }"""
@@ -95,11 +95,11 @@ JS_DISMISS_ALERT = r"""() => {
     for (const d of dialogs()) {
         if (!vis(d, 150, 80)) continue;
         const okBtn = Array.from(d.querySelectorAll('button')).find(
-            b => vis(b, 30, 20) && /^(ok|okay|got it|close|dismiss|i understand)$/i.test(clean(txt(b))) && guardAllows(b));
-        if (okBtn && safeClick(okBtn)) return clean(txt(okBtn));
+            b => vis(b, 30, 20) && /^(ok|okay|got it|close|dismiss|i understand)$/i.test(clean(txt(b))));
+        if (okBtn && clickEl(okBtn)) return clean(txt(okBtn));
     }
     for (const b of document.querySelectorAll('button')) {
-        if (vis(b, 40, 24) && /^ok$/i.test(clean(txt(b))) && guardAllows(b) && safeClick(b)) return 'OK';
+        if (vis(b, 40, 24) && /^ok$/i.test(clean(txt(b))) && clickEl(b)) return 'OK';
     }
     return null;
 }"""
@@ -161,7 +161,7 @@ async def find_event(stagehand: Stagehand, page: Page, query: str | None, sessio
             instruction = "Open the event page of the first on-sale event featured on the page."
         before_url = await page.url()
         try:
-            step = await safe_act(stagehand, page, instruction)
+            step = await llm_act(stagehand, instruction)
             log.info(f"  {step.description} -> {state.reason}")
         except BROWSER_ERRORS as error:
             await settle(page, SETTLE_MS)
@@ -264,9 +264,9 @@ JS_SWITCH_BEST_AVAILABLE = r"""() => {
     for (const el of document.querySelectorAll('button, a, [role="tab"], [role="button"]')) {
         if (!vis(el, 50, 20)) continue;
         const label = clean(txt(el));
-        if (/^(find\s+)?best\s+available$/i.test(label) && guardAllows(el)) {
+        if (/^(find\s+)?best\s+available$/i.test(label)) {
             if (el.getAttribute('aria-selected') === 'true' || /\bactive\b|\bselected\b/i.test(el.className || '')) return null;
-            if (safeClick(el)) return label;
+            if (clickEl(el)) return label;
         }
     }
     return null;
@@ -289,7 +289,7 @@ JS_CHOOSE_DATE = r"""wanted => {
         const best = dates.reduce((a, b) => (score(b) > score(a) ? b : a), dates[0]);
         const current = sel.options[sel.selectedIndex];
         if (current && current === best) return { label: clean(current.text), changed: false };
-        if (!guardAllows(sel) || !safeSelect(sel, best.value)) return null;
+        if (!selectOption(sel, best.value)) return null;
         return { label: clean(best.text), changed: true };
     }
     return null;
@@ -311,8 +311,8 @@ JS_FIND_TICKETS = r"""host => {
         if (!LABEL.test(label) || !vis(b, 40, 20) || b.disabled || b.getAttribute('aria-disabled') === 'true') continue;
         const link = b.closest('a');
         if (link && link.href && !/^javascript:/i.test(link.href) && new URL(link.href, location.href).hostname !== host) continue;
-        if (inResale(b) || !guardAllows(b)) continue;
-        if (safeClick(b)) return label;
+        if (inResale(b)) continue;
+        if (clickEl(b)) return label;
     }
     return null;
 }"""
@@ -361,9 +361,8 @@ async def open_session(stagehand: Stagehand, page: Page, session: Session) -> Ti
             await wait_for_render(page)
             continue
         try:
-            step = await safe_act(
+            step = await llm_act(
                 stagehand,
-                page,
                 f"Take the single next action to see ticket prices and quantity controls for {described}: if an "
                 "informational alert popup with an 'OK' button is covering the page, click 'OK'; if a "
                 "'Find Best available' or 'Best available' tab/button is visible on a seat map, click it; if a date dropdown "
@@ -492,7 +491,7 @@ JS_READ_QUANTITY = r"""arg => {
     if (s.plus) {
         s.plus.scrollIntoView({ block: 'center', inline: 'nearest' });
         const b = s.plus.getBoundingClientRect();
-        out.plus = { x: b.left + b.width / 2, y: b.top + b.height / 2, enabled: enabled(s.plus) && guardAllows(s.plus) };
+        out.plus = { x: b.left + b.width / 2, y: b.top + b.height / 2, enabled: enabled(s.plus) };
     }
     return out;
 }"""
@@ -502,9 +501,9 @@ JS_STEP_QUANTITY = r"""arg => {
     if (!s) return false;
     if (s.control.tagName === 'SELECT') {
         const opt = Array.from(s.control.options).find(o => parseInt(o.value || o.text, 10) === arg.quantity);
-        return !!opt && guardAllows(s.control) && safeSelect(s.control, opt.value);
+        return !!opt && selectOption(s.control, opt.value);
     }
-    return !!s.plus && enabled(s.plus) && guardAllows(s.plus) && safeClick(s.plus);
+    return !!s.plus && enabled(s.plus) && clickEl(s.plus);
 }"""
 # Click the button that reserves the chosen tickets. Only real buttons (never links, which is how the resale
 # 'Find tickets' leaves the site), never inside the Fan-to-Fan / resale / Marketplace box, never external links.
@@ -523,8 +522,8 @@ JS_CONTINUE_SELECTION = r"""() => {
     for (const b of document.querySelectorAll('button, [role="button"], input[type="submit"]')) {
         const label = clean(txt(b) || b.value || '');
         if (!LABEL.test(label) || !vis(b, 40, 20) || b.disabled || b.getAttribute('aria-disabled') === 'true') continue;
-        if (b.tagName === 'A' || external(b) || inResale(b) || !guardAllows(b)) continue;
-        if (safeClick(b)) return label;
+        if (b.tagName === 'A' || external(b) || inResale(b)) continue;
+        if (clickEl(b)) return label;
     }
     return null;
 }"""
@@ -594,7 +593,7 @@ async def set_quantity(page: Page, label: str | None, quantity: int | None) -> d
         elif dom_clicks:
             await js(page, JS_STEP_QUANTITY, arg, lib=QUANTITY_JS)
         else:
-            await safe_click_at(page, plus["x"], plus["y"])
+            await click_at(page, plus["x"], plus["y"])
         moved = await wait_for_quantity(page, label, value)
         if moved is None:
             break
@@ -652,7 +651,7 @@ async def hold_tickets(stagehand: Stagehand, page: Page, option: PriceOption, qu
     held, confirmed = None, False
 
     async def act(instruction: str) -> None:
-        step = await safe_act(stagehand, page, instruction)
+        step = await llm_act(stagehand, instruction)
         log.info(f"    Tickets: {step.description}")
         steps.append(step.description)
 
@@ -779,11 +778,11 @@ JS_CONTINUE_CHECKOUT = r"""() => {
     for (const b of document.querySelectorAll('button, a, [role="button"], input[type="submit"]')) {
         const label = clean(txt(b) || b.value || b.getAttribute('aria-label') || '');
         if (!LABEL.test(label) || /add to basket/i.test(label) || !vis(b, 40, 20) || disabled(b)) continue;
-        if (inStepper(b) || !guardAllows(b)) continue;
+        if (inStepper(b)) continue;
         found.push({ b, label, rank: ORDER.indexOf(label.toLowerCase()) });
     }
     found.sort((x, y) => x.rank - y.rank);
-    for (const { b, label } of found) if (safeClick(b)) return label;
+    for (const { b, label } of found) if (clickEl(b)) return label;
     return null;
 }"""
 
@@ -840,7 +839,7 @@ async def next_action(
             f"The page shows these errors: {'; '.join(state.validation_errors[:3])}. Fix the first one if it is a "
             f"missing choice (never by adding a paid extra or entering payment details). Otherwise: {instruction}"
         )
-    step = await safe_act(stagehand, page, instruction)
+    step = await llm_act(stagehand, instruction)
     log.info(f"    {step.description}")
     await settle(page, SETTLE_MS)
     action = step.description if step.success else f"nothing done: {step.description}"
@@ -934,7 +933,6 @@ async def walk_to_payment(stagehand: Stagehand, page: Page, result: SiteResult, 
         if state.blocked_reason:
             raise Blocked(state.blocked_reason)
         if state.is_payment_page or page_type == "payment":
-            await current_guard().freeze(page)  # hard stop: the payment page is only read from here on
             return True
         if page_type == "confirmation":
             raise FlowChanged("Reached a confirmation page unexpectedly; stopping")
@@ -986,7 +984,7 @@ JS_SELECT_VENUE = r"""hint => {
             const opts = Array.from(sel.options).filter(o => o.value && !/select\s+(venue|city|state|location)/i.test(o.text || ''));
             const match = words.length ? opts.find(o => words.some(w => (o.text || '').toLowerCase().includes(w))) : null;
             const opt = match || opts[0];
-            if (opt && safeSelect(sel, opt.value)) return clean(opt.text);
+            if (opt && selectOption(sel, opt.value)) return clean(opt.text);
         }
     }
     return null;
@@ -1029,7 +1027,6 @@ async def read_event(
         wanted = f"matching '{session_hint}'" if session_hint else "the first venue"
         step = await try_act(
             stagehand,
-            page,
             f"If a 'Select venue' or city/venue dropdown is shown with no venue selected, open it and select {wanted}.",
             follow_up=True,
         )

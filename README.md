@@ -11,9 +11,9 @@ Everything runs through one entry point, `main.py` (or the `drip-audit` command 
 | `ubereats` | [Uber Eats AU](https://www.ubereats.com/au) | Orders 1–5 menu items through to checkout and records every fee |
 | `ticketek` | [Ticketek AU](https://premier.ticketek.com.au/) | Holds 1–8 tickets for an event through to the payment page and records every booking, service, handling, delivery and card fee |
 
-No workflow ever pays: runs stop on the checkout / payment page, and a purchase guard in the code makes sure of it (see [Safety](#safety)).
+Workflows stop on the checkout / payment page and never pay. That relies on the workflows' flow and the instructions given to the model; there is no code-level purchase guard (see [Safety](#safety)).
 
-**Use an account with no saved payment method** for any workflow that signs in (`ubereats`, `ticketek`). The guard is designed to make a purchase impossible, but an account that cannot pay is the last line of defence.
+**Use an account with no saved payment method** for any workflow that signs in (`ubereats`, `ticketek`). Nothing in the code blocks a purchase, so an account that cannot pay is the only hard safeguard.
 
 ## Setup
 
@@ -73,21 +73,12 @@ If your network requires a Microsoft (Azure) sign-in before the browser can reac
 
 ## Safety
 
-The audits drive real checkouts, so every click goes through `audit/safety.py`:
+The audits drive real checkouts. There is no code-level purchase guard: nothing in the code blocks a click or a keystroke. What keeps a run from paying is:
 
-It covers the basics: never pay, never place an order, never start a paid trial or membership, never type card details.
+1. **The flow.** Each workflow stops once it has read the checkout/payment page, and never asks the model to go further.
+2. **Prompts.** Each workflow gives the model a system prompt that tells it never to pay, place or submit an order, enter card, gift-card or voucher details, or start a trial or membership, and individual `act` instructions repeat that where a purchase button is close by.
 
-1. **In-page blocker.** A script installed on every page and frame cancels any click, Enter/Space key press or form submit on a control labelled like a purchase ("Place order", "Pay now", "Pay $54.20", "Confirm and pay", "Complete booking", "Buy now", wallet and pay-later buttons such as Shop Pay, PayPal, Apple/Google Pay, Afterpay), or a trial or membership ("Start free trial", "Join Uber One"), and any typing into card number, CVV or expiry fields. It catches LLM clicks, the workflows' own JavaScript clicks and mis-clicks alike.
-2. **Vetted LLM actions.** Every LLM action is first *observed*; the proposed element and its real label are checked against the same rules before anything is clicked, and typing anything that looks like a card number is refused.
-3. **Guarded JavaScript.** Workflow scripts can click and type only through `safeClick`, `safeSelect` and `safeFill`, which apply the same rules.
-4. **Hard stop.** Once a workflow has identified the final checkout/payment page, nothing more can be clicked or typed on that site: only reads and screenshots.
-5. **Prompts.** Each workflow still tells the model never to buy anything.
-
-A refused action of ours ends that site's run with `status: error` and `failure_reason: unsafe_action_refused`, and the run moves on to the next site. Something the page cancels by itself (its own script submitting a form) is logged and the run goes on. A test fails if any LLM action or raw click is added outside `safety.py`.
-
-Not guarded on purpose: sign-up, sign-in, subscribe and account buttons, and voucher/promo/gift-card fields. None of them spends money; the prompts still tell the model to leave them alone.
-
-What it does not cover: labels in languages other than English, unlabelled icon-only buttons inside closed shadow roots or canvas, a site that submits a purchase by itself (a timer or wallet callback), the browser's own payment sheets, and a person clicking in a headed window.
+The model follows those instructions, but nothing enforces them: a misread page or a mis-click can still reach a "Place order" or "Pay now" button. **Use accounts with no saved payment method**, and do not keep a wallet (Shop Pay, PayPal, Google Pay) signed in to the browser profile.
 
 ### Coffee stores
 
@@ -153,7 +144,7 @@ audit/
 ├── cli.py                  # one subcommand per registered workflow; logging
 ├── config.py               # Settings: every environment variable, read and validated once
 ├── azure.py                # Azure OpenAI (Entra ID sign-in) as Stagehand's LLM callback
-├── safety.py               # the purchase guard
+├── actions.py              # LLM actions and in-page click/type helpers
 ├── runner.py               # browser + Stagehand session, per-site loop, failure reasons, session.json
 ├── workflow.py             # Workflow base class: the contract between runner and workflows
 ├── core.py                 # browser-free helpers: price parsing, name matching, results, report files
@@ -175,7 +166,7 @@ A workflow holds only what is particular to its site: CLI options, prompts, sche
 ### Adding a workflow
 
 1. Create `audit/workflows/<name>.py` with a `Workflow` subclass. Set `name` and `help`, and implement `add_arguments`, `targets`, `run` and `summarise`. Class attributes choose the session behaviour (`system_prompt`, `viewport`, `clear_cookies`).
-2. In `run`, fill in the `SiteResult` (`status`, `items`, `extras`, `steps`, `comparison`). Use `safe_act()` for every LLM action and `safeClick`/`safeSelect`/`safeFill` in page scripts. Raise `Blocked` for login walls and bot checks, or another `AuditError` (`ElementNotFound`, `FlowChanged`, ...) for a specific failure. Build the verdict with `drip_outcome()`, so that a run that never read the final price reports `drip_detected: null`. Override `target_key()` if one start URL can lead to different things.
+2. In `run`, fill in the `SiteResult` (`status`, `items`, `extras`, `steps`, `comparison`). Use `llm_act()` for LLM actions and `clickEl`/`selectOption`/`fillInput` in page scripts, and give the workflow a `system_prompt` that forbids paying. Raise `Blocked` for login walls and bot checks, or another `AuditError` (`ElementNotFound`, `FlowChanged`, ...) for a specific failure. Build the verdict with `drip_outcome()`, so that a run that never read the final price reports `drip_detected: null`. Override `target_key()` if one start URL can lead to different things.
 3. Add the class to `WORKFLOWS` in `audit/workflows/__init__.py`.
 
 The runner then provides the browser, output folder, error handling, report files and the `runs.csv` row.
@@ -189,7 +180,7 @@ mypy
 pytest                      # the browser tests are skipped if no Chrome/Chromium is found
 ```
 
-The tests never touch a real site or call a real model: browser tests run against local HTML fixtures with a stub model. `python scripts/measure_safe_act.py` compares the token cost of a vetted action with a plain `act()` on a fixture (it needs `GOOGLE_GENERATIVE_AI_API_KEY` or the Azure settings; `--stub` runs without either).
+The tests never touch a real site or call a real model: browser tests run against local HTML fixtures with a stub model.
 
 ## Outputs
 
@@ -218,7 +209,7 @@ Workflow-specific additions:
 
 `summary.csv` columns: run timestamp, site, status (`ok`, `blocked`, `no_checkout`, `no_coffee_found`, `no_flights_found`, `no_items_found`, `add_to_cart_failed`, `error`), items added, expected subtotal, checkout subtotal, checkout total, currency, other fees, shipping/delivery, drip-detected flag, the run's output folder, and its time and LLM usage (see [Time and tokens per run](#time-and-tokens-per-run)). `runs.csv` has the same columns plus `workflow`, `target` and `failure_reason`. The target is the site for `coffee`, the site and route for `virgin`, and the store (`/store/<slug>/<id>`) for `ubereats`, so audits of different restaurants or routes keep their own summary row.
 
-`drip_detected` is `true` when any drip-pricing reason was found, `false` only when the final price screen was read and nothing was found, and empty/`null` when the run never read the final price (so it cannot say). `price_comparison.json` and `session.json` also carry `failure_reason`: `blocked`, `out_of_stock`, `flow_changed`, `element_not_found`, `extract_failed`, `timeout`, `unsafe_action_refused` or `cart_lost` (`ubereats`: the cart came up empty on the way to checkout).
+`drip_detected` is `true` when any drip-pricing reason was found, `false` only when the final price screen was read and nothing was found, and empty/`null` when the run never read the final price (so it cannot say). `price_comparison.json` and `session.json` also carry `failure_reason`: `blocked`, `out_of_stock`, `flow_changed`, `element_not_found`, `extract_failed`, `timeout` or `cart_lost` (`ubereats`: the cart came up empty on the way to checkout).
 
 ### Time and tokens per run
 

@@ -13,6 +13,7 @@ from urllib.parse import urljoin
 from pydantic import BaseModel, Field
 from stagehand import Page, Stagehand
 
+from ..actions import llm_act
 from ..config import Settings
 from ..core import (
     BROWSER_ERRORS,
@@ -50,7 +51,6 @@ from ..page import (
     wait_out_sso,
     wait_until,
 )
-from ..safety import current_guard, safe_act
 from ..workflow import Workflow
 
 log = logging.getLogger(__name__)
@@ -179,9 +179,8 @@ async def find_shop_page(stagehand: Stagehand, page: Page) -> str:
         if "ERR_" in reason or "failed to load" in reason.lower():
             raise FlowChanged(reason)
 
-        step = await safe_act(
+        step = await llm_act(
             stagehand,
-            page,
             "Take the next step to get to this store's shop page where its coffee is listed for sale "
             "(e.g. a 'Shop', 'Coffee' or 'Shop Coffee' link). If navigation links are hidden behind a menu button, open the menu first.",
         )
@@ -250,7 +249,7 @@ async def add_product_to_cart(stagehand: Stagehand, page: Page, product: Product
     if target_url:
         await page.goto(target_url)
     else:
-        await safe_act(stagehand, page, f"Click on the product '{product.name}' to open its product page.")
+        await llm_act(stagehand, f"Click on the product '{product.name}' to open its product page.")
     await settle(page, 1000)
     await maybe_dismiss_popups(stagehand, page, POPUPS)
 
@@ -275,9 +274,8 @@ async def add_product_to_cart(stagehand: Stagehand, page: Page, product: Product
                     log.info(f"    {await page.url()} is not the product page; clicking the product on the shop page")
                     await page.goto(shop_url)
                     await settle(page, 1000)
-                await safe_act(
+                await llm_act(
                     stagehand,
-                    page,
                     f"Click on the product link or title for '{product.name}' to open its product page.",
                 )
                 await settle(page, 1000)
@@ -290,7 +288,7 @@ async def add_product_to_cart(stagehand: Stagehand, page: Page, product: Product
 
         acted = False
         if state.has_purchase_options and not state.one_time_selected:
-            step = await safe_act(stagehand, page, "Select the one-time purchase option instead of subscription.")
+            step = await llm_act(stagehand, "Select the one-time purchase option instead of subscription.")
             log.info(f"    Purchase option: {step.description}")
             await settle(page, 800)
             acted = True
@@ -300,9 +298,8 @@ async def add_product_to_cart(stagehand: Stagehand, page: Page, product: Product
         )
         if state.has_size_options and not state.lowest_size_selected:
             target = state.lowest_available_size or "the smallest/cheapest option"
-            step = await safe_act(
+            step = await llm_act(
                 stagehand,
-                page,
                 f"Change the package size or weight selector (currently '{state.selected_size}') to {target}.",
                 follow_up=True,  # a custom dropdown needs opening before the option can be picked
             )
@@ -320,8 +317,10 @@ async def add_product_to_cart(stagehand: Stagehand, page: Page, product: Product
         item["selected_price"] = selected if selected is not None else item["shop_price"]  # a real $0.00 stays $0.00
 
     count_before = await shopify_item_count(page)
-    add = await safe_act(
-        stagehand, page, "Click the 'Add to cart', 'ADD TO BAG', 'Add to bag' or 'Buy' button for this product."
+    add = await llm_act(
+        stagehand,
+        "Click the 'Add to cart', 'ADD TO BAG' or 'Add to bag' button for this product. Never click 'Buy it now', "
+        "'Shop Pay', 'PayPal', 'G Pay' or any other express-checkout button.",
     )
     log.info(f"    Added: {add.description}")
     await wait_until(page, "() => document.readyState === 'complete'", 3000)
@@ -391,8 +390,8 @@ async def open_cart(stagehand: Stagehand, page: Page) -> CartLines:
         ).data
         if cart.is_cart_visible and cart.items:
             return cart
-        step = await safe_act(
-            stagehand, page, "Open the shopping cart (click the cart/bag icon or link in the header, or 'View cart')."
+        step = await llm_act(
+            stagehand, "Open the shopping cart (click the cart/bag icon or link in the header, or 'View cart')."
         )
         log.info(f"  Cart navigation: {step.description}")
         await settle(page, SETTLE_MS)
@@ -449,8 +448,8 @@ async def go_to_checkout(stagehand: Stagehand, page: Page, result: SiteResult, s
         log.info("  Checkout: opening /checkout directly")
         await page.goto(urljoin(await page.url(), "/checkout"))
     else:
-        step = await safe_act(
-            stagehand, page, "Click the 'Check out' / 'CHECKOUT' / 'Checkout' button to proceed to the checkout page."
+        step = await llm_act(
+            stagehand, "Click the 'Check out' / 'CHECKOUT' / 'Checkout' button to proceed to the checkout page."
         )
         log.info(f"  Checkout: {step.description}")
     await settle(page, 3000)
@@ -463,7 +462,6 @@ async def go_to_checkout(stagehand: Stagehand, page: Page, result: SiteResult, s
         await page.goto(urljoin(result.shop_url or await page.url(), "/checkout"))
         await settle(page, 3000)
 
-    await current_guard().freeze(page)  # hard stop: the checkout page is only read from here on
     log.info("  Waiting for checkout page to render...")
     await wait_for_render(page, 15)
     await settle(page, 2000)

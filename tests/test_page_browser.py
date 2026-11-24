@@ -6,8 +6,7 @@ from time import perf_counter
 
 import pytest
 
-from audit import safety
-from audit.core import PageScriptError, UnsafeActionRefused
+from audit.core import PageScriptError
 from audit.page import js, settle, shot, try_goto, wait_for_render, wait_until
 from audit.workflows.coffee import Product, resolve_product_url
 
@@ -38,18 +37,6 @@ async def observe_page(chrome: str, port: int, tmp: Path) -> dict:
             except PageScriptError as error:
                 return str(error)
             return None
-
-        # A page's own script submitting a form: an ordinary form goes through; one submitted through a
-        # 'Buy now' button is cancelled and logged, and the run goes on either way.
-        await safety.install(browser.context, page)
-        with safety.active_guard():
-            for name, path in (("checkout", "/checkout/"), ("ordinary", "/self-submit.html")):
-                await page.goto(f"{base}{path}")
-                try:
-                    await settle(page, 1000)
-                    seen[f"self_submit_{name}"] = ("went on", await page.url())
-                except UnsafeActionRefused as refusal:
-                    seen[f"self_submit_{name}"] = ("refused", str(refusal))
 
         # Which link a coffee product is opened from, whatever URL the model extracted for it
         await page.goto(f"{base}/carousel.html")
@@ -159,18 +146,6 @@ def test_wait_for_render(seen):
 def test_screenshot_and_navigation_helpers(seen):
     assert seen["screenshot_bytes"] > 1000
     assert seen["goto_ok"] is True
-
-
-def test_a_checkout_page_submitting_its_own_plain_form_is_left_alone(seen):
-    outcome, url = seen["self_submit_checkout"]
-    assert outcome == "went on"
-    assert "/static.html" in url  # no purchase control in the form, so nothing to cancel
-
-
-def test_a_page_submitting_its_own_buy_now_form_is_cancelled_without_ending_the_run(seen):
-    outcome, url = seen["self_submit_ordinary"]
-    assert outcome == "went on"
-    assert url.endswith("/self-submit.html")  # the submit was cancelled: the page did not navigate away
 
 
 @pytest.mark.parametrize(

@@ -20,7 +20,6 @@ from audit.core import (
     SiteResult,
     Status,
     StepTimeout,
-    UnsafeActionRefused,
 )
 from audit.page import cdp_noise_filtered, is_noise
 from audit.runner import RecordingStagehand, ResourceMonitor, SessionLog, audit_site, redact
@@ -85,12 +84,6 @@ def audit(workflow: Workflow, page=None, browser=None) -> tuple[SiteResult, Fake
         (ExtractFailed("CheckoutDetails did not fit the schema"), "error", "extract_failed", True),
         (StepTimeout("extract(Products) timed out"), "error", "timeout", True),
         (RuntimeError("page.goto: Navigation timeout of 30000 ms exceeded"), "error", "timeout", True),
-        (
-            UnsafeActionRefused("purchase, payment or membership control: Place order"),
-            "error",
-            "unsafe_action_refused",
-            True,
-        ),
         (KeyError("surprise"), "error", None, True),
     ],
 )
@@ -197,13 +190,6 @@ def test_failed_cookie_clearing_is_reported_not_hidden(output_root, caplog):
     with caplog.at_level(logging.WARNING, logger="audit"):
         audit(workflow_that(lambda r: None, clear_cookies="domain"), browser=FakeBrowser(fail_clear=True))
     assert "Could not clear cookies" in caplog.text
-
-
-def test_a_refusal_ends_only_that_site(output_root):
-    """After a guard refusal the runner carries on with the next target."""
-    refused, _ = audit(workflow_that(UnsafeActionRefused("Place order")))
-    following, _ = audit(workflow_that(lambda r: setattr(r, "status", Status.OK)))
-    assert (refused.failure_reason, following.status) == ("unsafe_action_refused", "ok")
 
 
 # --- telemetry -------------------------------------------------------------------------------------

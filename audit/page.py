@@ -13,7 +13,7 @@ from typing import IO, Any, cast
 
 from stagehand import Page, Stagehand
 
-from . import safety
+from . import actions
 from .core import BROWSER_ERRORS, PageScriptError
 
 log = logging.getLogger(__name__)
@@ -95,7 +95,7 @@ const pressEsc = () => {
 const closeDialog = () => {
     for (const d of dialogs()) {
         const b = d.querySelector('button[aria-label*="close" i]');
-        if (b && guardAllows(b)) return safeClick(b);
+        if (b) return clickEl(b);
     }
     return false;
 };
@@ -109,11 +109,14 @@ async def js(page: Page, fn: str, arg: Any = None, default: Any = None, lib: str
     ran (a navigation). Raises PageScriptError when the snippet itself threw or did not parse, so a
     broken snippet is never mistaken for "element not found".
 
-    Snippets may click and type only through safeClick/safeSelect/safeFill (see audit.safety). If the
-    guard refused anything in the snippet, UnsafeActionRefused is raised. Anything the in-page blocker cancelled
-    since the last call is only logged (see safety.log_page_refusals).
+    Snippets can use clickEl/selectOption/fillInput (see audit.actions) to click and type.
     """
-    script = safety.wrap_snippet(safety.current_guard(), JS_LIB + lib, f"({fn})({json.dumps(arg)})")
+    script = (
+        f"(() => {{ {actions.PAGE_ACTIONS_JS}{JS_LIB}{lib}\n"
+        "let value = null, error = null;\n"
+        f"try {{ value = ({fn})({json.dumps(arg)}); }} catch (e) {{ error = String(e); }}\n"
+        "return { value: value === undefined ? null : value, error }; })()"
+    )
     try:
         out = await page.evaluate(script)
     except Exception as error:
@@ -123,9 +126,6 @@ async def js(page: Page, fn: str, arg: Any = None, default: Any = None, lib: str
         raise PageScriptError(f"{error} (in: {fn[:80]!r})") from error
     if not isinstance(out, dict):
         raise PageScriptError(f"unexpected evaluate result {out!r} (in: {fn[:80]!r})")
-    safety.raise_if_refused(cast(list[dict[str, Any]], out["refused"]))
-    if background := out.get("background"):
-        safety.log_page_refusals(cast(list[dict[str, Any]], background))
     if out["error"]:
         raise PageScriptError(f"{out['error']} (in: {fn[:80]!r})")
     return default if out["value"] is None else out["value"]
@@ -256,28 +256,19 @@ JS_HAS_OVERLAY = r"""selectors => {
 
 
 async def dismiss_popups(stagehand: Stagehand, page: Page, targets: str, caution: str = "") -> None:
-    """Ask the LLM to close whichever of `targets` (e.g. 'cookie banner or newsletter popup') is visible.
-
-    A control the guard refuses (the model picked a popup's 'Subscribe' instead of its close button) is
-    skipped, not clicked; if that leaves the popup open, Escape is pressed so the journey can carry on.
-    """
+    """Ask the LLM to close whichever of `targets` (e.g. 'cookie banner or newsletter popup') is visible."""
     try:
         found = await stagehand.observe(
             "Find the close, accept, dismiss, 'No thanks', 'Maybe later' or 'Skip' button of any visible "
             f"{targets}. Prefer an 'X' or 'Close' icon. Never return a Subscribe, Sign up, Join, Submit or "
             f"Reveal code button, never a 'Skip to content' link, and never an email field. {caution}"
             "Return nothing if there is none.",
-            timeout=safety.LLM_TIMEOUT_MS,
+            timeout=actions.LLM_TIMEOUT_MS,
         )
-        skipped = False
         for action in found.data[:2]:
             log.info(f"  Dismissing popup: {action.description}")
-            skipped |= await safety.dismiss_on(stagehand, page, action) is None
-        if skipped:
-            log.info("  Closing popup with Escape instead")
-            await page.key_press("Escape")
-            await settle(page, 500)
-    except BROWSER_ERRORS as error:  # a popup that cannot be dismissed is not fatal; a guard refusal still is
+            await actions.act_on(stagehand, action)
+    except BROWSER_ERRORS as error:  # a popup that cannot be dismissed is not fatal
         log.debug("Popup dismissal failed: %s", error)
 
 
