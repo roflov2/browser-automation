@@ -353,6 +353,8 @@ def walk(monkeypatch):
             return SimpleNamespace(description="clicked continue", success=True, selector="xpath=/a")
 
         async def fake_js(page, fn, arg=None, **options):
+            if fn is flow.JS_ACKNOWLEDGE_VIEW:
+                return None  # no restricted-view notice on these pages
             assert fn is flow.JS_CONTINUE_CHECKOUT
             label = next(continues, None)
             if label:
