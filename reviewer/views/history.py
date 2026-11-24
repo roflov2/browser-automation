@@ -6,7 +6,7 @@ import altair as alt
 import pandas as pd
 import streamlit as st
 
-from reviewer import loader
+from reviewer import loader, theme
 from reviewer.views import common
 
 _SERIES = {"expected_subtotal": "Advertised", "checkout_total": "Checkout total", "other_fees_total": "Fees"}
@@ -20,7 +20,13 @@ def _chart(frame: pd.DataFrame) -> None:
     base = alt.Chart(long).encode(
         x=alt.X("run_at:T", title="Run"),
         y=alt.Y("amount:Q", title="Amount ($)"),
-        color=alt.Color("series:N", title=None, sort=list(_SERIES.values())),
+        color=alt.Color(
+            "series:N",
+            title=None,
+            sort=list(_SERIES.values()),
+            # Fees are the drip signal, so they take the alert colour.
+            scale=alt.Scale(domain=list(_SERIES.values()), range=[theme.ROYAL_BLUE, theme.NAVY, theme.ALERT_ORANGE]),
+        ),
     )
     points = base.mark_point(size=90, filled=True).encode(
         shape=alt.Shape("final:N", title="Final result", scale=alt.Scale(domain=["Drip", "No drip", "Unknown"])),

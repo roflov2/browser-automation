@@ -84,7 +84,7 @@ def _verdict_tab(run: loader.Run) -> None:
             st.badge("Analyst: not reviewed", color="gray", icon=":material/pending:")
     if run.overridden:
         with badges[2]:
-            st.badge("Overridden: the analyst's verdict is used", color="orange", icon=":material/gavel:")
+            st.badge("Overridden: the analyst's verdict is used", color="blue", icon=":material/gavel:")
 
     if data.get("status") not in (None, "ok") or data.get("failure_reason"):
         st.warning(
@@ -115,7 +115,9 @@ def _verdict_tab(run: loader.Run) -> None:
         st.caption("No drip-pricing reasons were recorded.")
     for reason in reasons:
         decision = (run.review or {}).get("reasons", {}).get(reason)
-        mark = {True: ":green[accepted]", False: ":red[rejected]", None: ":gray[not reviewed]"}[decision]
+        mark = {True: ":green-badge[Accepted]", False: ":orange-badge[Rejected]", None: ":gray-badge[Not reviewed]"}[
+            decision
+        ]
         st.markdown(f"- {common.esc(reason)} — {mark}")
 
     if data.get("checkout_summary"):
@@ -185,7 +187,7 @@ def _highlight_extras(row: pd.Series) -> list[str]:
     preselected = str(row.get("selected_by_default", "")).lower() == "true"
     mandatory = str(row.get("mandatory", "")).lower() == "true"
     paid = str(row.get("price", "")) not in {"", "0", "0.0"}
-    style = "background-color: rgba(230, 70, 70, 0.18)" if preselected and paid and not mandatory else ""
+    style = "background-color: rgba(255, 94, 0, 0.14)" if preselected and paid and not mandatory else ""
     return [style] * len(row)
 
 
@@ -204,7 +206,7 @@ def _fees_tab(run: loader.Run) -> None:
         st.warning("Pre-selected extras: " + ", ".join(common.esc(p) for p in preselected))
     if "extras" in run.tables:
         st.markdown("#### Every extra, add-on and fee offered")
-        st.caption("Rows in red were paid, optional and pre-selected.")
+        st.caption("Rows shaded orange were paid, optional and pre-selected.")
         st.dataframe(run.tables["extras"].style.apply(_highlight_extras, axis=1), hide_index=True, width="stretch")
 
 

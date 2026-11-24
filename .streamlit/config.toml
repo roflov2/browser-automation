@@ -6,5 +6,52 @@ headless = true
 [browser]
 gatherUsageStats = false
 
+[client]
+# Hide Streamlit's Deploy button and developer menu; the app draws its own app bar.
+toolbarMode = "minimal"
+
+# NASC / Scamwatch palette. Orange, green and cyan are below 4.5:1 as text on white, so they are used for
+# fills, borders and indicators; text in those hues uses the darker *TextColor shades below (all >= 5:1).
 [theme]
-primaryColor = "#3b5bdb"
+base = "light"
+primaryColor = "#0038E6"            # Vibrant Royal Blue
+backgroundColor = "#FFFFFF"         # Clean White canvas
+secondaryBackgroundColor = "#F4F6F8" # Neutral Light Grey surfaces
+textColor = "#1A1A1A"               # High-Contrast Charcoal
+linkColor = "#0038E6"
+borderColor = "#DDE2E8"
+font = "system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif"
+headingFont = "system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif"
+headingFontWeights = [700, 600, 600, 600, 600, 600]
+baseRadius = "4px"                  # Material's default corner radius
+buttonRadius = "4px"
+showWidgetBorder = true
+dataframeHeaderBackgroundColor = "#F4F6F8"
+metricValueFontWeight = 600
+# Alerts and price increases: Safety Alert Orange (red is mapped to it too, so errors and drip share one hue).
+redColor = "#FF5E00"
+redTextColor = "#B23F00"
+redBackgroundColor = "#FFEFE5"
+orangeColor = "#FF5E00"
+orangeTextColor = "#B23F00"
+orangeBackgroundColor = "#FFEFE5"
+greenColor = "#00C853"              # Emerald Green
+greenTextColor = "#00702E"
+greenBackgroundColor = "#E5F9EE"
+blueColor = "#0038E6"
+blueTextColor = "#0038E6"
+blueBackgroundColor = "#E6EBFD"
+grayTextColor = "#5C6470"
+chartCategoricalColors = ["#0038E6", "#FF5E00", "#00B4D8", "#0A1C40", "#00C853"]
+
+# Navigation: Deep Authority Navy, with Progress Cyan for the active item and controls.
+[theme.sidebar]
+backgroundColor = "#0A1C40"
+secondaryBackgroundColor = "#1B2F5C"
+textColor = "#FFFFFF"
+primaryColor = "#00B4D8"
+borderColor = "#3A4E7A"
+linkColor = "#00B4D8"
+codeBackgroundColor = "#1B2F5C"
+codeTextColor = "#C7D0E0"
+grayTextColor = "#C7D0E0"
