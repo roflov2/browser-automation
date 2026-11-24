@@ -18,9 +18,8 @@ from urllib.parse import urlparse
 from stagehand import Page, Stagehand
 
 from ...config import Settings
-from ...core import BROWSER_ERRORS, SiteResult, Status, UnsafeActionRefused, parse_price, slug, write_csv
+from ...core import BROWSER_ERRORS, SiteResult, Status, parse_price, slug, write_csv
 from ...page import settle, shot
-from ...safety import Mode, current_guard
 from ...workflow import Workflow
 from .models import CartAndCheckoutState, MenuItem, StoreMenu, UberResult
 from .pricing import FEE_BREAKDOWN_FIELDS, compare_prices, print_audit_tables
@@ -100,7 +99,6 @@ class UberEatsWorkflow(Workflow):
         leftover = CartLeft(0, None)
         cart_state: CartAndCheckoutState | None = None
         checkout_state: CartAndCheckoutState | None = None
-        refused = False
 
         log.info(f"\n=== {url} | Address: {args.address} | Query: {args.query or 'any'} ===")
         try:
@@ -179,9 +177,6 @@ class UberEatsWorkflow(Workflow):
                 result.fail(Status.NO_CHECKOUT, "Cart reached, but final checkout screen was not reached")
             else:
                 result.fail(Status.NO_CHECKOUT, "Checkout screen not reached")
-        except UnsafeActionRefused:
-            refused = True  # the guard stopped the run: touch nothing else
-            raise
         except Exception:
             # The runner's error.png is taken after the cleanup below has gone back to the store and emptied the
             # cart, so it never shows the screen the run failed on: keep that one here.
@@ -192,7 +187,7 @@ class UberEatsWorkflow(Workflow):
         finally:
             with contextlib.suppress(*BROWSER_ERRORS):  # the browser may be gone; the URL is a nicety
                 result.checkout_url = await page.url()
-            if result.added and not refused:
+            if result.added:
                 await self.empty_cart_after_run(stagehand, page, result)
             self.conclude(result, lambda: compare_prices(result, cart_state, checkout_state))
             write_csv(out / "fees_breakdown.csv", FEE_BREAKDOWN_FIELDS, result.comparison.get("fee_breakdown", []))
@@ -200,14 +195,9 @@ class UberEatsWorkflow(Workflow):
     async def empty_cart_after_run(self, stagehand: Stagehand, page: Page, result: UberResult) -> None:
         """Go back to the store page and empty the cart, so the next run does not meet this run's items.
 
-        Not once the checkout page has been identified: the guard then allows no clicks on Uber Eats at all
-        (it only ever tightens), and the next run's clear step and 'new order' prompt deal with the cart.
-        Errors are swallowed; a guard refusal still ends the run.
+        Errors are swallowed.
         """
         if not result.shop_url:
-            return
-        if current_guard().mode_for(result.shop_url) is not Mode.NORMAL:
-            log.info("  Leaving the cart as it is: the checkout page was reached and Uber Eats takes no more clicks.")
             return
         try:
             await page.goto(result.shop_url)

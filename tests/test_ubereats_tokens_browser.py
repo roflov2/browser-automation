@@ -6,7 +6,6 @@ from pathlib import Path
 import pytest
 from pydantic import BaseModel
 
-from audit import safety
 from audit.runner import RecordingStagehand, SessionLog
 from audit.workflows.ubereats.models import MenuItem
 from audit.workflows.ubereats.store import (
@@ -59,44 +58,42 @@ async def run_steps(chrome: str, port: int) -> dict:
     base = f"http://127.0.0.1:{port}"
     try:
         page = (await browser.context.pages())[0]
-        await safety.install(browser.context, page)
         recording = RecordingStagehand(client, SessionLog(), page)
-        with safety.active_guard():
-            await page.goto(f"{base}/uber-store.html")
-            no_model = NoModel()
-            seen["address_confirmed"] = await confirm_address_step(
-                no_model,  # type: ignore[arg-type]
-                page,
-                "1 Jeffcott Place, Canberra ACT",
-                await page.url(),
-                1,
-            )
-            item = MenuItem(name="Super Supreme", category=None, price="$10.00", sold_out=False, is_food_or_drink=True)
-            seen["modal_opened"] = await open_item_modal(no_model, page, item, 0)  # type: ignore[arg-type]
-            seen["opened_item"] = await js(page, "() => window.openedItem")
-            seen["quick_adds"] = await js(page, "() => window.quickAdds")
-            seen["no_model_calls"] = no_model.calls
+        await page.goto(f"{base}/uber-store.html")
+        no_model = NoModel()
+        seen["address_confirmed"] = await confirm_address_step(
+            no_model,  # type: ignore[arg-type]
+            page,
+            "1 Jeffcott Place, Canberra ACT",
+            await page.url(),
+            1,
+        )
+        item = MenuItem(name="Super Supreme", category=None, price="$10.00", sold_out=False, is_food_or_drink=True)
+        seen["modal_opened"] = await open_item_modal(no_model, page, item, 0)  # type: ignore[arg-type]
+        seen["opened_item"] = await js(page, "() => window.openedItem")
+        seen["quick_adds"] = await js(page, "() => window.quickAdds")
+        seen["no_model_calls"] = no_model.calls
 
+        calls = len(stub.prompts)
+        await recording.extract("Read the Add button price.", Modal)
+        seen["full_modal_prompt"] = stub.prompts[calls]
+        calls = len(stub.prompts)
+        data = await scoped_extract(
+            recording, page, JS_MARK_ITEM_MODAL, "Read the Add button price.", Modal, "Only the modal is shown."
+        )
+        seen["modal_price"] = data.button_price_display
+        seen["scoped_modal_prompt"] = stub.prompts[calls]  # the extraction (a metadata call follows)
+
+        for case, query in (("drawer_only", ""), ("upsell_beside_drawer", "?upsell=1")):
+            await page.goto(f"{base}/uber-store.html{query}")
+            await js(page, "() => document.getElementById('cart').click()")
+            seen[case] = await js(page, JS_MARK_CART_DRAWER, default=False)
             calls = len(stub.prompts)
-            await recording.extract("Read the Add button price.", Modal)
-            seen["full_modal_prompt"] = stub.prompts[calls]
-            calls = len(stub.prompts)
-            data = await scoped_extract(
-                recording, page, JS_MARK_ITEM_MODAL, "Read the Add button price.", Modal, "Only the modal is shown."
-            )
-            seen["modal_price"] = data.button_price_display
-            seen["scoped_modal_prompt"] = stub.prompts[calls]  # the extraction (a metadata call follows)
+            await scoped_extract(recording, page, JS_MARK_CART_DRAWER, "Read the cart.", Cart, "Only the cart.")
+            seen[f"{case}_prompt"] = stub.prompts[calls]
 
-            for case, query in (("drawer_only", ""), ("upsell_beside_drawer", "?upsell=1")):
-                await page.goto(f"{base}/uber-store.html{query}")
-                await js(page, "() => document.getElementById('cart').click()")
-                seen[case] = await js(page, JS_MARK_CART_DRAWER, default=False)
-                calls = len(stub.prompts)
-                await scoped_extract(recording, page, JS_MARK_CART_DRAWER, "Read the cart.", Cart, "Only the cart.")
-                seen[f"{case}_prompt"] = stub.prompts[calls]
-
-            await page.goto(f"{base}/uber-search.html")
-            seen["store_card"] = await first_open_store_card(page)
+        await page.goto(f"{base}/uber-search.html")
+        seen["store_card"] = await first_open_store_card(page)
     finally:
         await client.close()
     return seen

@@ -330,7 +330,6 @@ class FailureReason(StrEnum):
     ELEMENT_NOT_FOUND = "element_not_found"
     EXTRACT_FAILED = "extract_failed"
     TIMEOUT = "timeout"
-    UNSAFE_ACTION_REFUSED = "unsafe_action_refused"
     CART_LOST = "cart_lost"
 
 
@@ -397,17 +396,6 @@ class PageScriptError(AuditError):
     """A JavaScript snippet threw in the page: a bug in the snippet or a page it was not written for."""
 
 
-class UnsafeActionRefused(BaseException):
-    """The purchase guard refused an action. Nothing further is done on that site.
-
-    Deliberately not an `Exception`: no `except Exception` or `suppress(Exception)` anywhere in a
-    workflow, present or future, can swallow a refusal and carry on. Only the runner catches it.
-    """
-
-    reason = FailureReason.UNSAFE_ACTION_REFUSED
-    status = Status.ERROR
-
-
 _TIMEOUT_WORDS = re.compile(r"timed? ?out|timeout|deadline exceeded", re.IGNORECASE)
 
 
@@ -417,7 +405,7 @@ def is_timeout(error: BaseException) -> bool:
 
 def classify_failure(error: BaseException) -> FailureReason | None:
     """The failure reason for an exception the workflows did not raise themselves, if it is recognisable."""
-    if isinstance(error, AuditError | UnsafeActionRefused):
+    if isinstance(error, AuditError):
         return error.reason
     return FailureReason.TIMEOUT if is_timeout(error) else None
 

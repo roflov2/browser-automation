@@ -7,7 +7,6 @@ from types import SimpleNamespace
 
 import pytest
 
-from audit import safety
 from audit.page import js
 from audit.workflows.ubereats.models import ItemModalState, MenuItem, StoreCard, UberResult
 from audit.workflows.ubereats.store import (
@@ -94,70 +93,68 @@ async def clear_carts(chrome: str, port: int, out_dir: Path) -> dict:
     stagehand = await Stagehand.create(browser=browser)
     try:
         page = (await browser.context.pages())[0]
-        await safety.install(browser.context, page)
-        with safety.active_guard():
-            for case, query in CASES.items():
-                await page.goto(f"http://127.0.0.1:{port}/uber-cart.html{query}")
-                model = NoModel()
-                before = await get_cart_count(page)
-                left = await clear_existing_cart(model, page, out_dir / case)  # type: ignore[arg-type]
-                seen[case] = {
-                    "before": before,
-                    "after": await get_cart_count(page),
-                    "left": left,
-                    "plus_clicks": await js(page, "() => window.plusClicks"),
-                    "llm": model.instructions,
-                    "drawer_open": await js(page, "() => !!document.getElementById('drawer')"),
-                }
-            # A cart that cannot be cleared: the run folder says what was tried and what the drawer held
-            await page.goto(f"http://127.0.0.1:{port}/uber-cart.html?divrows=1&stuck=1")
-            seen["stuck"] = {"left": await clear_existing_cart(NoModel(), page, out_dir / "stuck")}  # type: ignore[arg-type]
-            await page.goto(f"http://127.0.0.1:{port}/uber-cart.html?noesc=1")
-            await js(page, "() => document.getElementById('cart').dispatchEvent(new Event('click'))")
-            await js(page, "() => document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))")
-            seen["synthetic_escape_ignored"] = await js(page, "() => !!document.getElementById('drawer')")
-            seen["closed_by_key"] = await close_cart_drawer(page)
-            # The checkout click says what it clicked: the drawer's own 'Go to checkout', never another control
-            await page.goto(f"http://127.0.0.1:{port}/uber-cart.html")
-            await open_cart_drawer(page)
-            seen["checkout_click"] = await uber_js(page, JS_CLICK_CHECKOUT)
-            seen["checkout_click_cart"] = await get_cart_count(page)
-            await page.goto(f"http://127.0.0.1:{port}/uber-search.html")
-            for case, card in STORES.items():
-                result = UberResult(site="ubereats", out_dir=Path())
-                url = await store_url(page, card, result)
-                seen[case] = (url.split("/store/")[-1] if url else None, result.advertised_delivery_fee_display)
-            card = await first_open_store_card(page, frozenset({"/au/store/ooshman-belconnen/bbb"}))
-            seen["skipping_ooshman"] = card["url"].split("/store/")[-1]
-            await page.goto(f"http://127.0.0.1:{port}/uber-store.html?other=1")
-            result = UberResult(site="ubereats", out_dir=out_dir)
-            dish = MenuItem(name="Super Supreme", category=None, price="$10.00", sold_out=False, is_food_or_drink=True)
-            seen["new_order"] = await add_menu_item_to_cart(ModalModel(), page, dish, result, 1)  # type: ignore[arg-type]
-            seen["new_order_cart"] = await get_cart_count(page)
-            for case, query in (("open", ""), ("closed", "?closed=1"), ("quickview", "?quickview=1")):
-                await page.goto(f"http://127.0.0.1:{port}/uber-store.html{query}")
-                why = await store_closed_reason(page)
-                no_popup = await uber_js(page, JS_ITEM_DIALOG_BLOCKER)
-                await js(page, "() => document.querySelector('#menu .card').click()")
-                seen[f"store_{case}"] = (
-                    why,
-                    await is_item_modal_open(page),
-                    await item_popup_blocker(page),
-                    no_popup,
-                )
-            for hours in ("later", "now", "both", "overnight"):
-                await page.goto(f"http://127.0.0.1:{port}/uber-store.html?menuhours={hours}")
-                seen[f"menu_hours_{hours}"] = (
-                    await store_closed_reason(page),
-                    await js(page, "() => document.getElementById('menuhours').textContent"),
-                )
-            # Skipped items say why: a popup that cannot add, and no popup at all
-            for case, query, name in (("quickview", "?quickview=1", "Margherita"), ("none", "", "Not on the menu")):
-                await page.goto(f"http://127.0.0.1:{port}/uber-store.html{query}")
-                dish = MenuItem(name=name, category=None, price="$12.00", sold_out=False, is_food_or_drink=True)
-                model = FindsNothing()
-                item = await add_menu_item_to_cart(model, page, dish, UberResult(site="ubereats", out_dir=out_dir), 1)  # type: ignore[arg-type]
-                seen[f"skipped_{case}"] = (item["status"], item.get("error"), model.instructions)
+        for case, query in CASES.items():
+            await page.goto(f"http://127.0.0.1:{port}/uber-cart.html{query}")
+            model = NoModel()
+            before = await get_cart_count(page)
+            left = await clear_existing_cart(model, page, out_dir / case)  # type: ignore[arg-type]
+            seen[case] = {
+                "before": before,
+                "after": await get_cart_count(page),
+                "left": left,
+                "plus_clicks": await js(page, "() => window.plusClicks"),
+                "llm": model.instructions,
+                "drawer_open": await js(page, "() => !!document.getElementById('drawer')"),
+            }
+        # A cart that cannot be cleared: the run folder says what was tried and what the drawer held
+        await page.goto(f"http://127.0.0.1:{port}/uber-cart.html?divrows=1&stuck=1")
+        seen["stuck"] = {"left": await clear_existing_cart(NoModel(), page, out_dir / "stuck")}  # type: ignore[arg-type]
+        await page.goto(f"http://127.0.0.1:{port}/uber-cart.html?noesc=1")
+        await js(page, "() => document.getElementById('cart').dispatchEvent(new Event('click'))")
+        await js(page, "() => document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))")
+        seen["synthetic_escape_ignored"] = await js(page, "() => !!document.getElementById('drawer')")
+        seen["closed_by_key"] = await close_cart_drawer(page)
+        # The checkout click says what it clicked: the drawer's own 'Go to checkout', never another control
+        await page.goto(f"http://127.0.0.1:{port}/uber-cart.html")
+        await open_cart_drawer(page)
+        seen["checkout_click"] = await uber_js(page, JS_CLICK_CHECKOUT)
+        seen["checkout_click_cart"] = await get_cart_count(page)
+        await page.goto(f"http://127.0.0.1:{port}/uber-search.html")
+        for case, card in STORES.items():
+            result = UberResult(site="ubereats", out_dir=Path())
+            url = await store_url(page, card, result)
+            seen[case] = (url.split("/store/")[-1] if url else None, result.advertised_delivery_fee_display)
+        card = await first_open_store_card(page, frozenset({"/au/store/ooshman-belconnen/bbb"}))
+        seen["skipping_ooshman"] = card["url"].split("/store/")[-1]
+        await page.goto(f"http://127.0.0.1:{port}/uber-store.html?other=1")
+        result = UberResult(site="ubereats", out_dir=out_dir)
+        dish = MenuItem(name="Super Supreme", category=None, price="$10.00", sold_out=False, is_food_or_drink=True)
+        seen["new_order"] = await add_menu_item_to_cart(ModalModel(), page, dish, result, 1)  # type: ignore[arg-type]
+        seen["new_order_cart"] = await get_cart_count(page)
+        for case, query in (("open", ""), ("closed", "?closed=1"), ("quickview", "?quickview=1")):
+            await page.goto(f"http://127.0.0.1:{port}/uber-store.html{query}")
+            why = await store_closed_reason(page)
+            no_popup = await uber_js(page, JS_ITEM_DIALOG_BLOCKER)
+            await js(page, "() => document.querySelector('#menu .card').click()")
+            seen[f"store_{case}"] = (
+                why,
+                await is_item_modal_open(page),
+                await item_popup_blocker(page),
+                no_popup,
+            )
+        for hours in ("later", "now", "both", "overnight"):
+            await page.goto(f"http://127.0.0.1:{port}/uber-store.html?menuhours={hours}")
+            seen[f"menu_hours_{hours}"] = (
+                await store_closed_reason(page),
+                await js(page, "() => document.getElementById('menuhours').textContent"),
+            )
+        # Skipped items say why: a popup that cannot add, and no popup at all
+        for case, query, name in (("quickview", "?quickview=1", "Margherita"), ("none", "", "Not on the menu")):
+            await page.goto(f"http://127.0.0.1:{port}/uber-store.html{query}")
+            dish = MenuItem(name=name, category=None, price="$12.00", sold_out=False, is_food_or_drink=True)
+            model = FindsNothing()
+            item = await add_menu_item_to_cart(model, page, dish, UberResult(site="ubereats", out_dir=out_dir), 1)  # type: ignore[arg-type]
+            seen[f"skipped_{case}"] = (item["status"], item.get("error"), model.instructions)
     finally:
         await stagehand.close()
     return seen

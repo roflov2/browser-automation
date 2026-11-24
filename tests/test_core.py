@@ -222,7 +222,7 @@ def test_failures_are_classified():
     assert classify_failure(RuntimeError("observe() timed out after 90000ms")) is FailureReason.TIMEOUT
     assert classify_failure(KeyError("x")) is None
     assert [reason.value for reason in FailureReason] == [
-        "blocked", "out_of_stock", "flow_changed", "element_not_found", "extract_failed", "timeout", "unsafe_action_refused",
+        "blocked", "out_of_stock", "flow_changed", "element_not_found", "extract_failed", "timeout",
         "cart_lost",
     ]  # fmt: skip
 

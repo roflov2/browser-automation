@@ -81,11 +81,7 @@ def test_no_typed_detail_reaches_a_prompt_or_a_saved_file():
             return "https://book.air.test/dx/#/passengers"
 
         async def evaluate(self, expression):
-            if "auditRefused" in expression:  # a page.js() snippet
-                return {"value": None, "error": None, "refused": []}
-            if "auditChain" in expression:  # safe_act asking what the selector points at
-                return {"found": True, "labelled": True, "click": None, "field": None}
-            return []  # draining the in-page blocker
+            return {"value": None, "error": None}  # a page.js() snippet
 
         async def wait_for_load_state(self, *args, **kwargs):
             return None
@@ -129,9 +125,8 @@ def test_target_keys():
     assert uber.target_key(home, uber_models.UberResult(site=home, out_dir=Path())) == home
 
 
-def test_ubereats_empties_the_cart_after_the_run_unless_checkout_froze_the_site(monkeypatch):
+def test_ubereats_empties_the_cart_after_the_run(monkeypatch):
     import audit.workflows.ubereats as uber_package
-    from audit import safety
 
     cleared: list[str] = []
 
@@ -160,15 +155,10 @@ def test_ubereats_empties_the_cart_after_the_run_unless_checkout_froze_the_site(
     shop = "https://www.ubereats.com/au/store/ooshman-belconnen/abc"
     uber = UberEatsWorkflow(argparse.Namespace(), Settings())
     run = uber_models.UberResult(site="ubereats", out_dir=Path(), shop_url=shop)
-    with safety.active_guard() as guard:
-        page = FakePage()
-        asyncio.run(uber.empty_cart_after_run(None, page, run))  # type: ignore[arg-type]
-        assert page.visited == [shop]
-        assert cleared == ["cart_clear-after.json"]
-        guard.frozen.add("www.ubereats.com")  # the checkout page was identified: no more clicks on Uber Eats
-        asyncio.run(uber.empty_cart_after_run(None, page, run))  # type: ignore[arg-type]
-        assert page.visited == [shop]
-        assert cleared == ["cart_clear-after.json"]
+    page = FakePage()
+    asyncio.run(uber.empty_cart_after_run(None, page, run))  # type: ignore[arg-type]
+    assert page.visited == [shop]
+    assert cleared == ["cart_clear-after.json"]
 
 
 def test_ubereats_output_folder():
@@ -296,7 +286,7 @@ def test_virgin_reuses_the_step_when_the_screen_did_not_change(monkeypatch, tmp_
             extracts.append(schema.__name__)
             return SimpleNamespace(data=state())
 
-    async def fake_safe_act(stagehand, page, instruction, **options):
+    async def fake_llm_act(stagehand, instruction, **options):
         actions.append(instruction)
         return SimpleNamespace(description="clicked continue", success=True)
 
@@ -311,7 +301,7 @@ def test_virgin_reuses_the_step_when_the_screen_did_not_change(monkeypatch, tmp_
         return next(screens)
 
     monkeypatch.setattr(virgin, "fingerprint", fake_fingerprint)
-    monkeypatch.setattr(virgin, "safe_act", fake_safe_act)
+    monkeypatch.setattr(virgin, "llm_act", fake_llm_act)
     for name in ("wait_for_render", "shot", "settle"):
         monkeypatch.setattr(virgin, name, nothing)
     run = SiteResult(site="s", out_dir=tmp_path)
