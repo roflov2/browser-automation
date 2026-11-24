@@ -50,6 +50,12 @@ RESTRICTED_TYPES = re.compile(
     r"group|school|infant|under\s*\d+|wheelchair|access|hospitality|vip|package",
     re.IGNORECASE,
 )
+# A "Best available / Any price" row spans every tier; it is a way into the seat map, not a ticket to hold.
+CATCH_ALL = re.compile(r"any\s+price|best\s+available", re.IGNORECASE)
+# Availability notes the extraction sometimes puts where the ticket type belongs.
+AVAILABILITY_NOTE = re.compile(
+    r"limited|single seats|selling fast|few left|available|exhausted|sold out", re.IGNORECASE
+)
 
 
 async def dismiss_ticketek_popups(stagehand: Stagehand, page: Page) -> None:
@@ -234,12 +240,26 @@ def option_name(option: PriceOption) -> str:
     return " - ".join(filter(None, [option.area, option.price_type]))
 
 
+def is_catch_all(option: PriceOption) -> bool:
+    """A 'Best available' / 'Any price' row, however the extraction split it, or one priced as a range."""
+    if CATCH_ALL.search(f"{option.area or ''} {option.price_type or ''}"):
+        return True
+    return len(re.findall(r"\d[\d,]*(?:\.\d+)?", option.price or "")) > 1
+
+
+def ticket_type_of(option: PriceOption) -> str | None:
+    """The option's ticket type, or None when the field only holds an availability note."""
+    if option.price_type and AVAILABILITY_NOTE.search(option.price_type):
+        return None
+    return option.price_type
+
+
 def choose_option(options: list[PriceOption]) -> PriceOption | None:
     """The cheapest available ticket an ordinary adult can buy; any cheapest ticket if none is plainly adult."""
     priced = [o for o in options if o.available and parse_price(o.price) is not None]
-    standard = [o for o in priced if not RESTRICTED_TYPES.search(o.price_type or "")]
+    standard = [o for o in priced if not RESTRICTED_TYPES.search(f"{o.price_type or ''} {o.area or ''}")]
     candidates = standard or priced
-    specific = [o for o in candidates if not re.search(r"any\s+price", o.area or "", re.IGNORECASE)]
+    specific = [o for o in candidates if not is_catch_all(o)]
     return min(specific or candidates, key=lambda o: parse_price(o.price) or 0.0, default=None)
 
 
@@ -251,9 +271,10 @@ def cheapest_offered(options: list[PriceOption]) -> float | None:
 async def hold_tickets(stagehand: Stagehand, page: Page, option: PriceOption, quantity: int) -> Item:
     """Choose `quantity` tickets of `option` (best available seats) and get them held in the cart."""
     item = new_item(option_name(option), option.price, quantity=quantity)
-    kind = " in ".join(f"'{part}'" for part in [option.price_type, option.area] if part) or "standard"
+    price_type = ticket_type_of(option)
+    kind = " in ".join(f"'{part}'" for part in [price_type, option.area] if part) or "standard"
     described = f"{quantity} x {kind}"
-    ticket_type = f"'{option.price_type}' (or Adult / Standard)" if option.price_type else "'Adult / Standard'"
+    ticket_type = f"'{price_type}' (or Adult / Standard)" if price_type else "'Adult / Standard'"
     question = (
         f"We want {described} tickets. Are tickets now held/reserved (a cart, basket, order summary or countdown "
         "timer)? Report the area, seats, ticket type, quantity, price per ticket and total."

@@ -72,7 +72,8 @@ class PriceOption(BaseModel):
     price_type: str | None = Field(
         default=None,
         description="Ticket type as displayed, e.g. 'Adult', 'Child', 'Concession', 'Student', 'Family', 'Member'; "
-        "null if the tier shows no separate ticket type",
+        "null if the tier shows no separate ticket type. Availability notes such as 'Limited availability' or "
+        "'Single seats only' are not ticket types; put them in price_note",
     )
     price: str | None = Field(description="Price per ticket as displayed, e.g. '$89.90'; null if unavailable")
     available: bool = Field(description="False if sold out, unavailable or greyed out")

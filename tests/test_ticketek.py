@@ -63,6 +63,42 @@ def test_choose_option_prefers_the_cheapest_standard_adult_ticket():
     assert flow.choose_option([option("Adult", "$40", available=False)]) is None
 
 
+def test_choose_option_skips_the_best_available_any_price_row():
+    # Evanescence, RAC Arena Perth: the catch-all row's range starts at the cheapest real tier's price.
+    options = [option("Any price", "$145.65 - $431.10", area="Best available"),
+               option(None, "$349.55", area="Premium Reserve Seating"),
+               option(None, "$206.85", area="General Admission Standing"),
+               option("Limited availability", "$227.20", area="A Reserve Aisle Seating"),
+               option(None, "$206.85", area="A Reserve Seating"),
+               option(None, "$196.65", area="B Reserve Aisle Seating"),
+               option(None, "$176.25", area="B Reserve Seating"),
+               option("Limited availability", "$166.05", area="C Reserve Aisle Seating"),
+               option(None, "$145.65", area="C Reserve Seating"),
+               option(None, None, area="D Reserve Aisle Seating", available=False),
+               option(None, None, area="D Reserve Seating", available=False),
+               option(None, None, area="Evanescence Premium Ticket Package - Seated", available=False),
+               option(None, None, area="Evanescence Premium Ticket Package - GA", available=False),
+               option("Single seats only", "$431.10", area="Evanescence Tour Package - Seated"),
+               option("Limited availability", "$369.95", area="Evanescence Tour Package - GA")]  # fmt: skip
+    assert flow.choose_option(options).area == "C Reserve Seating"
+    c_reserve = option(None, "$145.65", area="C Reserve Seating")
+    for catch_all in [option("Any price", "$145.65 - $431.10", area="Best available"),
+                      option("Standard", "$145.65 - $431.10", area="Best available (Any price)")]:  # fmt: skip
+        assert flow.is_catch_all(catch_all)
+        assert flow.choose_option([catch_all, c_reserve]) is c_reserve
+        assert flow.choose_option([catch_all]) is catch_all  # nothing else: still something to try
+    assert flow.is_catch_all(option(None, "$145.65 - $431.10", area="Stalls"))  # a price range alone
+    assert not flow.is_catch_all(option(None, "$1,234.56", area="Stalls"))
+
+
+def test_restricted_words_in_the_area_count_and_availability_notes_are_not_ticket_types():
+    package, plain = option(None, "$100", area="Evanescence Tour Package - GA"), option(None, "$150", area="B Reserve")
+    assert flow.choose_option([package, plain]) is plain
+    assert flow.ticket_type_of(option("Limited availability", "$166.05")) is None
+    assert flow.ticket_type_of(option("Single seats only", "$431.10")) is None
+    assert flow.ticket_type_of(option("Adult", "$89.90")) == "Adult"
+
+
 def test_a_tier_with_no_ticket_type_reads_and_counts_as_standard():
     shown = {"area": "A Reserve", "price": "$129", "available": True, "price_note": None}
     assert PriceOption.model_validate({**shown, "price_type": None}).price_type is None
