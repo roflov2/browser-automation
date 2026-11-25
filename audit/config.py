@@ -39,7 +39,7 @@ class Settings(BaseSettings):
     azure_openai_api_version: str = DEFAULT_AZURE_API_VERSION
     azure_openai_managed_identity: bool = False
 
-    # Guest details typed into the airline booking form by `virgin`. Placeholders, never a real person by default.
+    # Guest details typed into the airline booking form by `qantas`. Placeholders, never a real person by default.
     pax_title: str = "Mr"
     pax_first_name: str = "Alex"
     pax_last_name: str = "Testbooking"

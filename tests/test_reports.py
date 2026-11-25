@@ -236,13 +236,13 @@ def test_usage_report_backfills_old_runs_from_session_json(output_root):
     old = make_result(output_root, "https://old.test", "old.test/1")
     update_summary(old, "coffee")  # recorded before the usage columns existed
     core.write_json(old.out_dir / "session.json", {"execution_time_ms": 199321, "metrics": METRICS})
-    update_summary(make_result(output_root, "https://new.test", "new.test/1"), "virgin",
+    update_summary(make_result(output_root, "https://new.test", "new.test/1"), "qantas",
                    usage=core.RunUsage.from_metrics(60000, {**METRICS, "total_prompt_tokens": 1000.0}, 3))  # fmt: skip
     runs = core.with_session_usage(read_csv(output_root / "runs.csv"))
     assert [r["total_tokens"] for r in runs] == ["104184", "10139"]
     report = core.usage_report(runs)
     assert "coffee" in report and "104,184" in report and "3m 19s" in report
-    assert "virgin" in report and "10,139" in report and "1m 00s" in report
+    assert "qantas" in report and "10,139" in report and "1m 00s" in report
 
 
 def test_usage_report_without_measured_runs():

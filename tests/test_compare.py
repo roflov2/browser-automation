@@ -10,7 +10,7 @@ from pathlib import Path
 import pytest
 
 from audit.core import Fee, LineItem, SiteResult, drip_verdict
-from audit.workflows import coffee, virgin
+from audit.workflows import coffee, qantas
 from audit.workflows.ubereats import models as uber_models
 from audit.workflows.ubereats import pricing as uber_pricing
 
@@ -22,6 +22,11 @@ SMALL_ORDER_FEE_NOT_SHOWN = {
     "amount": None,
     "pct_of_subtotal": None,
 }  # was $0.00 / 0.0
+
+
+# The airline comparison is characterised by two saved Virgin Australia runs: the qantas workflow keeps
+# the same booking-flow schemas and comparison, so the same inputs must give the same reports.
+AIRLINE_RUNS = "virgin"
 
 
 def runs_for(saved_runs: list[dict], workflow: str) -> list[dict]:
@@ -68,27 +73,27 @@ def test_coffee_matches_saved_report(saved_runs, index):
 
 
 @pytest.mark.parametrize("index", range(2))
-def test_virgin_matches_saved_report(saved_runs, index):
-    run = runs_for(saved_runs, "virgin")[index]
+def test_airline_matches_saved_report(saved_runs, index):
+    run = runs_for(saved_runs, AIRLINE_RUNS)[index]
     c = run["checkout"]
     result = SiteResult(
         site="https://example.test", out_dir=Path(), items=run["items"], extras=run["extras"], steps=run["steps"]
     )
-    checkout = virgin.CheckoutDetails(
+    checkout = qantas.CheckoutDetails(
         is_checkout_page=True,
         blocked_reason=None,
-        items=[virgin.LineItem(**line) for line in c["items"]],
+        items=[qantas.LineItem(**line) for line in c["items"]],
         subtotal=c["subtotal"],
         extras=fees(c["extras"]),
         other_fees=fees(c["other_fees"]),
-        payment_surcharges=[virgin.Surcharge(**s) for s in c["payment_surcharges"]],
+        payment_surcharges=[qantas.Surcharge(**s) for s in c["payment_surcharges"]],
         tax_amount=c["tax_amount"],
         tax_included=c["tax_included"],
         total=c["total"],
         currency=c["currency"],
         summary=c["summary"],
     )
-    assert_report(virgin.compare_prices(result, checkout), run["expected"])
+    assert_report(qantas.compare_prices(result, checkout), run["expected"])
     assert_items(result.items, run["items_expected"])
     assert result.extras == run["extras_expected"]
 
@@ -220,7 +225,7 @@ def test_ubereats_null_summary_and_reason(saved_runs):
 
 @pytest.mark.parametrize(
     "model",
-    [uber_models.CartAndCheckoutState, coffee.CheckoutDetails, virgin.CheckoutDetails],
+    [uber_models.CartAndCheckoutState, coffee.CheckoutDetails, qantas.CheckoutDetails],
     ids=lambda m: m.__module__,
 )
 def test_tax_included_may_be_null(model):
@@ -237,16 +242,16 @@ NULLABLE_READS = [
     (coffee.CheckoutDetails, "summary"),
     (coffee.Product, "price"),
     (coffee.Product, "product_type"),
-    (virgin.SearchState, "reason"),
-    (virgin.SelectedFare, "reason"),
-    (virgin.StepState, "summary"),
-    (virgin.CheckoutDetails, "summary"),
-    (virgin.Flight, "departs"),
-    (virgin.Flight, "arrives"),
-    (virgin.Flight, "stops"),
-    (virgin.FieldToFill, "kind"),
-    (virgin.FieldToFill, "detail"),
-    (virgin.Surcharge, "fee"),
+    (qantas.SearchState, "reason"),
+    (qantas.SelectedFare, "reason"),
+    (qantas.StepState, "summary"),
+    (qantas.CheckoutDetails, "summary"),
+    (qantas.Flight, "departs"),
+    (qantas.Flight, "arrives"),
+    (qantas.Flight, "stops"),
+    (qantas.FieldToFill, "kind"),
+    (qantas.FieldToFill, "detail"),
+    (qantas.Surcharge, "fee"),
     (uber_models.MenuItem, "price"),
 ]
 
@@ -336,12 +341,12 @@ def test_coffee_reports_whether_shipping_was_calculated(saved_runs):
     assert coffee.compare_prices(run["items"], *coffee_inputs(run, shipping="$9.95"))["shipping_calculated"] is True
 
 
-def test_virgin_without_payment_page_is_unknown(saved_runs):
-    run = runs_for(saved_runs, "virgin")[0]
+def test_airline_without_payment_page_is_unknown(saved_runs):
+    run = runs_for(saved_runs, AIRLINE_RUNS)[0]
     result = SiteResult(
         site="https://example.test", out_dir=Path(), items=run["items"], extras=run["extras"], steps=run["steps"]
     )
-    report = virgin.compare_prices(result, None)
+    report = qantas.compare_prices(result, None)
     assert report["drip_detected"] is None
     assert report["checkout_total"] == 385.0  # the last running total seen is still reported
     assert report["final_price_read"] is False

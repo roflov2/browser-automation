@@ -615,7 +615,7 @@ def write_reports(result: SiteResult, item_fields: Sequence[str] = ITEM_FIELDS) 
         write_csv(out / "extras.csv", EXTRA_FIELDS, result.extras)
 
 
-_SEED_WORKFLOWS = {"ubereats.com": "ubereats", "virginaustralia.com": "virgin"}
+_SEED_WORKFLOWS = {"ubereats.com": "ubereats"}
 
 
 def _seed_runs(summary_rows: Iterable[dict[str, str]]) -> list[dict[str, Any]]:
