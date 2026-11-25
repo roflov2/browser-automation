@@ -13,13 +13,14 @@ The run always stops on the payment page: no payment details are entered and not
 import argparse
 import contextlib
 import logging
+import re
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 
 from pydantic import BaseModel, Field
 from stagehand import Page, Stagehand
 
-from ..actions import llm_act
+from ..actions import click_at, llm_act
 from ..config import Settings
 from ..core import (
     BROWSER_ERRORS,
@@ -44,7 +45,7 @@ from ..core import (
     summarise_extras,
     write_csv,
 )
-from ..page import dismiss_popups, fingerprint, settle, shot, wait_for_render
+from ..page import dismiss_popups, fingerprint, js, settle, shot, wait_for_render
 from ..workflow import Workflow
 
 log = logging.getLogger(__name__)
@@ -59,6 +60,14 @@ NO_RESEARCH = (
 MAX_SEARCH_STEPS = 14
 MAX_BOOKING_STEPS = 25
 MAX_STUCK_REPEATS = 3
+# Paging the date picker on with the same arrow is progress the search state cannot show (the date stays empty
+# until a day is picked), so it gets a year of months before it counts as stuck.
+MAX_MONTH_REPEATS = 12
+MONTH_NAVIGATION = re.compile(
+    r"\b(next|previous|prev|forward|back|later|earlier)\b.{0,20}\bmonths?\b|\bmonths?\b.{0,20}\b(next|previous|forward|back)\b",
+    re.IGNORECASE,
+)
+TRIP_SETTLE_MS = 800  # the trip-type list opens and closes in place; no navigation to wait for
 
 SAFETY_PROMPT = (
     "You are auditing an airline booking flow for price transparency. Never enter payment card, voucher, "
@@ -86,14 +95,23 @@ class SearchState(BaseModel):
     )
     loading: bool = Field(
         default=False,
-        description="True if the page is still loading (blank, spinner, 'searching for flights' or similar)",
+        description="True only for a loading spinner, a 'searching for flights' message or a blank results page; "
+        "never for the home page or its flight search form",
     )
     form_visible: bool = Field(description="True if the flight search form/widget is visible")
     trip_type: str | None = Field(description="'one_way', 'return' or 'multi_city' as currently set, if shown")
-    origin: str | None = Field(description="Currently chosen departure airport, e.g. 'Sydney (SYD)'; null if empty")
-    destination: str | None = Field(description="Currently chosen arrival airport; null if empty")
-    depart_date: str | None = Field(description="Currently chosen departure date as displayed; null if empty")
-    guests: str | None = Field(description="Currently chosen passengers, e.g. '1 Adult'")
+    origin: str | None = Field(
+        description="Departure airport shown in the search form's 'from' field, e.g. 'Sydney (SYD)'; null if "
+        "the field is empty or only shows its placeholder"
+    )
+    destination: str | None = Field(
+        description="Arrival airport shown in the search form's 'to' field; null if the field is empty or only "
+        "shows its placeholder"
+    )
+    depart_date: str | None = Field(
+        description="Departure date shown in the search form's date field; null if no date has been picked yet"
+    )
+    guests: str | None = Field(description="The text on the passengers/guests button, e.g. '1 Adult'")
     using_points: bool = Field(
         description="True if booking with frequent-flyer points (a reward / points search) is switched on"
     )
@@ -300,17 +318,157 @@ async def wait_for_results(stagehand: Stagehand, page: Page, question: str) -> S
     return state
 
 
-def search_held(state: SearchState) -> tuple:
-    """What the search form holds, normalised so 'Return'/'return' and ''/None read the same."""
-    values = (state.trip_type, state.origin, state.destination, state.depart_date, state.guests)
-    return (*(str(value).strip().lower() or None if value else None for value in values), state.using_points)
+# The trip-type control on qantas.com is a custom React widget (a `div` combobox and a `ul/li` list), so it is
+# found by role and text, not by position. It is marked with a data attribute so the follow-up scripts find it again.
+JS_TRIP_TYPE = r"""() => {
+    const trip = s => /^one[ -]?way$/i.test(s) ? 'one_way' : /^return$/i.test(s) ? 'return'
+        : /^multi[ -]?city$/i.test(s) ? 'multi_city' : null;
+    // The value it shows: its first line that names a trip type ('Trip type\nReturn' -> 'Return').
+    const shown = el => {
+        const text = el.tagName === 'SELECT' ? ((el.selectedOptions[0] || {}).text || '') : (el.innerText || el.value || '');
+        return text.split('\n').map(clean).find(line => trip(line)) || null;
+    };
+    const found = Array.from(document.querySelectorAll(
+        '[role="combobox"], [aria-haspopup="listbox"], [aria-haspopup="true"], button[aria-haspopup], select'
+    )).filter(el => vis(el) && shown(el));
+    found.sort((a, b) => Number(!!b.closest('form')) - Number(!!a.closest('form')));
+    const el = found[0];
+    if (!el) return null;
+    document.querySelectorAll('[data-audit-trip]').forEach(e => e.removeAttribute('data-audit-trip'));
+    el.setAttribute('data-audit-trip', '1');
+    el.scrollIntoView({ block: 'center' });
+    const r = el.getBoundingClientRect();
+    return { trip: trip(shown(el)), text: shown(el), tag: el.tagName.toLowerCase(),
+             expanded: el.getAttribute('aria-expanded'), x: r.left + r.width / 2, y: r.top + r.height / 2,
+             controls: el.getAttribute('aria-controls') || el.getAttribute('aria-owns') };
+}"""
+# The visible "One way" entry of the open list: in the list the combobox names, else anywhere on the page.
+JS_ONE_WAY_OPTION = r"""controls => {
+    const pick = root => Array.from(root.querySelectorAll('[role="option"], [role="menuitem"], [role="menuitemradio"], li'))
+        .find(el => vis(el, 4, 4) && /^one[ -]?way$/i.test(clean(el.innerText)));
+    const list = controls ? document.getElementById(controls) : null;
+    const el = (list && pick(list)) || pick(document);
+    if (!el) return null;
+    document.querySelectorAll('[data-audit-trip-option]').forEach(e => e.removeAttribute('data-audit-trip-option'));
+    el.setAttribute('data-audit-trip-option', '1');
+    el.scrollIntoView({ block: 'nearest' });
+    const r = el.getBoundingClientRect();
+    return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+}"""
+JS_DOM_CLICK = (
+    r"""attribute => { const el = document.querySelector(`[${attribute}]`); return el ? clickEl(el) : false; }"""
+)
+JS_SELECT_ONE_WAY = r"""() => {
+    const el = document.querySelector('[data-audit-trip]');
+    const option = el && Array.from(el.options || []).find(o => /^one[ -]?way$/i.test(clean(o.text)));
+    return option ? selectOption(el, option.value) : false;
+}"""
+
+
+async def read_trip_type(page: Page) -> dict | None:
+    """The trip-type control as the page shows it ({trip: 'one_way'|'return'|'multi_city', x, y, ...}); None if not found."""
+    found = await js(page, JS_TRIP_TYPE)
+    return found if isinstance(found, dict) else None
+
+
+async def _open_trip_list(page: Page, control: dict) -> dict | None:
+    """Open the trip-type list (a real click, a DOM click if that showed nothing) and find its 'One way' entry."""
+    await click_at(page, control["x"], control["y"])
+    await settle(page, TRIP_SETTLE_MS)
+    option = await js(page, JS_ONE_WAY_OPTION, control.get("controls"))
+    if option is None:
+        await js(page, JS_DOM_CLICK, "data-audit-trip", default=False)
+        await settle(page, TRIP_SETTLE_MS)
+        option = await js(page, JS_ONE_WAY_OPTION, control.get("controls"))
+    return option if isinstance(option, dict) else None
+
+
+async def set_one_way(page: Page) -> bool:
+    """Set the search form's trip type to one way in code, without the model. True if the page now shows 'One way'.
+
+    The model cannot be relied on here: it calls selectOptionFromDropdown on the `div` combobox (which changes
+    nothing yet reports success), or clicks it open and closed again without choosing from the list.
+    """
+    try:
+        control = await read_trip_type(page)
+        if control is None:
+            log.info("  Trip type: no trip-type control found in the page; leaving it to the model")
+            return False
+        if control["trip"] == "one_way":
+            log.info("  Trip type: already 'One way'")
+            return True
+        if control["tag"] == "select":
+            await js(page, JS_SELECT_ONE_WAY, default=False)
+        else:
+            option = await _open_trip_list(page, control)
+            if option is None:
+                log.info(
+                    f"  Trip type: opened '{control['text']}' but found no 'One way' option; leaving it to the model"
+                )
+                return False
+            await click_at(page, option["x"], option["y"])
+            await settle(page, TRIP_SETTLE_MS)
+            after = await read_trip_type(page)
+            if not after or after["trip"] != "one_way":  # React ignored the mouse click: try a DOM click
+                await js(page, JS_DOM_CLICK, "data-audit-trip-option", default=False)
+        await settle(page, TRIP_SETTLE_MS)
+        after = await read_trip_type(page)
+    except BROWSER_ERRORS as error:  # a failed helper leaves the trip type to the model, as before
+        log.info(f"  Trip type: could not be set in the page ({error}); leaving it to the model")
+        return False
+    done = bool(after and after["trip"] == "one_way")
+    log.info(
+        "  Trip type: set to 'One way'"
+        if done
+        else f"  Trip type: still '{(after or control)['text']}' after choosing 'One way'"
+    )
+    return done
+
+
+HELD_FIELDS = ("trip_type", "origin", "destination", "depart_date", "using_points")
+
+
+def search_held(state: SearchState, before: tuple | None = None) -> tuple:
+    """What the search form holds, as far as progress goes: trip type, airports, date and points.
+
+    Normalised so 'Return'/'return' and ''/None read the same. Passengers are left out, and a field the
+    extraction left empty keeps its value from `before`: the extraction drops fields from one read to the
+    next on an unchanged screen, and that must not look like the search moving on.
+    """
+    held = []
+    for index, name in enumerate(HELD_FIELDS):
+        value = getattr(state, name)
+        value = (str(value).strip().lower() or None) if isinstance(value, str) else value
+        held.append(before[index] if value is None and before is not None else value)
+    return tuple(held)
+
+
+def is_month_navigation(step_description: str) -> bool:
+    """True for the date picker's next/previous-month arrow, which is clicked again and again on purpose."""
+    return bool(MONTH_NAVIGATION.search(step_description))
+
+
+async def page_trip_type(page: Page) -> str | None:
+    """The trip type the page's own control shows ('one_way', 'return', ...); None if it can't be read."""
+    try:
+        control = await read_trip_type(page)
+    except BROWSER_ERRORS as error:  # a failed read falls back to the extraction's trip type
+        log.debug("Trip type read failed: %s", error)
+        return None
+    return control["trip"] if control else None
+
+
+def with_trip_type(state: SearchState, trip_type: str | None) -> SearchState:
+    """`state` with the trip type read from the DOM, which is reliable, in place of the extraction's guess."""
+    return state.model_copy(update={"trip_type": trip_type}) if trip_type else state
 
 
 async def search_flights(stagehand: Stagehand, page: Page, trip: Trip) -> None:
     """Work the site's flight search, one action at a time, until a list of flights shows.
 
-    The model is given the goal and what the form currently holds, not a route through the form: it
-    chooses each next action itself, so the order of fields and the shape of the widget do not matter.
+    The trip type is set in code first (set_one_way). For the rest, the model is given the goal and what the
+    form currently holds, not a route through the form: it chooses each next action itself, so the order of
+    fields and the shape of the widget do not matter.
     """
     goal = (
         f"a ONE-WAY flight for 1 adult in economy from {trip.origin} to {trip.destination} departing "
@@ -320,7 +478,10 @@ async def search_flights(stagehand: Stagehand, page: Page, trip: Trip) -> None:
         f"We are searching for {goal}. Report the current state of the flight search, "
         "or whether a list of flights for that search is already showing."
     )
+    await set_one_way(page)
     state = (await stagehand.extract(question, SearchState)).data
+    trip_type = await page_trip_type(page)
+    held: tuple | None = None  # what the search held after the last action, empty fields carried over
     last: tuple[str, tuple] | None = None  # (control acted on, what the search held after it)
     repeats = 0
     hint = ""
@@ -335,22 +496,31 @@ async def search_flights(stagehand: Stagehand, page: Page, trip: Trip) -> None:
             if state.loading:
                 break
             continue
+        if (trip_type or state.trip_type) != "one_way" and await set_one_way(page):
+            trip_type = "one_way"
+        state = with_trip_type(state, trip_type)
+        one_way = trip_type == "one_way"
+        trip_rule = " The trip type is already set to One way: do not touch the trip-type control." if one_way else ""
         step = await llm_act(
             stagehand,
             f"Goal: show the list of flights for {goal}. Take the single next action that moves towards that goal. "
             f"The search currently holds: trip type={state.trip_type}, from={state.origin}, to={state.destination}, "
             f"date={state.depart_date}, guests={state.guests}, using points={state.using_points}. Correct whatever "
             "does not match the goal (opening the search form first if it is hidden, and choosing airports and dates "
-            f"from the site's own lists or calendar), then submit the search once everything matches.{hint}",
-            follow_up=True,  # a custom dropdown (the trip type) needs opening before its option can be picked
+            f"from the site's own lists or calendar), then submit the search once everything matches.{trip_rule}{hint}",
+            follow_up=True,  # a custom dropdown needs opening before its option can be picked
         )
         await settle(page, SETTLE_MS)
         state = (await stagehand.extract(question, SearchState)).data
+        trip_type = await page_trip_type(page)
+        state = with_trip_type(state, trip_type)
         log.info(f"  {step.description} -> {state.reason}")
-        now = (step.selector, search_held(state))
+        held = search_held(state, held)
+        now = (step.selector, held)
         repeats = repeats + 1 if now == last else 0
         last = now
-        if repeats >= MAX_STUCK_REPEATS:
+        paging = is_month_navigation(step.description)
+        if repeats >= (MAX_MONTH_REPEATS if paging else MAX_STUCK_REPEATS):
             raise FlowChanged(
                 f"Stuck on the flight search: '{step.description}' was acted on {repeats + 1} times in a row "
                 f"and the search did not change (trip type={state.trip_type}, from={state.origin}, to={state.destination})"
@@ -359,7 +529,7 @@ async def search_flights(stagehand: Stagehand, page: Page, trip: Trip) -> None:
             f" Your last action ('{step.description}') changed nothing in the search. If it opened a list or menu, "
             "choose the right option from that list now; otherwise use a different control. Do not act on the same "
             "control again."
-            if repeats
+            if repeats and not paging
             else ""
         )
     if state.blocked_reason:
