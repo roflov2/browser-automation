@@ -310,3 +310,60 @@ def test_qantas_reuses_the_step_when_the_screen_did_not_change(monkeypatch, tmp_
     assert extracts == ["StepState"]  # one read; the three repeats cost no extraction (was four reads)
     assert len(actions) == 3
     assert len(run.steps) == 1
+
+
+# --- coffee: an add-to-cart failure says why in price_comparison.json ---------------------------------
+def _add_to_cart(monkeypatch, *, observed, counts):
+    """Run coffee.add_product_to_cart on a ready product page, with a fake model and a scripted /cart.js."""
+
+    class Stagehand:
+        async def extract(self, instruction, schema, **options):
+            return SimpleNamespace(data=schema(
+                is_product_page=True, has_purchase_options=False, one_time_selected=True, has_size_options=False,
+                lowest_size_selected=True, selected_size="200g", lowest_available_size="200g",
+                current_price="$22.00", reason=None,
+            ))  # fmt: skip
+
+        async def observe(self, instruction, **options):
+            return SimpleNamespace(data=observed)
+
+        async def act(self, action, **options):
+            return SimpleNamespace(data=SimpleNamespace(success=True, action_description="clicked Add to cart"))
+
+    async def nothing(*args, **kwargs):
+        return None
+
+    reads = iter(counts)
+
+    async def item_count(page):
+        return next(reads)
+
+    for name in ("resolve_product_url", "settle", "maybe_dismiss_popups", "wait_until"):
+        monkeypatch.setattr(coffee, name, nothing)
+    monkeypatch.setattr(coffee, "shopify_item_count", item_count)
+    product = coffee.Product(name="Maple", price="$22.00", sold_out=False, is_coffee=True, url=None)
+    return asyncio.run(coffee.add_product_to_cart(Stagehand(), SimpleNamespace(), product, "https://shop.test/all"))
+
+
+def test_coffee_add_failure_when_nothing_is_found(monkeypatch):
+    item = _add_to_cart(monkeypatch, observed=[], counts=[0])
+    assert item["status"] == "add_failed"
+    assert item["add_detail"] == "no matching element found"
+    assert item["add_selector"] == ""
+    assert item["cart_count"] == [0, None]  # no click, so no second read
+
+
+def test_coffee_add_failure_when_the_cart_does_not_grow(monkeypatch):
+    button = SimpleNamespace(description="Add to cart : Maple", selector="xpath=//form/button", method="click")
+    item = _add_to_cart(monkeypatch, observed=[button], counts=[2, 2])
+    assert item["status"] == "add_failed"
+    assert item["cart_count"] == [2, 2]
+    assert item["add_selector"] == "xpath=//form/button"
+    assert item["add_detail"] == "clicked Add to cart"
+
+
+def test_coffee_add_records_an_unreadable_cart(monkeypatch):
+    button = SimpleNamespace(description="Add to cart", selector="xpath=//button", method="click")
+    item = _add_to_cart(monkeypatch, observed=[button], counts=[None, None])
+    assert item["status"] == "added"  # the cart check is skipped, as before
+    assert item["cart_count"] == [None, None]
