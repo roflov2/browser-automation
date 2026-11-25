@@ -313,8 +313,13 @@ def test_qantas_reuses_the_step_when_the_screen_did_not_change(monkeypatch, tmp_
 
 
 # --- coffee: an add-to-cart failure says why in price_comparison.json ---------------------------------
-def _add_to_cart(monkeypatch, *, observed, counts):
-    """Run coffee.add_product_to_cart on a ready product page, with a fake model and a scripted /cart.js."""
+def _add_to_cart(monkeypatch, *, observed, counts, direct=None, visible=0, cart=None):
+    """Run coffee.add_product_to_cart on a ready product page, with a fake model and a scripted /cart.js.
+
+    `counts` are the item_count reads in order (the last one repeats); `direct` is what the product form's own
+    button click returns (None: no such button); `visible` is the index the visibility check picks.
+    """
+    calls = {"observe": 0, "acted": [], "direct": 0, "visible": []}
 
     class Stagehand:
         async def extract(self, instruction, schema, **options):
@@ -325,28 +330,49 @@ def _add_to_cart(monkeypatch, *, observed, counts):
             ))  # fmt: skip
 
         async def observe(self, instruction, **options):
+            if "Add to cart" not in instruction:
+                return SimpleNamespace(data=[])  # the click that opens the product page: already open
+            calls["observe"] += 1
             return SimpleNamespace(data=observed)
 
         async def act(self, action, **options):
+            calls["acted"].append(action.selector)
             return SimpleNamespace(data=SimpleNamespace(success=True, action_description="clicked Add to cart"))
 
     async def nothing(*args, **kwargs):
         return None
 
-    reads = iter(counts)
+    reads = list(counts)
 
     async def item_count(page):
-        return next(reads)
+        return reads.pop(0) if len(reads) > 1 else reads[0]
+
+    async def click_direct(page):
+        calls["direct"] += 1
+        return direct
+
+    async def first_visible(page, selectors):
+        calls["visible"].append(selectors)
+        return visible
+
+    async def fetch(page, path):
+        return cart
 
     for name in ("resolve_product_url", "settle", "maybe_dismiss_popups", "wait_until"):
         monkeypatch.setattr(coffee, name, nothing)
     monkeypatch.setattr(coffee, "shopify_item_count", item_count)
+    monkeypatch.setattr(coffee, "click_shopify_add_button", click_direct)
+    monkeypatch.setattr(coffee, "first_visible_choice", first_visible)
+    monkeypatch.setattr(coffee, "fetch_json", fetch)
+    monkeypatch.setattr(coffee, "CART_POLL_INTERVAL_MS", 1)
+    monkeypatch.setattr(coffee, "CART_POLL_TIMEOUT_MS", 5)
     product = coffee.Product(name="Maple", price="$22.00", sold_out=False, is_coffee=True, url=None)
-    return asyncio.run(coffee.add_product_to_cart(Stagehand(), SimpleNamespace(), product, "https://shop.test/all"))
+    item = asyncio.run(coffee.add_product_to_cart(Stagehand(), SimpleNamespace(), product, "https://shop.test/all"))
+    return item, calls
 
 
 def test_coffee_add_failure_when_nothing_is_found(monkeypatch):
-    item = _add_to_cart(monkeypatch, observed=[], counts=[0])
+    item, _ = _add_to_cart(monkeypatch, observed=[], counts=[0])
     assert item["status"] == "add_failed"
     assert item["add_detail"] == "no matching element found"
     assert item["add_selector"] == ""
@@ -355,7 +381,7 @@ def test_coffee_add_failure_when_nothing_is_found(monkeypatch):
 
 def test_coffee_add_failure_when_the_cart_does_not_grow(monkeypatch):
     button = SimpleNamespace(description="Add to cart : Maple", selector="xpath=//form/button", method="click")
-    item = _add_to_cart(monkeypatch, observed=[button], counts=[2, 2])
+    item, _ = _add_to_cart(monkeypatch, observed=[button], counts=[2, 2])
     assert item["status"] == "add_failed"
     assert item["cart_count"] == [2, 2]
     assert item["add_selector"] == "xpath=//form/button"
@@ -364,6 +390,113 @@ def test_coffee_add_failure_when_the_cart_does_not_grow(monkeypatch):
 
 def test_coffee_add_records_an_unreadable_cart(monkeypatch):
     button = SimpleNamespace(description="Add to cart", selector="xpath=//button", method="click")
-    item = _add_to_cart(monkeypatch, observed=[button], counts=[None, None])
+    item, calls = _add_to_cart(monkeypatch, observed=[button], counts=[None, None])
     assert item["status"] == "added"  # the cart check is skipped, as before
     assert item["cart_count"] == [None, None]
+    assert calls["direct"] == 0  # no /cart.js, so not Shopify: no direct click
+
+
+FORM_BUTTON = coffee.Acted(True, "Clicked the product form's 'Add to cart' button", "css=button#BuyButtons-add")
+MODEL_BUTTON = SimpleNamespace(description="Add to cart : Maple", selector="xpath=//form/button", method="click")
+
+
+def test_coffee_add_clicks_the_product_form_button_without_the_model(monkeypatch):
+    item, calls = _add_to_cart(monkeypatch, observed=[MODEL_BUTTON], counts=[0, 0, 1], direct=FORM_BUTTON)
+    assert item["status"] == "added"
+    assert calls["observe"] == 0 and calls["acted"] == []
+    assert item["add_selector"] == "css=button#BuyButtons-add"
+    assert item["add_detail"] == FORM_BUTTON.description
+    assert item["cart_count"] == [0, 1]
+    assert "subscription_added" not in item
+
+
+def test_coffee_add_asks_the_model_when_there_is_no_form_button(monkeypatch):
+    item, calls = _add_to_cart(monkeypatch, observed=[MODEL_BUTTON], counts=[0, 1], direct=None)
+    assert item["status"] == "added"
+    assert calls["direct"] == 1 and calls["observe"] == 1
+    assert calls["acted"] == ["xpath=//form/button"]
+    assert item["cart_count"] == [0, 1]
+
+
+def test_coffee_add_asks_the_model_when_the_form_button_did_not_add(monkeypatch):
+    # 0 before; the direct click's poll sees 0 five times; 0 again just before the model's click; then 1
+    counts = [0, 0, 0, 0, 0, 0, 0, 1]
+    item, calls = _add_to_cart(monkeypatch, observed=[MODEL_BUTTON], counts=counts, direct=FORM_BUTTON)
+    assert item["status"] == "added"
+    assert calls["observe"] == 1 and calls["acted"] == ["xpath=//form/button"]
+    assert item["add_selector"] == "xpath=//form/button"  # what actually added it
+    assert item["cart_count"] == [0, 1]
+
+
+def test_coffee_add_skips_a_hidden_first_match(monkeypatch):
+    sticky = SimpleNamespace(
+        description="Quick add to cart bar button", selector="xpath=//sticky-add-to-cart/div/button", method="click"
+    )
+    item, calls = _add_to_cart(monkeypatch, observed=[sticky, MODEL_BUTTON], counts=[0, 1], visible=1)
+    assert calls["visible"] == [["xpath=//sticky-add-to-cart/div/button", "xpath=//form/button"]]
+    assert calls["acted"] == ["xpath=//form/button"]
+    assert item["add_selector"] == "xpath=//form/button"
+
+
+def test_coffee_add_acts_on_the_first_match_when_none_looks_visible(monkeypatch):
+    other = SimpleNamespace(description="Add", selector="xpath=//div/button", method="click")
+    _, calls = _add_to_cart(monkeypatch, observed=[MODEL_BUTTON, other], counts=[0, 1], visible=None)
+    assert calls["acted"] == ["xpath=//form/button"]  # as before the filter
+
+
+def test_coffee_add_flags_a_subscription_line(monkeypatch):
+    cart = {
+        "item_count": 1,
+        "items": [{"product_title": "Maple", "selling_plan_allocation": {"selling_plan": {"name": "Every 2 weeks"}}}],
+    }
+    item, _ = _add_to_cart(monkeypatch, observed=[], counts=[0, 1], direct=FORM_BUTTON, cart=cart)
+    assert item["status"] == "added"  # recorded, not undone
+    assert item["subscription_added"] is True
+
+
+def test_subscription_line():
+    one_time = {"items": [{"product_title": "Maple", "selling_plan_allocation": None}]}
+    assert coffee.subscription_line(one_time, "Maple") is None
+    assert coffee.subscription_line(None, "Maple") is None
+    older = {"items": [{"product_title": "Aspen"}, {"product_title": "Maple", "selling_plan_allocation": {}}]}
+    assert coffee.subscription_line(older, "Aspen") is None  # an empty allocation is no plan
+    plan = {
+        "items": [
+            {"product_title": "Aspen"},
+            {"product_title": "Maple", "selling_plan_allocation": {"selling_plan": {}}},
+        ]
+    }
+    assert coffee.subscription_line(plan, "Maple Coffee") == "Maple"
+
+
+def _poll(monkeypatch, counts, before):
+    reads = list(counts)
+    seen = []
+
+    async def item_count(page):
+        seen.append(reads[0])
+        return reads.pop(0) if len(reads) > 1 else reads[0]
+
+    monkeypatch.setattr(coffee, "shopify_item_count", item_count)
+    monkeypatch.setattr(coffee, "CART_POLL_INTERVAL_MS", 1)
+    monkeypatch.setattr(coffee, "CART_POLL_TIMEOUT_MS", 10)
+    return asyncio.run(coffee.wait_for_cart_growth(SimpleNamespace(), before)), seen
+
+
+def test_cart_poll_stops_as_soon_as_the_count_goes_up(monkeypatch):
+    count, seen = _poll(monkeypatch, [2, 2, 3, 9], before=2)
+    assert count == 3 and seen == [2, 2, 3]
+
+
+def test_cart_poll_gives_up_after_the_time_limit(monkeypatch):
+    count, seen = _poll(monkeypatch, [2], before=2)
+    assert count == 2 and len(seen) == 10  # 10 ms at one read per ms
+
+
+def test_cart_poll_reads_once_when_the_cart_is_unreadable(monkeypatch):
+    assert _poll(monkeypatch, [None], before=None) == (None, [None])
+
+
+def test_cart_poll_reads_through_a_navigation(monkeypatch):
+    count, seen = _poll(monkeypatch, [2, None, 3], before=2)  # e.g. the theme goes to /cart after adding
+    assert count == 3 and seen == [2, None, 3]
