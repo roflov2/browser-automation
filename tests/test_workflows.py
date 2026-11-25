@@ -329,6 +329,8 @@ class TripWidget:
             return {"trip": self.trip, "text": text, "tag": "div", "x": 10, "y": 20, "controls": None}
         if fn is qantas.JS_ONE_WAY_OPTION:
             return {"x": 10, "y": 60} if self.open else default
+        if fn in (qantas.JS_AIRPORT_FIELD, qantas.JS_FOCUS_AIRPORT, qantas.JS_AIRPORT_OPTION):
+            return default  # no airport fields unless a test fakes them
         if fn is qantas.JS_DOM_CLICK:
             self.events.append(("dom_click", arg))
             if arg == "data-audit-trip-option" and self.open:
@@ -344,7 +346,28 @@ class TripWidget:
             self.trip, self.open = "one_way", False
 
 
-def _search(monkeypatch, *, states, selectors, widget=None, description="Trip Type combobox"):
+class SearchPage:
+    """The browser page search_flights talks to directly: its URL, navigation and the keyboard."""
+
+    def __init__(self, urls=None):
+        self.urls = list(urls or [])
+        self.visited: list[str] = []
+        self.keys: list[str] = []
+
+    async def url(self):
+        return self.urls.pop(0) if len(self.urls) > 1 else (self.urls[0] if self.urls else "https://www.qantas.com/x")
+
+    async def goto(self, url):
+        self.visited.append(url)
+
+    async def key_press(self, key, delay=None):
+        self.keys.append(key)
+
+    async def type(self, text, delay=None):
+        self.keys.append(f"type:{text}")
+
+
+def _search(monkeypatch, *, states, selectors, widget=None, description="Trip Type combobox", page=None):
     """Run qantas.search_flights with scripted SearchState reads and the controls the model acts on, in order."""
     reads, picks = iter(states), iter(selectors)
     calls = []
@@ -366,8 +389,9 @@ def _search(monkeypatch, *, states, selectors, widget=None, description="Trip Ty
     monkeypatch.setattr(qantas, "settle", nothing)
     monkeypatch.setattr(qantas, "js", widget.js)
     monkeypatch.setattr(qantas, "click_at", widget.click_at)
+    monkeypatch.setattr(qantas, "dismiss_popups", nothing)
     trip = qantas.Trip("BNE", "PER", qantas.date(2027, 2, 14))
-    return calls, asyncio.run(qantas.search_flights(Stagehand(), SimpleNamespace(), trip))
+    return calls, asyncio.run(qantas.search_flights(Stagehand(), page or SearchPage(), trip))
 
 
 def _form(trip_type="return", **fields):
@@ -448,6 +472,139 @@ def test_qantas_paging_the_calendar_on_is_not_stuck(monkeypatch):
     calls, _ = _search(monkeypatch, states=states, selectors=[arrow] * 6, description="Next month arrow")
     assert len(calls) == 6
     assert not any("changed nothing" in instruction for instruction, _ in calls)
+
+
+# --- qantas: a flight-deals page or other airports are not our search's results ---------------------------
+SYD = "SYD, Sydney (Kingsford Smith), Australia"
+DEALS_URL = "https://www.qantas.com/en-au/book/flight-deals/from-sydney-to-ballina?cabin=economy"
+BNE_PER = qantas.Trip("BNE", "PER", qantas.date(2027, 2, 14))
+
+
+def test_wrong_results():
+    normal = "https://www.qantas.com/au/en/book-a-trip/flights.html"
+    assert qantas.wrong_results(_form(on_results_page=True), BNE_PER, normal) is None  # null fields never count
+    shown = _form(on_results_page=True, origin="BNE, Brisbane, Australia", destination="PER, Perth, Australia")
+    assert qantas.wrong_results(shown, BNE_PER, normal) is None
+    assert qantas.wrong_results(_form(origin=SYD), BNE_PER, normal) == f"origin shows '{SYD}', not BNE"
+    assert "flight-deals page" in qantas.wrong_results(shown, BNE_PER, DEALS_URL)
+
+
+def test_qantas_search_goes_back_when_results_show_other_airports(monkeypatch):
+    page = SearchPage()
+    states = [_form("one_way", on_results_page=True, origin=SYD), _form("one_way"),
+              _form("one_way", on_results_page=True)]  # fmt: skip
+    calls, _ = _search(monkeypatch, states=states, selectors=["xpath=//button"], page=page)
+    assert page.visited == [qantas.SITE_URL]  # back to the search form, not on to the "results"
+    assert len(calls) == 1
+
+
+def test_qantas_search_gives_up_after_the_second_wrong_results_page(monkeypatch):
+    states = [_form("one_way", on_results_page=True, origin=SYD)] * 3
+    with pytest.raises(qantas.FlowChanged, match="wrong page twice: origin shows"):
+        _search(monkeypatch, states=states, selectors=[])
+
+
+def test_qantas_search_does_not_take_a_deals_page_for_results(monkeypatch):
+    page = SearchPage([DEALS_URL])
+    with pytest.raises(qantas.FlowChanged, match="flight-deals page"):
+        _search(monkeypatch, states=[_form("one_way", on_results_page=True)] * 3, selectors=[], page=page)
+    assert page.visited == [qantas.SITE_URL]
+
+
+class AirportWidget(TripWidget):
+    """The departure/arrival type-ahead fields, pre-filled with SYD as geolocation does, plus no trip type."""
+
+    def __init__(self, *, has_option=True):
+        super().__init__(None)
+        self.values = {"departure": SYD, "arrival": None}
+        self.has_option = has_option
+        self.typing = None  # which field has the focus
+        self.typed = ""
+
+    async def js(self, page, fn, arg=None, default=None, lib=""):
+        if fn is qantas.JS_AIRPORT_FIELD:
+            x = {"departure": 100, "arrival": 200}[arg]
+            return {"value": self.values[arg], "tag": "input", "x": x, "y": 50, "clear": None, "controls": None}
+        if fn is qantas.JS_FOCUS_AIRPORT:
+            return self.typing == arg
+        if fn is qantas.JS_AIRPORT_OPTION:
+            code = arg["code"]
+            if not self.has_option or self.typed != code:
+                return default
+            return {"text": f"{code}, Somewhere, Australia", "x": 300, "y": 300}
+        return await super().js(page, fn, arg, default, lib)
+
+    async def click_at(self, page, x, y):
+        self.events.append(("click", x, y))
+        if (x, y) == (300, 300):
+            self.values[self.typing] = f"{self.typed}, Somewhere, Australia"
+        else:
+            self.typing = {100: "departure", 200: "arrival"}.get(x, self.typing)
+
+
+def _typing_page(widget):
+    page = SearchPage()
+
+    async def key_press(key, delay=None):
+        page.keys.append(key)
+        widget.typed = ""
+
+    async def type_text(text, delay=None):
+        page.keys.append(f"type:{text}")
+        widget.typed += text
+
+    page.key_press, page.type = key_press, type_text
+    return page
+
+
+def test_qantas_search_sets_both_airports_before_asking_the_model(monkeypatch):
+    widget = AirportWidget()
+    page = _typing_page(widget)
+    calls, _ = _search(monkeypatch, states=[_form("one_way", origin=SYD), _form("one_way", on_results_page=True)],
+                       selectors=["xpath=//input[3]"], widget=widget, page=page)  # fmt: skip
+    assert page.keys == ["Backspace", "type:BNE", "Backspace", "type:PER"]
+    assert widget.values == {"departure": "BNE, Somewhere, Australia", "arrival": "PER, Somewhere, Australia"}
+    instruction = calls[0][0]
+    assert "from=BNE, Somewhere, Australia" in instruction  # the DOM's reading, not the extraction's SYD
+    assert "already set to BNE and PER: do not touch, clear or swap them" in instruction
+
+
+def test_qantas_airports_are_left_to_the_model_when_no_option_matches(monkeypatch):
+    widget = AirportWidget(has_option=False)
+    widget.values["departure"] = None  # an empty field: the DOM has nothing to correct the extraction with
+    page = _typing_page(widget)
+    states = [_form("one_way"), _form("one_way"), _form("one_way", on_results_page=True)]
+    calls, _ = _search(monkeypatch, states=states, selectors=["xpath=//input[3]", "xpath=//input[4]"],
+                       widget=widget, page=page)  # fmt: skip
+    assert len(calls) == 2
+    assert not any("do not touch, clear or swap" in instruction for instruction, _ in calls)
+    assert page.keys.count("type:BNE") == page.keys.count("type:PER") == 1  # not typed again on every step
+
+
+def test_qantas_a_listing_without_times_or_flight_numbers_is_not_an_add_to_cart_failure(monkeypatch, tmp_path):
+    deals = qantas.Flights(route="Flights from Sydney to Ballina", price_basis=None, flights=[
+        qantas.Flight(flight_number=None, duration=None, price=f"${p}", sold_out=False, fares=[]) for p in (99, 129)
+    ])  # fmt: skip
+
+    class Stagehand:
+        async def extract(self, instruction, schema, **options):
+            return SimpleNamespace(data=deals)
+
+    async def nothing(*args, **kwargs):
+        return None
+
+    async def selected(*args, **kwargs):
+        raise AssertionError("no flight should be selected from a deals page")
+
+    for name in ("settle", "dismiss_popups", "search_flights", "wait_for_render", "shot"):
+        monkeypatch.setattr(qantas, name, nothing)
+    monkeypatch.setattr(qantas, "select_flight", selected)
+    monkeypatch.setattr(QantasWorkflow, "conclude", staticmethod(lambda result, compare: None))
+    args = argparse.Namespace(origin="BNE", destination="PER", date=qantas.date(2027, 2, 14))
+    run = SiteResult(site="qantas", out_dir=tmp_path)
+    with pytest.raises(qantas.FlowChanged, match=r"no flights with times or flight numbers.*Sydney to Ballina"):
+        asyncio.run(QantasWorkflow(args, Settings()).run(Stagehand(), SearchPage(), qantas.SITE_URL, run))
+    assert run.status != Status.ADD_TO_CART_FAILED
 
 
 def test_month_navigation():
