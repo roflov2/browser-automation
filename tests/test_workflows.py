@@ -7,6 +7,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from audit.actions import Acted
 from audit.config import Settings
 from audit.core import SiteResult, Status
 from audit.workflows import WORKFLOWS, coffee, qantas
@@ -310,6 +311,59 @@ def test_qantas_reuses_the_step_when_the_screen_did_not_change(monkeypatch, tmp_
     assert extracts == ["StepState"]  # one read; the three repeats cost no extraction (was four reads)
     assert len(actions) == 3
     assert len(run.steps) == 1
+
+
+# --- qantas: a custom dropdown that opens but is never chosen from does not eat the whole search ---------
+def _search(monkeypatch, *, states, selectors):
+    """Run qantas.search_flights with scripted SearchState reads and the controls the model acts on, in order."""
+    reads, picks = iter(states), iter(selectors)
+    calls = []
+
+    class Stagehand:
+        async def extract(self, instruction, schema, **options):
+            return SimpleNamespace(data=next(reads))
+
+    async def fake_llm_act(stagehand, instruction, **options):
+        calls.append((instruction, options))
+        return Acted(True, "Trip Type combobox", next(picks))
+
+    async def nothing(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(qantas, "llm_act", fake_llm_act)
+    monkeypatch.setattr(qantas, "settle", nothing)
+    trip = qantas.Trip("BNE", "PER", qantas.date(2027, 2, 14))
+    return calls, asyncio.run(qantas.search_flights(Stagehand(), SimpleNamespace(), trip))
+
+
+def _form(trip_type="return", **fields):
+    values = {"on_results_page": False, "form_visible": True, "trip_type": trip_type, "origin": None,
+              "destination": None, "depart_date": None, "guests": "1 Adult", "using_points": False,
+              "blocked_reason": None, "reason": "search form"}  # fmt: skip
+    return qantas.SearchState(**{**values, **fields})
+
+
+def test_qantas_search_opens_a_dropdown_and_picks_from_it(monkeypatch):
+    calls, _ = _search(monkeypatch, states=[_form(), _form(on_results_page=True)], selectors=["xpath=//option[2]"])
+    assert calls[0][1].get("follow_up") is True
+
+
+def test_qantas_search_stops_when_the_same_control_changes_nothing(monkeypatch):
+    combobox = "xpath=//div[@role='combobox']"
+    # 'Return' and '' read the same as 'return' and None: the model's spelling varies from read to read
+    states = [_form(), _form(), _form("Return", origin=""), _form(), _form()]
+    with pytest.raises(qantas.FlowChanged, match="acted on 4 times in a row"):
+        _search(monkeypatch, states=states, selectors=[combobox] * 5)  # stops after 4 of the 14 steps
+
+
+def test_qantas_search_tells_the_model_its_last_action_changed_nothing(monkeypatch):
+    combobox = "xpath=//div[@role='combobox']"
+    states = [_form(), _form(), _form(), _form("one_way", on_results_page=True)]
+    calls, _ = _search(monkeypatch, states=states, selectors=[combobox, combobox, "xpath=//li[text()='One way']"])
+    assert len(calls) == 3
+    assert "changed nothing" not in calls[0][0]
+    assert "changed nothing" not in calls[1][0]  # the first click on a control is not a repeat
+    assert "changed nothing" in calls[2][0] and "Trip Type combobox" in calls[2][0]  # the second one is
 
 
 # --- coffee: an add-to-cart failure says why in price_comparison.json ---------------------------------

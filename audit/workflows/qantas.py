@@ -300,6 +300,12 @@ async def wait_for_results(stagehand: Stagehand, page: Page, question: str) -> S
     return state
 
 
+def search_held(state: SearchState) -> tuple:
+    """What the search form holds, normalised so 'Return'/'return' and ''/None read the same."""
+    values = (state.trip_type, state.origin, state.destination, state.depart_date, state.guests)
+    return (*(str(value).strip().lower() or None if value else None for value in values), state.using_points)
+
+
 async def search_flights(stagehand: Stagehand, page: Page, trip: Trip) -> None:
     """Work the site's flight search, one action at a time, until a list of flights shows.
 
@@ -315,6 +321,9 @@ async def search_flights(stagehand: Stagehand, page: Page, trip: Trip) -> None:
         "or whether a list of flights for that search is already showing."
     )
     state = (await stagehand.extract(question, SearchState)).data
+    last: tuple[str, tuple] | None = None  # (control acted on, what the search held after it)
+    repeats = 0
+    hint = ""
     for _ in range(MAX_SEARCH_STEPS):
         if state.blocked_reason:
             raise Blocked(state.blocked_reason)
@@ -332,11 +341,27 @@ async def search_flights(stagehand: Stagehand, page: Page, trip: Trip) -> None:
             f"The search currently holds: trip type={state.trip_type}, from={state.origin}, to={state.destination}, "
             f"date={state.depart_date}, guests={state.guests}, using points={state.using_points}. Correct whatever "
             "does not match the goal (opening the search form first if it is hidden, and choosing airports and dates "
-            "from the site's own lists or calendar), then submit the search once everything matches.",
+            f"from the site's own lists or calendar), then submit the search once everything matches.{hint}",
+            follow_up=True,  # a custom dropdown (the trip type) needs opening before its option can be picked
         )
         await settle(page, SETTLE_MS)
         state = (await stagehand.extract(question, SearchState)).data
         log.info(f"  {step.description} -> {state.reason}")
+        now = (step.selector, search_held(state))
+        repeats = repeats + 1 if now == last else 0
+        last = now
+        if repeats >= MAX_STUCK_REPEATS:
+            raise FlowChanged(
+                f"Stuck on the flight search: '{step.description}' was acted on {repeats + 1} times in a row "
+                f"and the search did not change (trip type={state.trip_type}, from={state.origin}, to={state.destination})"
+            )
+        hint = (
+            f" Your last action ('{step.description}') changed nothing in the search. If it opened a list or menu, "
+            "choose the right option from that list now; otherwise use a different control. Do not act on the same "
+            "control again."
+            if repeats
+            else ""
+        )
     if state.blocked_reason:
         raise Blocked(state.blocked_reason)
     if not state.on_results_page:
