@@ -326,12 +326,22 @@ async def add_product_to_cart(stagehand: Stagehand, page: Page, product: Product
     await wait_until(page, "() => document.readyState === 'complete'", 3000)
     await settle(page, 1200)
     item["status"] = "added" if add.success else "add_failed"
-    if count_before is not None and add.success:
+    # Read the count again after any successful click, even when the first read failed, so a blocked
+    # /cart.js shows up in the output as [None, None].
+    count_after = await shopify_item_count(page) if add.success else None
+    if count_before is not None and count_after is not None and count_after <= count_before:
         # On Shopify the cart itself says whether the click worked, rather than the model's own report.
-        count_after = await shopify_item_count(page)
-        if count_after is not None and count_after <= count_before:
-            log.warning("    The cart did not grow after 'Add to cart'; counting the item as not added")
-            item["status"] = "add_failed"
+        log.warning("    The cart did not grow after 'Add to cart'; counting the item as not added")
+        item["status"] = "add_failed"
+    # Why an add failed, saved in price_comparison.json: what was (or wasn't) clicked, and the cart's count.
+    item["add_detail"] = add.description
+    item["add_selector"] = add.selector
+    item["cart_count"] = [count_before, count_after]
+    if item["status"] == "add_failed":
+        log.warning(
+            f"    Add failed for '{product.name}': detail={add.description!r}, selector={add.selector!r}, "
+            f"cart_count={item['cart_count']}"
+        )
     return item
 
 
