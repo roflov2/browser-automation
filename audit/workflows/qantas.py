@@ -1,7 +1,9 @@
-"""Virgin Australia flight booking.
+"""Qantas flight booking.
 
-Start on the Virgin Australia homepage, search for a one-way flight, pick the cheapest flight and fare,
-then walk the whole booking chain (guest details, seats, bags, extras, review) to the payment page.
+Start on the Qantas homepage, search for a one-way flight, pick the cheapest flight and fare, then
+carry on until the payment page. The prompts state the goal (reach payment with the cheapest fare and
+no optional extras) and the rules, not the route through the site: the model decides which control
+moves the booking on, so a redesigned page or a reordered booking chain does not break the run.
 Every optional extra and fee offered along the way (baggage, seats, insurance, carbon offset, service
 and card fees, ...) is recorded, and the advertised fare is compared with the total at checkout.
 
@@ -42,39 +44,25 @@ from ..core import (
     summarise_extras,
     write_csv,
 )
-from ..page import dismiss_popups, fingerprint, js, settle, shot, wait_for_render
+from ..page import dismiss_popups, fingerprint, settle, shot, wait_for_render
 from ..workflow import Workflow
 
 log = logging.getLogger(__name__)
 
-SITE_URL = "https://www.virginaustralia.com/au/en/"
-BOOKING_ENGINE_HOST = "book.virginaustralia.com"
-SETTLE_MS = 2500  # fixed wait after navigation/clicks; the booking app is a slow single-page app
-RESULTS_RENDER_SECONDS = 30  # the booking engine shows a blank page for a while before the flight list appears
+SITE_URL = "https://www.qantas.com/au/en.html"
+SETTLE_MS = 2500  # fixed wait after navigation/clicks; airline booking apps are slow single-page apps
+RESULTS_RENDER_SECONDS = 30  # flight results often show a blank or loading page for a while first
 NO_RESEARCH = (
-    "Never click 'Edit search', 'Modify search', 'Change search' or 'Start a new search', and never press "
-    "'Continue' in a 'Start a new search' dialog; the search is already done."
+    "The flight search is already done once flight results are showing: never edit, modify or restart the "
+    "search from then on."
 )
-# Closes the booking engine's "Start a new search" dialog (opened by "Edit search") without submitting it.
-JS_CLOSE_SEARCH_DIALOG = r"""() => {
-    for (const d of dialogs()) {
-        if (!/start a new search|edit (your )?search|modify (your )?search/i.test(txt(d))) continue;
-        const buttons = Array.from(d.querySelectorAll('button'));
-        const b = buttons.find(x => /^(cancel|close)$/i.test(clean(txt(x))))
-            || d.querySelector('button[aria-label*="close" i]');
-        if (b) return clickEl(b);
-        pressEsc();
-        return true;
-    }
-    return false;
-}"""
 MAX_SEARCH_STEPS = 14
 MAX_BOOKING_STEPS = 25
 MAX_STUCK_REPEATS = 3
 
 SAFETY_PROMPT = (
-    "You are auditing an airline booking flow for price transparency. Never enter payment card, voucher or "
-    "Travel Bank details, and never click a button that pays for, purchases or confirms a booking "
+    "You are auditing an airline booking flow for price transparency. Never enter payment card, voucher, "
+    "gift card, travel credit or frequent-flyer points details, and never click a button that pays for, purchases or confirms a booking "
     "(e.g. 'Pay now', 'Purchase', 'Confirm and pay', 'Book now' on a payment page). Never log in or create an account."
 )
 
@@ -94,8 +82,11 @@ EXTRA_CATEGORIES = (
 # ---------------------------------------------------------------------------
 class SearchState(BaseModel):
     on_results_page: bool = Field(
-        description="True only if the page now lists bookable flights with times and prices for the searched route and "
-        "date, even if a 'Start a new search' / 'Edit search' dialog is covering part of it"
+        description="True only if the page now lists bookable flights with times and prices for the searched route and date"
+    )
+    loading: bool = Field(
+        default=False,
+        description="True if the page is still loading (blank, spinner, 'searching for flights' or similar)",
     )
     form_visible: bool = Field(description="True if the flight search form/widget is visible")
     trip_type: str | None = Field(description="'one_way', 'return' or 'multi_city' as currently set, if shown")
@@ -103,7 +94,9 @@ class SearchState(BaseModel):
     destination: str | None = Field(description="Currently chosen arrival airport; null if empty")
     depart_date: str | None = Field(description="Currently chosen departure date as displayed; null if empty")
     guests: str | None = Field(description="Currently chosen passengers, e.g. '1 Adult'")
-    using_points: bool = Field(description="True if 'Use Velocity Points' / pay with points is switched on")
+    using_points: bool = Field(
+        description="True if booking with frequent-flyer points (a reward / points search) is switched on"
+    )
     blocked_reason: str | None = Field(
         description="If progress is blocked by a CAPTCHA, 'verify you are human', access-denied or bot check, describe it; otherwise null"
     )
@@ -113,12 +106,12 @@ class SearchState(BaseModel):
 
 
 class FareOption(BaseModel):
-    fare_name: str = Field(description="Fare brand, e.g. 'Lite', 'Choice', 'Flex', 'Business'")
+    fare_name: str = Field(description="Fare brand as displayed, e.g. 'Economy Sale', 'Economy Flex', 'Business'")
     price: str | None = Field(description="Price as displayed, e.g. '$129'; null if unavailable/sold out")
 
 
 class Flight(BaseModel):
-    flight_number: str | None = Field(description="e.g. 'VA 815'; null if not shown")
+    flight_number: str | None = Field(description="e.g. 'QF 401'; null if not shown")
     departs: str | None = Field(
         default=None, description="Departure time as displayed, e.g. '6:00am'; null if not shown"
     )
@@ -140,11 +133,11 @@ class Flights(BaseModel):
 
 class SelectedFare(BaseModel):
     flight_selected: bool = Field(
-        description="True only if a specific flight and fare is now selected in the trip summary/cart AND no "
-        "'Choose a fare' or 'Change to a Choice fare' (Keep vs Change) modal is still open waiting for confirmation"
+        description="True only if a specific flight and fare is now selected (shown as selected, or in the trip "
+        "summary / cart) AND no fare-choice or upgrade popup is still open waiting for an answer"
     )
-    flight: str | None = Field(description="Selected flight, e.g. 'VA 815 06:00 SYD - 07:35 MEL'")
-    fare_name: str | None = Field(description="Selected fare brand, e.g. 'Lite'")
+    flight: str | None = Field(description="Selected flight, e.g. 'QF 401 06:00 SYD - 07:35 MEL'")
+    fare_name: str | None = Field(description="Selected fare brand, e.g. 'Economy Sale'")
     fare_price: str | None = Field(description="Price shown for the selected fare, e.g. '$129'")
     running_total: str | None = Field(description="Trip total / cart total currently displayed, if any")
     reason: str | None = Field(
@@ -154,7 +147,9 @@ class SelectedFare(BaseModel):
 
 class Offer(BaseModel):
     category: str = Field(description=f"One of: {EXTRA_CATEGORIES}")
-    label: str = Field(description="Name of the extra or fee as displayed, e.g. '23kg checked bag', 'Economy X seat'")
+    label: str = Field(
+        description="Name of the extra or fee as displayed, e.g. '23kg checked bag', 'Extra legroom seat'"
+    )
     price: str | None = Field(
         description="Price as displayed, e.g. '$45', 'From $9', 'Included', '1.3%'; null if not shown"
     )
@@ -207,14 +202,14 @@ class FieldToFill(BaseModel):
 class PassengerForm(BaseModel):
     fields: list[FieldToFill] = Field(
         description="Required passenger/contact fields that are still empty or unselected, in page order. "
-        "Exclude optional fields, loyalty/Velocity numbers, marketing opt-ins and any payment fields."
+        "Exclude optional fields, frequent-flyer / loyalty numbers, marketing opt-ins and any payment fields."
     )
     complete: bool = Field(description="True if every required field is already filled in")
 
 
 class LineItem(BaseModel):
-    name: str = Field(description="Flight as displayed, e.g. 'Sydney to Melbourne VA 815'")
-    variant: str | None = Field(description="Fare brand, e.g. 'Lite'")
+    name: str = Field(description="Flight as displayed, e.g. 'Sydney to Melbourne QF 401'")
+    variant: str | None = Field(description="Fare brand, e.g. 'Economy Sale'")
     quantity: int = Field(description="Number of passengers")
     price: str | None = Field(description="Fare amount as displayed for this flight")
 
@@ -266,16 +261,6 @@ class Trip:
     def depart_text(self) -> str:
         return f"{self.depart.strftime('%A')} {self.depart.day} {self.depart.strftime('%B %Y')}"
 
-    @property
-    def deep_link(self) -> str:
-        """Search-results link for the booking engine, used only if the homepage form can't be driven."""
-        day = self.depart.strftime("%m-%d-%Y")
-        return (
-            "https://book.virginaustralia.com/dx/VADX/#/flight-selection?journeyType=one-way"
-            f"&activeMonth={day}&awardBooking=false&searchType=BRANDED&class=Economy&ADT=1&CHD=0&INF=0"
-            f"&origin={self.origin}&destination={self.destination}&date={day}&direction=0"
-        )
-
 
 @dataclass
 class Passenger:
@@ -301,26 +286,13 @@ class Passenger:
 # ---------------------------------------------------------------------------
 # Site steps
 # ---------------------------------------------------------------------------
-def on_booking_engine(url: str) -> bool:
-    """True once the search has handed over to the booking engine (the flight results app)."""
-    return BOOKING_ENGINE_HOST in url
-
-
-async def close_search_dialog(page: Page) -> None:
-    """Close a 'Start a new search' dialog if one is open, so it is never submitted or mistaken for the form."""
-    if await js(page, JS_CLOSE_SEARCH_DIALOG, default=False):
-        log.info("  Closed the 'Start a new search' dialog; the search is already done.")
-        await settle(page, 1000)
-
-
 async def wait_for_results(stagehand: Stagehand, page: Page, question: str) -> SearchState:
-    """Wait (without clicking anything in the page) for the booking engine's flight list to load."""
+    """Wait (without clicking anything in the page) for a loading flight list to appear."""
     state: SearchState | None = None
     for attempt in range(3):
         await wait_for_render(page, RESULTS_RENDER_SECONDS)
-        await close_search_dialog(page)
         state = (await stagehand.extract(question, SearchState)).data
-        if state.blocked_reason or state.on_results_page:
+        if state.blocked_reason or state.on_results_page or not state.loading:
             break
         log.info(f"  Waiting for the flight results to load ({attempt + 1}/3): {state.reason}")
         await settle(page, SETTLE_MS)
@@ -329,52 +301,42 @@ async def wait_for_results(stagehand: Stagehand, page: Page, question: str) -> S
 
 
 async def search_flights(stagehand: Stagehand, page: Page, trip: Trip) -> None:
-    """Drive the homepage flight search form one action at a time until the results page shows."""
+    """Work the site's flight search, one action at a time, until a list of flights shows.
+
+    The model is given the goal and what the form currently holds, not a route through the form: it
+    chooses each next action itself, so the order of fields and the shape of the widget do not matter.
+    """
     goal = (
-        f"a ONE-WAY flight for 1 adult from {trip.origin} to {trip.destination} departing {trip.depart_text}, "
-        "paying with money (not Velocity Points)"
+        f"a ONE-WAY flight for 1 adult in economy from {trip.origin} to {trip.destination} departing "
+        f"{trip.depart_text}, paying with money (not frequent-flyer points)"
     )
     question = (
-        f"We are searching for {goal}. Report the current state of the flight search form, "
-        "or whether the flight results page is already showing."
+        f"We are searching for {goal}. Report the current state of the flight search, "
+        "or whether a list of flights for that search is already showing."
     )
     state = (await stagehand.extract(question, SearchState)).data
     for _ in range(MAX_SEARCH_STEPS):
         if state.blocked_reason:
             raise Blocked(state.blocked_reason)
         if state.on_results_page:
-            await close_search_dialog(page)
             return
-        if on_booking_engine(await page.url()):
-            # The search was submitted. The results app renders slowly (often blank at first); wait for it
-            # instead of acting on a half-loaded page, which is how "Edit search" ended up being clicked.
+        if state.loading:
+            # A submitted search renders slowly; acting on a half-loaded page is how a search gets restarted.
             state = await wait_for_results(stagehand, page, question)
-            if state.blocked_reason:
-                raise Blocked(state.blocked_reason)
-            if state.on_results_page:
-                return
-            break
+            if state.loading:
+                break
+            continue
         step = await llm_act(
             stagehand,
-            f"Take the single next action needed to search for {goal} using the flight search form. "
-            f"Current form state: trip type={state.trip_type}, from={state.origin}, to={state.destination}, "
-            f"date={state.depart_date}, guests={state.guests}, using points={state.using_points}. "
-            "Order: open the flight booking form if it is hidden; set 'Fly from'; set 'Fly to' (pick the airport from "
-            "the list); switch the trip type to one way; pick the departure date in the calendar (move to the right "
-            "month first if needed) and confirm it; confirm 1 adult guest; then click the search button "
-            f"(e.g. 'Find flights' / 'Search flights' / 'Let's fly'). {NO_RESEARCH}",
+            f"Goal: show the list of flights for {goal}. Take the single next action that moves towards that goal. "
+            f"The search currently holds: trip type={state.trip_type}, from={state.origin}, to={state.destination}, "
+            f"date={state.depart_date}, guests={state.guests}, using points={state.using_points}. Correct whatever "
+            "does not match the goal (opening the search form first if it is hidden, and choosing airports and dates "
+            "from the site's own lists or calendar), then submit the search once everything matches.",
         )
         await settle(page, SETTLE_MS)
         state = (await stagehand.extract(question, SearchState)).data
         log.info(f"  {step.description} -> {state.reason}")
-    if state.on_results_page:
-        await close_search_dialog(page)
-        return
-
-    log.info("  Search form did not reach the results page; opening the booking engine's search link directly...")
-    await page.goto(trip.deep_link)
-    await settle(page, SETTLE_MS)
-    state = await wait_for_results(stagehand, page, question)
     if state.blocked_reason:
         raise Blocked(state.blocked_reason)
     if not state.on_results_page:
@@ -412,14 +374,11 @@ async def select_flight(stagehand: Stagehand, page: Page, flight: Flight) -> dic
     )
     selected = None
     for _ in range(4):
-        await close_search_dialog(page)
         step = await llm_act(
             stagehand,
-            f"Take the single next action to select {described} with its CHEAPEST fare (usually the first/lowest fare "
-            "brand such as 'Lite' in Economy). If the fare options for that flight are not visible yet, click the "
-            "flight's lowest price to reveal them; if the 'Choose a fare' dialog is open, click 'Select' on the "
-            "cheapest fare; if a popup offers a more expensive fare (e.g. 'Change to a Choice fare' with 'Keep' and "
-            f"'Change' buttons), click 'Keep' to keep the cheapest fare. {NO_RESEARCH}",
+            f"Goal: {described} selected on its CHEAPEST available fare. Take the single next action towards that "
+            "goal (for example revealing the flight's fares, or choosing the cheapest one). If a popup offers a more "
+            f"expensive fare or an upgrade, decline it and keep the cheapest fare. {NO_RESEARCH}",
         )
         log.info(f"    Flight selection: {step.description}")
         await settle(page, SETTLE_MS)
@@ -482,21 +441,12 @@ async def fill_passenger_details(stagehand: Stagehand, page: Page, passenger: Pa
             await settle(page, 400)
 
 
-NEXT_ACTIONS = {
-    "flight_results": "If a flight and its cheapest fare are already selected, click the 'Continue' button to proceed to "
-    "the next booking step; otherwise select the cheapest available flight and its lowest fare.",
-    "fare_selection": "Choose the cheapest fare and continue. Decline any offer to upgrade to a more expensive fare.",
-    "login_prompt": "Continue as a guest without logging in or joining Velocity (e.g. 'Continue as guest', 'Skip', 'Not now').",
-    "passenger_details": "Click the button that continues from guest details to the next booking step.",
-    "seats": "Do not choose a paid seat. Skip seat selection (e.g. 'Skip seats', 'Skip seat selection', 'No thanks', "
-    "'Continue without seats') or click continue without selecting any seat.",
-    "upsell_modal": "Decline the offer in the open popup (e.g. 'No thanks', 'Continue without', 'Skip') without adding anything.",
-}
-DEFAULT_NEXT_ACTION = (
-    "Do not add any optional extra (no bags, seats, insurance, carbon offset, upgrades or donations). If the page "
-    "requires an explicit choice, choose the decline option (e.g. 'No thanks', 'No, I don't want ...'). Otherwise "
-    "click the button that continues to the next booking step towards payment (e.g. 'Continue', 'Next', "
-    "'Continue to payment'). Never click a button that pays or completes the purchase."
+BOOKING_GOAL = (
+    "Goal: reach the payment page of this booking with the cheapest fare and NO optional extras (no paid bags, "
+    "seats, insurance, carbon offset, upgrades, car hire, hotels or donations), continuing as a guest without "
+    "logging in or joining a loyalty program. Take the single next action that moves the booking towards the "
+    "payment page. Where the page insists on a choice, choose the free or decline option. Never click a button "
+    "that pays or completes the purchase."
 )
 
 
@@ -506,11 +456,11 @@ async def next_booking_action(
     """Take the one action that moves the booking on from `step_type`, declining every extra."""
     if step_type == "passenger_details":
         await fill_passenger_details(stagehand, page, passenger)
-    instruction = NEXT_ACTIONS.get(step_type, DEFAULT_NEXT_ACTION)
+    instruction = f"{BOOKING_GOAL} The current screen looks like: {state.heading or step_type}."
     if state.validation_errors:
-        instruction = (
-            f"The page shows these errors: {'; '.join(state.validation_errors[:3])}. Fix the first one if it is a "
-            f"missing choice or field (never by adding a paid extra). Otherwise: {instruction}"
+        instruction += (
+            f" The page shows these errors: {'; '.join(state.validation_errors[:3])}. Fix the first one if it is "
+            "a missing choice or field (never by adding a paid extra)."
         )
     step = await llm_act(stagehand, f"{instruction} {NO_RESEARCH}")
     log.info(f"    {step.description}")
@@ -704,13 +654,13 @@ def future_date(value: str) -> date:
     return day
 
 
-class VirginWorkflow(Workflow):
-    name = "virgin"
-    help = "Virgin Australia: book a one-way flight up to the payment page and record every extra and fee offered"
+class QantasWorkflow(Workflow):
+    name = "qantas"
+    help = "Qantas: book a one-way flight up to the payment page and record every extra and fee offered"
     system_prompt = SAFETY_PROMPT
     log_level = "info"
     viewport = (1440, 1000)
-    clear_cookies = "domain"  # every booking starts without Virgin's cookies from the last one
+    clear_cookies = "domain"  # every booking starts without the airline's cookies from the last one
 
     @classmethod
     def add_arguments(cls, parser: argparse.ArgumentParser, settings: Settings) -> None:
@@ -750,7 +700,6 @@ class VirginWorkflow(Workflow):
 
             await search_flights(stagehand, page, trip)
             await wait_for_render(page, RESULTS_RENDER_SECONDS)
-            await close_search_dialog(page)
             result.shop_url = await page.url()
             log.info(f"  Results page: {result.shop_url}")
 

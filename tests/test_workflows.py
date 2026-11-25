@@ -9,12 +9,12 @@ import pytest
 
 from audit.config import Settings
 from audit.core import SiteResult, Status
-from audit.workflows import WORKFLOWS, coffee, virgin
+from audit.workflows import WORKFLOWS, coffee, qantas
 from audit.workflows.coffee import CoffeeWorkflow
+from audit.workflows.qantas import FieldToFill, Passenger, QantasWorkflow, passenger_field_instruction
 from audit.workflows.ubereats import UberEatsWorkflow
 from audit.workflows.ubereats import models as uber_models
 from audit.workflows.ubereats import store as uber_store
-from audit.workflows.virgin import FieldToFill, Passenger, VirginWorkflow, passenger_field_instruction
 
 REAL = Settings(pax_first_name="Samantha", pax_last_name="Okafor", pax_email="sam@real.example",
                 pax_phone="0412 345 678", pax_date_of_birth="3 March 1991")  # fmt: skip
@@ -26,7 +26,7 @@ def test_every_workflow_has_a_safety_prompt():
         assert "never" in workflow.system_prompt.lower()
 
 
-# --- virgin: passenger details stay out of the model's input (REVIEW H7) -----------------------------
+# --- qantas: passenger details stay out of the model's input (REVIEW H7) -----------------------------
 def test_typed_details_become_variables_not_prompt_text():
     passenger = Passenger.from_settings(REAL)
     instruction, variables = passenger_field_instruction(
@@ -53,7 +53,7 @@ def test_no_typed_detail_reaches_a_prompt_or_a_saved_file():
     passenger = Passenger.from_settings(REAL)
     typed = passenger.typed_details()
     assert set(typed) == {"first_name", "last_name", "date_of_birth", "email", "phone"}
-    assert VirginWorkflow(argparse.Namespace(), REAL).sensitive_values() == typed
+    assert QantasWorkflow(argparse.Namespace(), REAL).sensitive_values() == typed
 
     class Recorder:
         def __init__(self):
@@ -90,7 +90,7 @@ def test_no_typed_detail_reaches_a_prompt_or_a_saved_file():
             return True
 
     stagehand = Recorder()
-    asyncio.run(virgin.fill_passenger_details(stagehand, Page(), passenger))
+    asyncio.run(qantas.fill_passenger_details(stagehand, Page(), passenger))
     everything_the_model_saw = " ".join(stagehand.prompts)
     for value in typed.values():
         assert value not in everything_the_model_saw
@@ -107,11 +107,10 @@ def test_target_keys():
     coffee_flow = CoffeeWorkflow(argparse.Namespace(), settings)
     assert coffee_flow.target_key("https://redbrick.coffee", result()) == "https://redbrick.coffee"
 
-    virgin_flow = VirginWorkflow(argparse.Namespace(), settings)
+    qantas_flow = QantasWorkflow(argparse.Namespace(), settings)
     trip = result(search={"origin": "BNE", "destination": "PER"})
     assert (
-        virgin_flow.target_key("https://www.virginaustralia.com/au/en/", trip)
-        == "https://www.virginaustralia.com/au/en/ BNE-PER"
+        qantas_flow.target_key("https://www.qantas.com/au/en.html", trip) == "https://www.qantas.com/au/en.html BNE-PER"
     )
 
     uber = UberEatsWorkflow(argparse.Namespace(), settings)
@@ -184,18 +183,18 @@ def test_coffee_selection_and_name_matching():
     assert coffee.match_name("Good Day Coffee") == "good day"
 
 
-def test_virgin_picks_the_cheapest_direct_flight():
+def test_qantas_picks_the_cheapest_direct_flight():
     def flight(price, stops=0, sold_out=False):
-        return virgin.Flight(flight_number=None, departs="6:00am", arrives="7:35am", stops=stops, duration=None,
+        return qantas.Flight(flight_number=None, departs="6:00am", arrives="7:35am", stops=stops, duration=None,
                              price=price, sold_out=sold_out, fares=[])  # fmt: skip
 
     assert (
-        virgin.choose_flight(
+        qantas.choose_flight(
             [flight("$99", stops=1), flight("$199"), flight("$149"), flight("$1", sold_out=True)]
         ).price
         == "$149"
     )
-    assert virgin.choose_flight([flight(None), flight("$10", sold_out=True)]) is None
+    assert qantas.choose_flight([flight(None), flight("$10", sold_out=True)]) is None
 
 
 def test_fields_left_null_are_handled_where_they_are_read():
@@ -206,21 +205,21 @@ def test_fields_left_null_are_handled_where_they_are_read():
     assert coffee.choose_coffees([untyped, bean], 2) == [bean, untyped]  # an unknown type is not preferred
 
     def flight(**shown):
-        return virgin.Flight(
+        return qantas.Flight(
             **{"flight_number": None, "duration": None, "price": "$129", "sold_out": False, "fares": [], **shown}
         )
 
-    full = flight(flight_number="VA 815", departs="6:00am", arrives="7:35am", stops=0)
-    assert virgin.describe_flight(full) == (
-        "VA 815 6:00am - 7:35am",
-        "the flight departing 6:00am and arriving 7:35am (VA 815)",
+    full = flight(flight_number="QF 401", departs="6:00am", arrives="7:35am", stops=0)
+    assert qantas.describe_flight(full) == (
+        "QF 401 6:00am - 7:35am",
+        "the flight departing 6:00am and arriving 7:35am (QF 401)",
     )
-    assert virgin.describe_flight(flight(departs="6:00am")) == ("6:00am", "the flight departing 6:00am")
-    assert virgin.describe_flight(flight()) == ("Flight at $129", "the flight priced $129")
-    assert "None" not in " ".join(virgin.describe_flight(flight(arrives="7:35am")))
+    assert qantas.describe_flight(flight(departs="6:00am")) == ("6:00am", "the flight departing 6:00am")
+    assert qantas.describe_flight(flight()) == ("Flight at $129", "the flight priced $129")
+    assert "None" not in " ".join(qantas.describe_flight(flight(arrives="7:35am")))
     direct, unknown = flight(departs="9:00am", stops=0), flight(departs="6:00am")
     unknown.price = "$99"
-    assert virgin.choose_flight([unknown, direct]) is direct  # unknown stops is not taken as direct
+    assert qantas.choose_flight([unknown, direct]) is direct  # unknown stops is not taken as direct
 
     passenger = Passenger.from_settings(REAL)
     assert passenger_field_instruction(FieldToFill(label="Mystery", kind="text"), passenger) is None
@@ -273,12 +272,12 @@ def test_workflows_declare_their_policy(workflow):
 
 
 # --- Phase 5: no extraction is paid for when an action changed nothing ----------------------------------
-def test_virgin_reuses_the_step_when_the_screen_did_not_change(monkeypatch, tmp_path):
+def test_qantas_reuses_the_step_when_the_screen_did_not_change(monkeypatch, tmp_path):
     screens = iter(["extras|A", "extras|A", "extras|A", "extras|A"])  # every action leaves the screen as it was
     extracts, actions = [], []
 
     def state():
-        return virgin.StepState(step_type="extras", heading="Extras", is_payment_page=False, blocked_reason=None,
+        return qantas.StepState(step_type="extras", heading="Extras", is_payment_page=False, blocked_reason=None,
                                 offers=[], price_lines=[], total="$199.00", validation_errors=[], summary="extras page")  # fmt: skip
 
     class Stagehand:
@@ -300,12 +299,12 @@ def test_virgin_reuses_the_step_when_the_screen_did_not_change(monkeypatch, tmp_
     async def fake_fingerprint(page):
         return next(screens)
 
-    monkeypatch.setattr(virgin, "fingerprint", fake_fingerprint)
-    monkeypatch.setattr(virgin, "llm_act", fake_llm_act)
+    monkeypatch.setattr(qantas, "fingerprint", fake_fingerprint)
+    monkeypatch.setattr(qantas, "llm_act", fake_llm_act)
     for name in ("wait_for_render", "shot", "settle"):
-        monkeypatch.setattr(virgin, name, nothing)
+        monkeypatch.setattr(qantas, name, nothing)
     run = SiteResult(site="s", out_dir=tmp_path)
-    reached = asyncio.run(virgin.walk_to_payment(Stagehand(), Page(), Passenger(), run))
+    reached = asyncio.run(qantas.walk_to_payment(Stagehand(), Page(), Passenger(), run))
     assert reached is False
     assert run.message.startswith("Stuck on 'Extras'")
     assert extracts == ["StepState"]  # one read; the three repeats cost no extraction (was four reads)

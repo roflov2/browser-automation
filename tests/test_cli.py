@@ -11,7 +11,7 @@ from audit.cli import build_parser
 from audit.config import Settings
 
 REPO = Path(__file__).parent.parent
-WORKFLOWS = ["coffee", "virgin", "ubereats", "ticketek"]
+WORKFLOWS = ["coffee", "qantas", "ubereats", "ticketek"]
 
 
 def run_main(*args: str, cwd: Path) -> subprocess.CompletedProcess[str]:
@@ -54,8 +54,8 @@ def test_options_are_stable():
     parser = build_parser(Settings(ubereats_address="9 Default St"))
     coffee = parser.parse_args(["coffee", "a.test", "b.test", "--products", "5"])
     assert (coffee.urls, coffee.products, coffee.local, coffee.login) == (["a.test", "b.test"], 5, False, False)
-    virgin = parser.parse_args(["virgin", "--origin", "BNE", "--destination", "PER", "--date", "2099-01-01"])
-    assert (virgin.origin, virgin.destination, virgin.date.isoformat()) == ("BNE", "PER", "2099-01-01")
+    qantas = parser.parse_args(["qantas", "--origin", "BNE", "--destination", "PER", "--date", "2099-01-01"])
+    assert (qantas.origin, qantas.destination, qantas.date.isoformat()) == ("BNE", "PER", "2099-01-01")
     uber = parser.parse_args(
         [
             "ubereats",
@@ -85,9 +85,9 @@ def test_options_are_stable():
     )
 
 
-def test_virgin_rejects_past_dates():
+def test_qantas_rejects_past_dates():
     with pytest.raises(SystemExit):
-        build_parser(Settings()).parse_args(["virgin", "--date", "2020-01-01"])
+        build_parser(Settings()).parse_args(["qantas", "--date", "2020-01-01"])
 
 
 def test_usage_report_runs_without_a_browser(tmp_path):

@@ -7,7 +7,7 @@ Everything runs through one entry point, `main.py` (or the `drip-audit` command 
 | Workflow | Target | What it does |
 | --- | --- | --- |
 | `coffee` | Coffee roaster / retailer stores | Adds 1–5 coffees to the cart and compares shop prices with checkout |
-| `virgin` | [Virgin Australia](https://www.virginaustralia.com/au/en/) | Books a one-way flight through to the payment page and records every extra and fee offered |
+| `qantas` | [Qantas](https://www.qantas.com/au/en.html) | Books a one-way flight through to the payment page and records every extra and fee offered |
 | `ubereats` | [Uber Eats AU](https://www.ubereats.com/au) | Orders 1–5 menu items through to checkout and records every fee |
 | `ticketek` | [Ticketek AU](https://premier.ticketek.com.au/) | Holds 1–8 tickets for an event through to the payment page and records every booking, service, handling, delivery and card fee |
 
@@ -38,7 +38,7 @@ Open `.env` and set `GOOGLE_GENERATIVE_AI_API_KEY`. Settings are read once, from
 | `HEADLESS` | `false` | Run without a visible browser window when set to `true` |
 | `CHROME_PATH` | auto-detected | Path to the Chrome/Chromium executable used for local runs |
 | `BROWSERBASE_API_KEY`, `BROWSERBASE_PROJECT_ID` | (optional) | Run on Browserbase instead of local Chrome |
-| `PAX_TITLE`, `PAX_FIRST_NAME`, `PAX_LAST_NAME`, `PAX_GENDER`, `PAX_DATE_OF_BIRTH`, `PAX_EMAIL`, `PAX_PHONE`, `PAX_COUNTRY` | placeholder guest | Guest details typed into the airline booking form (`virgin` only). Names, date of birth, email and phone are passed to the page as Stagehand variables: they are not sent to the model and are replaced by `%name%` placeholders in `session.json` and `extractions.jsonl` |
+| `PAX_TITLE`, `PAX_FIRST_NAME`, `PAX_LAST_NAME`, `PAX_GENDER`, `PAX_DATE_OF_BIRTH`, `PAX_EMAIL`, `PAX_PHONE`, `PAX_COUNTRY` | placeholder guest | Guest details typed into the airline booking form (`qantas` only). Names, date of birth, email and phone are passed to the page as Stagehand variables: they are not sent to the model and are replaced by `%name%` placeholders in `session.json` and `extractions.jsonl` |
 | `UBEREATS_ADDRESS` | `260 City Walk, Canberra ACT 2601` | Default delivery address (`ubereats` only) |
 
 ### Azure OpenAI
@@ -92,17 +92,17 @@ python main.py coffee https://redbrick.coffee https://marketlane.com.au https://
 
 Finds the store's coffee catalogue without hardcoded URLs or selectors, dismisses popups, picks in-stock drinkable coffee (not equipment, merch or gift cards), forces one-time purchase over subscription and the smallest size, then compares the shop price, the selected variant price and the checkout line, subtotal and fees. On Shopify stores the cart is read from the store's own `/cart.js` (exact prices, no model call), which also confirms that each item really reached the cart. Login walls and CAPTCHAs are recorded as `blocked`, never bypassed.
 
-### Virgin Australia
+### Qantas
 
 ```bash
 # Sydney to Melbourne, 30 days from today
-python main.py virgin
+python main.py qantas
 
 # Choose the route and date
-python main.py virgin --origin BNE --destination PER --date 2027-02-14
+python main.py qantas --origin BNE --destination PER --date 2027-02-14
 ```
 
-Fills the homepage search form (one way, 1 adult, paying with money) one action at a time, picks the cheapest direct flight and fare, then steps through guest details, seats, bags, extras and review to the payment page, declining every optional extra. Each add-on, upsell, fee and surcharge offered on the way is logged with its price, whether it was pre-selected and whether it is mandatory. Guest details are placeholders (override with `PAX_*`).
+Searches for a one-way economy flight for 1 adult paying with money, picks the cheapest direct flight and fare, then carries on to the payment page, declining every optional extra. The prompts give the model the goal (reach payment with the cheapest fare, as a guest, with no extras) and the rules, not the steps to get there: it picks each next action from what is on screen, so a change to the search widget or to the order of the booking steps does not need a code change. Each add-on, upsell, fee and surcharge offered on the way is logged with its price, whether it was pre-selected and whether it is mandatory. Guest details are placeholders (override with `PAX_*`).
 
 ### Uber Eats
 
@@ -172,7 +172,7 @@ audit/
 └── workflows/
     ├── __init__.py         # WORKFLOWS registry
     ├── coffee.py
-    ├── virgin.py
+    ├── qantas.py
     └── ubereats/           # the largest workflow, split by concern
         ├── __init__.py     # UberEatsWorkflow: options and orchestration
         ├── models.py       # extraction schemas and the run result
@@ -225,10 +225,10 @@ output/                            # git-ignored: runs can hold addresses and ac
 
 Workflow-specific additions:
 
-- `virgin`: `flights.png` and `step-NN-<step>.png` for each booking step. The JSON also holds the search, `payment_surcharges`, `extras_preselected` and `total_vs_expected_diff`.
+- `qantas`: `flights.png` and `step-NN-<step>.png` for each booking step. The JSON also holds the search, `payment_surcharges`, `extras_preselected` and `total_vs_expected_diff`.
 - `ubereats`: `store.png`, `step-NN-<step>.png`, and `fees_breakdown.csv` (advertised vs charged, per fee). When a leftover cart could not be emptied, `cart_clear.json` (or `cart_clear-after.json`, for the clear at the end of a run that stopped before checkout) holds the steps tried, the count after each, and the cart drawer's HTML. A run that fails also leaves `error-before-cleanup.png`, the screen it failed on (its `error.png` is taken after the cart has been emptied on the way out, so it shows the store page), and a cart/checkout screen that could not be read leaves `step-NN-extract-failed.png` and a step with its URL and error. The JSON also holds `fee_breakdown`. Runs started from a `/store/...` URL go to `output/ubereats.com-<store>/`.
 
-`summary.csv` columns: run timestamp, site, status (`ok`, `blocked`, `no_checkout`, `no_coffee_found`, `no_flights_found`, `no_items_found`, `add_to_cart_failed`, `error`), items added, expected subtotal, checkout subtotal, checkout total, currency, other fees, shipping/delivery, drip-detected flag, the run's output folder, and its time and LLM usage (see [Time and tokens per run](#time-and-tokens-per-run)). `runs.csv` has the same columns plus `workflow`, `target` and `failure_reason`. The target is the site for `coffee`, the site and route for `virgin`, and the store (`/store/<slug>/<id>`) for `ubereats`, so audits of different restaurants or routes keep their own summary row.
+`summary.csv` columns: run timestamp, site, status (`ok`, `blocked`, `no_checkout`, `no_coffee_found`, `no_flights_found`, `no_items_found`, `add_to_cart_failed`, `error`), items added, expected subtotal, checkout subtotal, checkout total, currency, other fees, shipping/delivery, drip-detected flag, the run's output folder, and its time and LLM usage (see [Time and tokens per run](#time-and-tokens-per-run)). `runs.csv` has the same columns plus `workflow`, `target` and `failure_reason`. The target is the site for `coffee`, the site and route for `qantas`, and the store (`/store/<slug>/<id>`) for `ubereats`, so audits of different restaurants or routes keep their own summary row.
 
 `drip_detected` is `true` when any drip-pricing reason was found, `false` only when the final price screen was read and nothing was found, and empty/`null` when the run never read the final price (so it cannot say). `price_comparison.json` and `session.json` also carry `failure_reason`: `blocked`, `out_of_stock`, `flow_changed`, `element_not_found`, `extract_failed`, `timeout` or `cart_lost` (`ubereats`: the cart came up empty on the way to checkout).
 
