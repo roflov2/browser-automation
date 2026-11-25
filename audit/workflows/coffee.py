@@ -6,6 +6,7 @@ shop-page prices against checkout prices to flag drip pricing.
 """
 
 import argparse
+import asyncio
 import logging
 import re
 from urllib.parse import urljoin
@@ -13,7 +14,7 @@ from urllib.parse import urljoin
 from pydantic import BaseModel, Field
 from stagehand import Page, Stagehand
 
-from ..actions import llm_act
+from ..actions import LLM_TIMEOUT_MS, Acted, act_on, llm_act
 from ..config import Settings
 from ..core import (
     BROWSER_ERRORS,
@@ -241,6 +242,223 @@ async def resolve_product_url(page: Page, product: Product, shop_url: str) -> st
     return href if isinstance(href, str) and href else None
 
 
+# ---------------------------------------------------------------------------
+# Add to cart: the product form's own button, a visible-only model fallback, and a patient cart check
+# ---------------------------------------------------------------------------
+CART_POLL_INTERVAL_MS = 500
+CART_POLL_TIMEOUT_MS = 5000
+
+# Find the main product form's add-to-cart button, scroll to it and click it. Returns {description, selector}
+# or null. Skips sticky/quick-add bars (which only forward the click, and are hidden until the main button
+# scrolls away), subscription buttons, product cards and other sections, and every express-checkout button.
+JS_CLICK_SHOPIFY_ADD = r"""() => {
+    const EXCLUDED = 'sticky-add-to-cart, .subscribe-block, product-card, .product-card, product-recommendations, '
+        + '.product-recommendations, [class*="recommendations" i], [class*="related-products" i], '
+        + '.shopify-payment-button, [data-shopify="payment-button"]';
+    const visible = el => {
+        if (el.checkVisibility && !el.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true })) return false;
+        const r = el.getBoundingClientRect();
+        if (!(r.width > 0 && r.height > 0)) return false;
+        for (let a = el; a; a = a.parentElement) {
+            const s = getComputedStyle(a);
+            if (s.display === 'none' || s.visibility === 'hidden' || parseFloat(s.opacity || '1') === 0) return false;
+        }
+        return true;
+    };
+    const form = document.querySelector('product-form-component');
+    const h1 = document.querySelector('h1');
+    const main = (form && form.closest('.shopify-section')) || (h1 && h1.closest('.shopify-section'));
+    const usable = el => {
+        if (el.closest(EXCLUDED) || el.classList.contains('subscribe-block__submit')) return false;
+        if (el.disabled || el.getAttribute('aria-disabled') === 'true') return false;
+        const section = el.closest('.shopify-section');
+        if (main && section && section !== main) return false;
+        return visible(el);
+    };
+    let found = Array.from(document.querySelectorAll('button[name="add"]')).filter(usable);
+    if (!found.length) found = Array.from(document.querySelectorAll('form[action*="/cart/add"] button[type="submit"]')).filter(usable);
+    if (!found.length) return null;
+    const inForm = el => !!el.closest('product-form-component, form[action*="/cart/add"]');
+    const inMain = el => !!main && main.contains(el);
+    const rank = el => (inMain(el) ? 0 : 2) + (inForm(el) ? 0 : 1);
+    const el = found.slice().sort((a, b) => rank(a) - rank(b))[0];  // stable: DOM order within a rank
+
+    const cssPath = node => {
+        const parts = [];
+        for (let n = node; n && n.nodeType === 1 && n !== document.documentElement; n = n.parentElement) {
+            if (n.id && document.querySelectorAll('#' + CSS.escape(n.id)).length === 1) {
+                parts.unshift(n.tagName.toLowerCase() + '#' + CSS.escape(n.id));
+                break;
+            }
+            const same = n.parentElement ? Array.from(n.parentElement.children).filter(c => c.tagName === n.tagName) : [];
+            const tag = n.tagName.toLowerCase();
+            parts.unshift(same.length > 1 ? `${tag}:nth-of-type(${same.indexOf(n) + 1})` : tag);
+        }
+        return parts.join(' > ');
+    };
+    el.scrollIntoView({ block: 'center' });
+    clickEl(el);
+    const label = clean(el.innerText) || el.getAttribute('aria-label') || el.value || 'Add to cart';
+    return { description: `Clicked the product form's '${label}' button`, selector: 'css=' + cssPath(el) };
+}"""
+
+# Index of the first observed selector that points at a visible element outside a sticky/quick-add bar; null if none.
+JS_FIRST_VISIBLE = r"""selectors => {
+    const resolve = sel => {
+        try {
+            if (sel.startsWith('xpath=') || sel.startsWith('/') || sel.startsWith('(')) {
+                const path = sel.startsWith('xpath=') ? sel.slice(6) : sel;
+                return document.evaluate(path, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue;
+            }
+            return document.querySelector(sel.startsWith('css=') ? sel.slice(4) : sel);
+        } catch (e) { return null; }
+    };
+    const shown = el => {
+        if (el.checkVisibility && !el.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true })) return false;
+        const r = el.getBoundingClientRect();
+        return r.width > 0 && r.height > 0;
+    };
+    for (let i = 0; i < selectors.length; i++) {
+        const el = resolve(selectors[i] || '');
+        if (el && el.nodeType === 1 && shown(el) && !el.closest('sticky-add-to-cart, [data-stuck="false"]')) return i;
+    }
+    return null;
+}"""
+
+
+async def click_shopify_add_button(page: Page) -> Acted | None:
+    """Click the main product form's add-to-cart button in the page; None if there is no usable one."""
+    found = await js(page, JS_CLICK_SHOPIFY_ADD)
+    if not isinstance(found, dict):
+        return None
+    return Acted(True, str(found.get("description") or "Clicked 'Add to cart'"), str(found.get("selector") or ""))
+
+
+async def first_visible_choice(page: Page, selectors: list[str]) -> int | None:
+    """Which of the observed elements to act on: the first visible one outside a sticky bar; None if none is."""
+    index = await js(page, JS_FIRST_VISIBLE, selectors)
+    return index if isinstance(index, int) else None
+
+
+async def act_on_visible(stagehand: Stagehand, page: Page, instruction: str) -> Acted:
+    """llm_act(), but acting on the first observed element that is actually visible (else the first one, as before)."""
+    found = await stagehand.observe(instruction, timeout=LLM_TIMEOUT_MS)
+    if not found.data:
+        log.debug("Nothing to act on for %r", instruction)
+        return Acted(False, "no matching element found")
+    index = await first_visible_choice(page, [str(action.selector or "") for action in found.data])
+    if index is None:
+        index = 0
+    elif index > 0:
+        log.info(f"    Skipped {index} hidden or quick-add-bar match(es); clicking: {found.data[index].description}")
+    return await act_on(stagehand, found.data[index])
+
+
+async def wait_for_cart_growth(page: Page, before: int | None) -> int | None:
+    """Read /cart.js's item_count until it is above `before` or CART_POLL_TIMEOUT_MS runs out; the last count read.
+
+    With no `before` to compare against (the cart can't be read), it is read once. A failed read mid-poll is
+    retried: a theme that goes to /cart after adding makes /cart.js unreadable while the page changes.
+    """
+    reads = max(1, CART_POLL_TIMEOUT_MS // max(1, CART_POLL_INTERVAL_MS))
+    count = None
+    for attempt in range(reads):
+        count = await shopify_item_count(page)
+        if before is None or (count is not None and count > before):
+            return count
+        if attempt < reads - 1:
+            await asyncio.sleep(CART_POLL_INTERVAL_MS / 1000)
+    return count
+
+
+def subscription_line(data: object, name: str) -> str | None:
+    """The title of the just-added /cart.js line if it carries a selling plan (a subscription); else None.
+
+    Shopify lists the newest line first; a line with the product's name counts too.
+    """
+    if not isinstance(data, dict) or not isinstance(data.get("items"), list):
+        return None
+    lines = [line for line in data["items"] if isinstance(line, dict)]
+    wanted = match_name(name)
+    for index, line in enumerate(lines):
+        title = str(line.get("product_title") or line.get("title") or "")
+        if (index == 0 or match_name(title) == wanted) and line.get("selling_plan_allocation"):
+            plan = line["selling_plan_allocation"]
+            plan_name = plan.get("selling_plan", {}).get("name") if isinstance(plan, dict) else None
+            return f"{title}: {plan_name}" if plan_name else title
+    return None
+
+
+async def flag_subscription(page: Page, item: dict) -> None:
+    """Mark `item` with subscription_added if Shopify's cart holds it on a selling plan. Never removes it."""
+    if plan := subscription_line(await fetch_json(page, "/cart.js"), item["name"]):
+        log.warning(f"    '{item['name']}' went into the cart as a subscription ({plan}); it was meant to be one-time")
+        item["subscription_added"] = True
+
+
+async def click_add_to_cart(stagehand: Stagehand, page: Page) -> tuple[Acted, int | None, int | None]:
+    """Click 'Add to cart' on the open product page: what was clicked, and /cart.js's item_count before and after.
+
+    On Shopify the product form's own button is clicked first, with no model call; the model is asked only if
+    there is none or it did not grow the cart. Counts are None where the cart can't be read (not Shopify).
+    """
+    count_before = await shopify_item_count(page)
+    add: Acted | None = None
+    count_after: int | None = None
+    if count_before is not None:
+        # Shopify: click the main product form's own button, with no model call. The model tends to pick the
+        # first match in the DOM, which on some themes is a hidden sticky "quick add" bar that does nothing.
+        direct = await click_shopify_add_button(page)
+        if direct is None:
+            log.info("    No visible product-form 'Add to cart' button found; asking the model")
+        else:
+            count_after = await wait_for_cart_growth(page, count_before)
+            if count_after is not None and count_after > count_before:
+                log.info(f"    Added via the product form's own button (no model call): {direct.description}")
+                add = direct
+            else:
+                log.info(
+                    f"    The product form's button did not grow the cart ({count_before} -> {count_after}); asking the model"
+                )
+                count_before = await shopify_item_count(page)  # in case the add landed just after the wait
+    if add is None:
+        add = await act_on_visible(
+            stagehand,
+            page,
+            "Click the 'Add to cart', 'ADD TO BAG' or 'Add to bag' button of the main product form for this product, "
+            "not a sticky or quick-add bar, and not a subscription button. Never click 'Buy it now', "
+            "'Shop Pay', 'PayPal', 'G Pay' or any other express-checkout button.",
+        )
+        log.info(f"    Added (model): {add.description}")
+        await wait_until(page, "() => document.readyState === 'complete'", 3000)
+        await settle(page, 1200)
+        # Read the count again after any successful click, even when the first read failed, so a blocked
+        # /cart.js shows up in the output as [None, None].
+        count_after = await wait_for_cart_growth(page, count_before) if add.success else None
+    return add, count_before, count_after
+
+
+async def add_to_cart(stagehand: Stagehand, page: Page, item: dict) -> None:
+    """Add the open product to the cart and record on `item` whether it worked, what was clicked, and the cart count."""
+    add, count_before, count_after = await click_add_to_cart(stagehand, page)
+    item["status"] = "added" if add.success else "add_failed"
+    if count_before is not None and count_after is not None and count_after <= count_before:
+        # On Shopify the cart itself says whether the click worked, rather than the model's own report.
+        log.warning("    The cart did not grow after 'Add to cart'; counting the item as not added")
+        item["status"] = "add_failed"
+    # Why an add failed, saved in price_comparison.json: what was (or wasn't) clicked, and the cart's count.
+    item["add_detail"] = add.description
+    item["add_selector"] = add.selector
+    item["cart_count"] = [count_before, count_after]
+    if item["status"] == "add_failed":
+        log.warning(
+            f"    Add failed for '{item['name']}': detail={add.description!r}, selector={add.selector!r}, "
+            f"cart_count={item['cart_count']}"
+        )
+    elif count_before is not None:
+        await flag_subscription(page, item)
+
+
 async def add_product_to_cart(stagehand: Stagehand, page: Page, product: Product, shop_url: str) -> dict:
     item = new_item(product.name, product.price)
 
@@ -316,32 +534,7 @@ async def add_product_to_cart(stagehand: Stagehand, page: Page, product: Product
         selected = parse_price(state.current_price)
         item["selected_price"] = selected if selected is not None else item["shop_price"]  # a real $0.00 stays $0.00
 
-    count_before = await shopify_item_count(page)
-    add = await llm_act(
-        stagehand,
-        "Click the 'Add to cart', 'ADD TO BAG' or 'Add to bag' button for this product. Never click 'Buy it now', "
-        "'Shop Pay', 'PayPal', 'G Pay' or any other express-checkout button.",
-    )
-    log.info(f"    Added: {add.description}")
-    await wait_until(page, "() => document.readyState === 'complete'", 3000)
-    await settle(page, 1200)
-    item["status"] = "added" if add.success else "add_failed"
-    # Read the count again after any successful click, even when the first read failed, so a blocked
-    # /cart.js shows up in the output as [None, None].
-    count_after = await shopify_item_count(page) if add.success else None
-    if count_before is not None and count_after is not None and count_after <= count_before:
-        # On Shopify the cart itself says whether the click worked, rather than the model's own report.
-        log.warning("    The cart did not grow after 'Add to cart'; counting the item as not added")
-        item["status"] = "add_failed"
-    # Why an add failed, saved in price_comparison.json: what was (or wasn't) clicked, and the cart's count.
-    item["add_detail"] = add.description
-    item["add_selector"] = add.selector
-    item["cart_count"] = [count_before, count_after]
-    if item["status"] == "add_failed":
-        log.warning(
-            f"    Add failed for '{product.name}': detail={add.description!r}, selector={add.selector!r}, "
-            f"cart_count={item['cart_count']}"
-        )
+    await add_to_cart(stagehand, page, item)
     return item
 
 
