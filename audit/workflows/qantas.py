@@ -68,6 +68,12 @@ MONTH_NAVIGATION = re.compile(
     re.IGNORECASE,
 )
 TRIP_SETTLE_MS = 800  # the trip-type list opens and closes in place; no navigation to wait for
+AIRPORT_SETTLE_MS = 1000  # the airport type-ahead fetches its suggestions after the code is typed
+TYPE_DELAY_MS = 80  # between key presses, so the type-ahead sees each one
+# A marketing page ("Flights from Sydney to Ballina": fare deals, no flights) the search can land on.
+DEALS_PAGE = re.compile(r"/flight-deals/|/deals?/", re.IGNORECASE)
+MAX_WRONG_RESULTS = 2  # a second wrong "results" page ends the search
+POPUPS = "cookie banner, promotional/newsletter popup, app-install banner or region selector modal"
 
 SAFETY_PROMPT = (
     "You are auditing an airline booking flow for price transparency. Never enter payment card, voucher, "
@@ -304,12 +310,30 @@ class Passenger:
 # ---------------------------------------------------------------------------
 # Site steps
 # ---------------------------------------------------------------------------
-async def wait_for_results(stagehand: Stagehand, page: Page, question: str) -> SearchState:
+def wrong_results(state: SearchState, trip: Trip, url: str) -> str | None:
+    """Why a page the extraction calls 'results' is not our search's results; None if it may be.
+
+    A real results page may hide the search form, so only an airport that is shown and names another code
+    counts against it: an empty (null) field never does.
+    """
+    if DEALS_PAGE.search(url):
+        return f"a flight-deals page ({url}), not search results"
+    for field, code in (("origin", trip.origin), ("destination", trip.destination)):
+        shown = getattr(state, field)
+        if shown and not re.search(rf"\b{re.escape(code)}\b", shown, re.IGNORECASE):
+            return f"{field} shows '{shown}', not {code}"
+    return None
+
+
+async def wait_for_results(stagehand: Stagehand, page: Page, question: str, trip: Trip) -> SearchState:
     """Wait (without clicking anything in the page) for a loading flight list to appear."""
     state: SearchState | None = None
     for attempt in range(3):
         await wait_for_render(page, RESULTS_RENDER_SECONDS)
-        state = (await stagehand.extract(question, SearchState)).data
+        state = with_airports((await stagehand.extract(question, SearchState)).data, await page_airports(page))
+        if state.on_results_page and (wrong := wrong_results(state, trip, await page.url())):
+            log.info(f"  The loaded page is not our search's results: {wrong}")
+            break  # search_flights goes back to the search form
         if state.blocked_reason or state.on_results_page or not state.loading:
             break
         log.info(f"  Waiting for the flight results to load ({attempt + 1}/3): {state.reason}")
@@ -463,12 +487,252 @@ def with_trip_type(state: SearchState, trip_type: str | None) -> SearchState:
     return state.model_copy(update={"trip_type": trip_type}) if trip_type else state
 
 
+# The airport fields are React type-ahead comboboxes labelled "Departure location" / "Arrival location". A filled
+# one shows 'SYD, Sydney (Kingsford Smith), Australia'; an empty one its placeholder. The field is found by its
+# label (aria-label, aria-labelledby, <label for>, a wrapping or nearby label), never by position, and marked
+# with data-audit-airport so the follow-up scripts find it again.
+JS_AIRPORT_FIELD = r"""which => {
+    const want = which === 'departure' ? /departure|\bfrom\b/i : /arrival|\bto\b/i;
+    const other = which === 'departure' ? /arrival|\bto\b/i : /departure|\bfrom\b/i;
+    const named = text => !!text && want.test(text) && !other.test(text);
+    // The field's own label first, then labels further away: the first one that names a side decides.
+    const labels = el => {
+        const found = [el.getAttribute('aria-label'), el.getAttribute('placeholder'), el.getAttribute('name')];
+        (el.getAttribute('aria-labelledby') || '').split(/\s+/).filter(Boolean)
+            .forEach(id => { const n = document.getElementById(id); if (n) found.push(n.innerText); });
+        if (el.id) {
+            const l = document.querySelector(`label[for="${CSS.escape(el.id)}"]`);
+            if (l) found.push(l.innerText);
+        }
+        const wrap = el.closest('label');
+        if (wrap) found.push(wrap.innerText);
+        let up = el.parentElement;
+        for (let i = 0; i < 3 && up; i++, up = up.parentElement) {
+            const l = up.querySelector('label, [class*="label" i]');
+            if (l && l !== el) { found.push(l.innerText); break; }
+        }
+        return found.map(clean).filter(Boolean);
+    };
+    const isField = el => vis(el) && !el.closest('header, nav, footer') && el.type !== 'hidden';
+    const found = Array.from(document.querySelectorAll('input, [role="combobox"]'))
+        .filter(isField).filter(el => { const l = labels(el).find(t => want.test(t) || other.test(t)); return named(l); });
+    const inForm = el => Number(!!el.closest('form, [role="search"], [class*="search" i], [id*="search" i]'));
+    found.sort((a, b) => inForm(b) - inForm(a));
+    const el = found[0];
+    if (!el) return null;
+    document.querySelectorAll(`[data-audit-airport="${which}"]`).forEach(e => e.removeAttribute('data-audit-airport'));
+    el.setAttribute('data-audit-airport', which);
+    el.scrollIntoView({ block: 'center' });
+    // What it shows: an input's value, else the line of its text that starts with an airport code.
+    const input = el.matches('input') ? el : el.querySelector('input');
+    const lines = (el.innerText || '').split('\n').map(clean);
+    const value = clean(input ? input.value : (lines.find(l => /^[A-Z]{3}\b/.test(l)) || '')) || null;
+    // Its clear (x) button, if the widget has one next to it: looked for no higher than the field's own wrapper
+    // (an ancestor holding another airport field holds that field's clear button too).
+    let clear = null;
+    let up = el.parentElement;
+    const own = node => node.querySelectorAll('input, [role="combobox"]').length <= (el.matches('input') ? 1 : 2);
+    for (let i = 0; i < 3 && up && !clear && own(up); i++, up = up.parentElement) {
+        clear = Array.from(up.querySelectorAll('button, [role="button"]')).find(b => vis(b, 4, 4)
+            && (/clear|remove|delete|reset/i.test(b.getAttribute('aria-label') || b.title || '')
+                || /^[✕✖×xX]$/.test(clean(b.innerText))));
+    }
+    const box = e => { const r = e.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; };
+    return { value, tag: el.tagName.toLowerCase(), ...box(el), clear: clear ? box(clear) : null,
+             controls: el.getAttribute('aria-controls') || el.getAttribute('aria-owns') };
+}"""
+# Select whatever the focused text field holds (else focus the marked field), so a Backspace empties it.
+JS_FOCUS_AIRPORT = r"""which => {
+    const typeable = e => e && (e.matches('input, textarea') || e.isContentEditable);
+    let el = document.activeElement;
+    if (!typeable(el)) {
+        const field = document.querySelector(`[data-audit-airport="${which}"]`);
+        el = field && (field.matches('input') ? field : field.querySelector('input'));
+        if (!el) return false;
+        el.focus();
+    }
+    if (el.select) el.select();
+    return document.activeElement === el;
+}"""
+# The visible suggestion for `code` ('BNE, Brisbane, Australia'): in the list the field controls, else anywhere.
+JS_AIRPORT_OPTION = r"""({ which, code }) => {
+    const starts = new RegExp(`^${code}\\b`, 'i');
+    const pick = root => Array.from(root.querySelectorAll('[role="option"], li'))
+        .find(el => vis(el, 4, 4) && starts.test(clean(el.innerText)));
+    const field = document.querySelector(`[data-audit-airport="${which}"]`);
+    const ids = [document.activeElement, field].filter(Boolean)
+        .map(e => e.getAttribute('aria-controls') || e.getAttribute('aria-owns')).filter(Boolean);
+    const lists = ids.map(id => document.getElementById(id)).filter(Boolean);
+    const el = lists.map(pick).find(Boolean) || pick(document);
+    if (!el) return null;
+    document.querySelectorAll('[data-audit-airport-option]').forEach(e => e.removeAttribute('data-audit-airport-option'));
+    el.setAttribute('data-audit-airport-option', '1');
+    el.scrollIntoView({ block: 'nearest' });
+    const r = el.getBoundingClientRect();
+    return { text: clean(el.innerText), x: r.left + r.width / 2, y: r.top + r.height / 2 };
+}"""
+
+
+def shows_code(value: str | None, code: str) -> bool:
+    """True if an airport field's text names `code` first ('BNE, Brisbane, Australia' for BNE)."""
+    return bool(value and re.match(rf"{re.escape(code)}\b", value.strip(), re.IGNORECASE))
+
+
+async def read_airport(page: Page, which: str) -> dict | None:
+    """The departure or arrival field as the page shows it ({value, x, y, clear, ...}); None if not found."""
+    found = await js(page, JS_AIRPORT_FIELD, which)
+    return found if isinstance(found, dict) else None
+
+
+async def set_airport(page: Page, which: str, code: str) -> bool:
+    """Set the search form's departure or arrival airport to `code` in code, without the model.
+
+    True if the field now shows the code. The model cannot be relied on here: the departure field is pre-filled
+    from geolocation, and the model picked the wrong entries from the type-ahead list over and over. A React
+    type-ahead ignores a `.value =` assignment, so the code is typed with real key presses.
+    """
+    label = which.capitalize()
+    try:
+        field = await read_airport(page, which)
+        if field is None:
+            log.info(f"  {label}: no {which} field found in the page; leaving it to the model")
+            return False
+        if shows_code(field["value"], code):
+            log.info(f"  {label}: already '{field['value']}'")
+            return True
+        await click_at(page, field["x"], field["y"])
+        await settle(page, TRIP_SETTLE_MS)
+        opened = await read_airport(page, which) or field  # the clear button may only show once focused
+        if opened.get("clear"):
+            await click_at(page, opened["clear"]["x"], opened["clear"]["y"])
+            await settle(page, TRIP_SETTLE_MS)
+        if not await js(page, JS_FOCUS_AIRPORT, which, default=False):
+            await click_at(page, field["x"], field["y"])  # clearing moved the focus away
+            await settle(page, TRIP_SETTLE_MS)
+            await js(page, JS_FOCUS_AIRPORT, which, default=False)
+        await page.key_press("Backspace")
+        await page.type(code, delay=TYPE_DELAY_MS)
+        await settle(page, AIRPORT_SETTLE_MS)
+        option = await js(page, JS_AIRPORT_OPTION, {"which": which, "code": code})
+        if not isinstance(option, dict):
+            log.info(f"  {label}: typed '{code}' but found no '{code}, ...' option; leaving it to the model")
+            return False
+        await click_at(page, option["x"], option["y"])
+        await settle(page, TRIP_SETTLE_MS)
+        after = await read_airport(page, which)
+        if not after or not shows_code(after["value"], code):  # React ignored the mouse click: try a DOM click
+            await js(page, JS_DOM_CLICK, "data-audit-airport-option", default=False)
+            await settle(page, TRIP_SETTLE_MS)
+            after = await read_airport(page, which)
+    except BROWSER_ERRORS as error:  # a failed helper leaves the airport to the model, as before
+        log.info(f"  {label}: could not be set in the page ({error}); leaving it to the model")
+        return False
+    done = bool(after and shows_code(after["value"], code))
+    log.info(
+        f"  {label}: set to '{code}'"
+        if done
+        else f"  {label}: shows '{(after or field)['value']}' after choosing '{code}'"
+    )
+    return done
+
+
+async def set_airports(page: Page, trip: Trip) -> bool:
+    """Departure first, then arrival (choosing a departure can move the focus on to the arrival field)."""
+    departure = await set_airport(page, "departure", trip.origin)
+    arrival = await set_airport(page, "arrival", trip.destination)
+    return departure and arrival
+
+
+async def page_airports(page: Page) -> dict[str, str | None]:
+    """The airports the page's own fields show ({'origin': ..., 'destination': ...}); None where unreadable."""
+    shown: dict[str, str | None] = {}
+    for field, which in (("origin", "departure"), ("destination", "arrival")):
+        try:
+            control = await read_airport(page, which)
+        except BROWSER_ERRORS as error:  # a failed read falls back to the extraction's airport
+            log.debug("%s read failed: %s", which, error)
+            control = None
+        shown[field] = control["value"] if control else None
+    return shown
+
+
+def with_airports(state: SearchState, airports: dict[str, str | None]) -> SearchState:
+    """`state` with the airports the DOM shows in place of the extraction's reading, where the DOM has one."""
+    update = {field: value for field, value in airports.items() if value}
+    return state.model_copy(update=update) if update else state
+
+
+def airports_set(airports: dict[str, str | None], trip: Trip) -> bool:
+    return shows_code(airports.get("origin"), trip.origin) and shows_code(airports.get("destination"), trip.destination)
+
+
+def form_rules(trip_type: str | None, airports: dict[str, str | None], trip: Trip) -> str:
+    """What the model is told to leave alone: the parts of the form already set in code."""
+    rules = ""
+    if trip_type == "one_way":
+        rules += " The trip type is already set to One way: do not touch the trip-type control."
+    if airports_set(airports, trip):
+        rules += (
+            f" The departure and arrival airports are already set to {trip.origin} and {trip.destination}: "
+            "do not touch, clear or swap them."
+        )
+    return rules
+
+
+async def start_again(stagehand: Stagehand, page: Page, wrong: str, wrong_pages: int) -> int:
+    """Back to the home page's search form after a page that is not our results; the count of such pages so far.
+
+    Raises FlowChanged on the second one: the search keeps landing somewhere else, and carrying on would read
+    a page of fare deals as flights.
+    """
+    wrong_pages += 1
+    if wrong_pages >= MAX_WRONG_RESULTS:
+        raise FlowChanged(f"The search reached the wrong page twice: {wrong}")
+    log.info(f"  Not our search's results ({wrong}); starting the search again from {SITE_URL}")
+    await page.goto(SITE_URL)
+    await settle(page, SETTLE_MS)
+    await dismiss_popups(stagehand, page, POPUPS)
+    return wrong_pages
+
+
+@dataclass
+class SearchForm:
+    """The parts of the search form set and read in code, without the model: trip type and airports."""
+
+    stagehand: Stagehand
+    page: Page
+    trip: Trip
+    question: str
+    helper_works: bool = True  # False once set_airports failed: the airports are then the model's, not fought over
+
+    async def prepare(self) -> None:
+        """Set the trip type, then both airports."""
+        await set_one_way(self.page)
+        self.helper_works = await set_airports(self.page, self.trip)
+
+    async def keep_airports(self, airports: dict[str, str | None]) -> dict[str, str | None]:
+        """Set the airports back if the last action changed one (while the helper works); what they show now."""
+        if not self.helper_works or airports_set(airports, self.trip):
+            return airports
+        self.helper_works = await set_airports(self.page, self.trip)
+        return await page_airports(self.page)
+
+    async def read(self) -> tuple[SearchState, str | None, dict[str, str | None]]:
+        """The search state, with the trip type and airports the DOM shows in place of the extraction's reading."""
+        state = (await self.stagehand.extract(self.question, SearchState)).data
+        trip_type, airports = await page_trip_type(self.page), await page_airports(self.page)
+        return with_airports(with_trip_type(state, trip_type), airports), trip_type, airports
+
+
 async def search_flights(stagehand: Stagehand, page: Page, trip: Trip) -> None:
     """Work the site's flight search, one action at a time, until a list of flights shows.
 
-    The trip type is set in code first (set_one_way). For the rest, the model is given the goal and what the
-    form currently holds, not a route through the form: it chooses each next action itself, so the order of
-    fields and the shape of the widget do not matter.
+    The trip type and both airports are set in code first (set_one_way, set_airports). For the rest, the model
+    is given the goal and what the form currently holds, not a route through the form: it chooses each next
+    action itself, so the order of fields and the shape of the widget do not matter.
+
+    A page the extraction calls "results" is checked against the search (wrong_results): a flight-deals page,
+    or one that shows other airports, sends the search back to the home page; a second one ends it.
     """
     goal = (
         f"a ONE-WAY flight for 1 adult in economy from {trip.origin} to {trip.destination} departing "
@@ -478,42 +742,49 @@ async def search_flights(stagehand: Stagehand, page: Page, trip: Trip) -> None:
         f"We are searching for {goal}. Report the current state of the flight search, "
         "or whether a list of flights for that search is already showing."
     )
-    await set_one_way(page)
-    state = (await stagehand.extract(question, SearchState)).data
-    trip_type = await page_trip_type(page)
+
+    form = SearchForm(stagehand, page, trip, question)
+    await form.prepare()
+    state, trip_type, airports = await form.read()
     held: tuple | None = None  # what the search held after the last action, empty fields carried over
     last: tuple[str, tuple] | None = None  # (control acted on, what the search held after it)
     repeats = 0
+    wrong_pages = 0
     hint = ""
     for _ in range(MAX_SEARCH_STEPS):
         if state.blocked_reason:
             raise Blocked(state.blocked_reason)
         if state.on_results_page:
-            return
+            wrong = wrong_results(state, trip, await page.url())
+            if wrong is None:
+                return
+            wrong_pages = await start_again(stagehand, page, wrong, wrong_pages)
+            await form.prepare()
+            state, trip_type, airports = await form.read()
+            held, last, repeats, hint = None, None, 0, ""
+            continue
         if state.loading:
             # A submitted search renders slowly; acting on a half-loaded page is how a search gets restarted.
-            state = await wait_for_results(stagehand, page, question)
+            state = await wait_for_results(stagehand, page, question, trip)
             if state.loading:
                 break
             continue
         if (trip_type or state.trip_type) != "one_way" and await set_one_way(page):
             trip_type = "one_way"
-        state = with_trip_type(state, trip_type)
-        one_way = trip_type == "one_way"
-        trip_rule = " The trip type is already set to One way: do not touch the trip-type control." if one_way else ""
+        airports = await form.keep_airports(airports)
+        state = with_airports(with_trip_type(state, trip_type), airports)
         step = await llm_act(
             stagehand,
             f"Goal: show the list of flights for {goal}. Take the single next action that moves towards that goal. "
             f"The search currently holds: trip type={state.trip_type}, from={state.origin}, to={state.destination}, "
             f"date={state.depart_date}, guests={state.guests}, using points={state.using_points}. Correct whatever "
             "does not match the goal (opening the search form first if it is hidden, and choosing airports and dates "
-            f"from the site's own lists or calendar), then submit the search once everything matches.{trip_rule}{hint}",
+            f"from the site's own lists or calendar), then submit the search once everything matches."
+            f"{form_rules(trip_type, airports, trip)}{hint}",
             follow_up=True,  # a custom dropdown needs opening before its option can be picked
         )
         await settle(page, SETTLE_MS)
-        state = (await stagehand.extract(question, SearchState)).data
-        trip_type = await page_trip_type(page)
-        state = with_trip_type(state, trip_type)
+        state, trip_type, airports = await form.read()
         log.info(f"  {step.description} -> {state.reason}")
         held = search_held(state, held)
         now = (step.selector, held)
@@ -534,8 +805,9 @@ async def search_flights(stagehand: Stagehand, page: Page, trip: Trip) -> None:
         )
     if state.blocked_reason:
         raise Blocked(state.blocked_reason)
-    if not state.on_results_page:
-        raise FlowChanged(f"Couldn't reach the flight results page: {state.reason or 'no reason given'}")
+    wrong = wrong_results(state, trip, await page.url()) if state.on_results_page else None
+    if not state.on_results_page or wrong:
+        raise FlowChanged(f"Couldn't reach the flight results page: {wrong or state.reason or 'no reason given'}")
 
 
 def choose_flight(flights: list[Flight]) -> Flight | None:
@@ -887,11 +1159,7 @@ class QantasWorkflow(Workflow):
         try:
             await page.goto(url)
             await settle(page, SETTLE_MS)
-            await dismiss_popups(
-                stagehand,
-                page,
-                "cookie banner, promotional/newsletter popup, app-install banner or region selector modal",
-            )
+            await dismiss_popups(stagehand, page, POPUPS)
 
             await search_flights(stagehand, page, trip)
             await wait_for_render(page, RESULTS_RENDER_SECONDS)
@@ -912,6 +1180,11 @@ class QantasWorkflow(Workflow):
             write_csv(out / "products.csv", list(Flight.model_fields), rows)
             await shot(page, out / "flights.png")
             log.info(f"  Extracted {len(listing.flights)} flights ({listing.price_basis or 'price basis not stated'})")
+            if listing.flights and not any(f.departs or f.flight_number for f in listing.flights):
+                raise FlowChanged(
+                    "Results page lists no flights with times or flight numbers (likely a deals page): "
+                    f"{listing.route or 'route not shown'}"
+                )
 
             flight = choose_flight(listing.flights)
             if flight is None:
