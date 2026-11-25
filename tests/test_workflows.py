@@ -314,24 +314,58 @@ def test_qantas_reuses_the_step_when_the_screen_did_not_change(monkeypatch, tmp_
 
 
 # --- qantas: a custom dropdown that opens but is never chosen from does not eat the whole search ---------
-def _search(monkeypatch, *, states, selectors):
+class TripWidget:
+    """The page's trip-type combobox, faked at the js()/click_at() boundary. None: the page has none."""
+
+    def __init__(self, trip="return", *, ignores_mouse=False):
+        self.trip, self.open, self.ignores_mouse = trip, False, ignores_mouse
+        self.events = []
+
+    async def js(self, page, fn, arg=None, default=None, lib=""):
+        if fn is qantas.JS_TRIP_TYPE:
+            if self.trip is None:
+                return default
+            text = {"one_way": "One way", "return": "Return"}[self.trip]
+            return {"trip": self.trip, "text": text, "tag": "div", "x": 10, "y": 20, "controls": None}
+        if fn is qantas.JS_ONE_WAY_OPTION:
+            return {"x": 10, "y": 60} if self.open else default
+        if fn is qantas.JS_DOM_CLICK:
+            self.events.append(("dom_click", arg))
+            if arg == "data-audit-trip-option" and self.open:
+                self.trip, self.open = "one_way", False
+            return True
+        raise AssertionError(f"unexpected script {fn[:40]!r}")
+
+    async def click_at(self, page, x, y):
+        self.events.append(("click", x, y))
+        if (x, y) == (10, 20):
+            self.open = not self.open
+        elif (x, y) == (10, 60) and self.open and not self.ignores_mouse:
+            self.trip, self.open = "one_way", False
+
+
+def _search(monkeypatch, *, states, selectors, widget=None, description="Trip Type combobox"):
     """Run qantas.search_flights with scripted SearchState reads and the controls the model acts on, in order."""
     reads, picks = iter(states), iter(selectors)
     calls = []
+    widget = widget or TripWidget(None)
 
     class Stagehand:
         async def extract(self, instruction, schema, **options):
+            widget.events.append("extract")
             return SimpleNamespace(data=next(reads))
 
     async def fake_llm_act(stagehand, instruction, **options):
         calls.append((instruction, options))
-        return Acted(True, "Trip Type combobox", next(picks))
+        return Acted(True, description, next(picks))
 
     async def nothing(*args, **kwargs):
         return None
 
     monkeypatch.setattr(qantas, "llm_act", fake_llm_act)
     monkeypatch.setattr(qantas, "settle", nothing)
+    monkeypatch.setattr(qantas, "js", widget.js)
+    monkeypatch.setattr(qantas, "click_at", widget.click_at)
     trip = qantas.Trip("BNE", "PER", qantas.date(2027, 2, 14))
     return calls, asyncio.run(qantas.search_flights(Stagehand(), SimpleNamespace(), trip))
 
@@ -364,6 +398,64 @@ def test_qantas_search_tells_the_model_its_last_action_changed_nothing(monkeypat
     assert "changed nothing" not in calls[0][0]
     assert "changed nothing" not in calls[1][0]  # the first click on a control is not a repeat
     assert "changed nothing" in calls[2][0] and "Trip Type combobox" in calls[2][0]  # the second one is
+
+
+def test_qantas_search_sets_one_way_in_the_page_before_asking_the_model(monkeypatch):
+    widget = TripWidget("return")
+    # The extraction keeps saying 'return'; the page's own combobox is what counts.
+    states = [_form("return"), _form("return", on_results_page=True)]
+    calls, _ = _search(monkeypatch, states=states, selectors=["xpath=//input[1]"], widget=widget)
+    assert widget.events[:3] == [("click", 10, 20), ("click", 10, 60), "extract"]  # set before any model call
+    assert widget.trip == "one_way"
+    instruction = calls[0][0]
+    assert "trip type=one_way" in instruction
+    assert "already set to One way: do not touch the trip-type control" in instruction
+
+
+def test_qantas_trip_type_falls_back_to_a_dom_click_when_the_mouse_click_is_ignored(monkeypatch):
+    widget = TripWidget("return", ignores_mouse=True)
+    states = [_form(), _form(on_results_page=True)]
+    calls, _ = _search(monkeypatch, states=states, selectors=["xpath=//input[1]"], widget=widget)
+    assert ("dom_click", "data-audit-trip-option") in widget.events
+    assert "already set to One way" in calls[0][0]
+
+
+def test_qantas_search_leaves_the_trip_type_to_the_model_without_a_combobox(monkeypatch):
+    calls, _ = _search(monkeypatch, states=[_form(), _form(on_results_page=True)], selectors=["xpath=//x"])
+    assert "trip type=return" in calls[0][0]
+    assert "do not touch the trip-type control" not in calls[0][0]
+
+
+def test_qantas_stuck_guard_ignores_guests_dropping_in_and_out(monkeypatch):
+    combobox = "xpath=//div[@role='combobox']"
+    # The extraction reads '1 Adult' one time and nothing the next, on the same screen.
+    states = [_form(), _form(), _form(guests=None), _form(), _form(guests=None, origin=None)]
+    with pytest.raises(qantas.FlowChanged, match="acted on 4 times in a row"):
+        _search(monkeypatch, states=states, selectors=[combobox] * 5)
+
+
+def test_qantas_stuck_guard_counts_an_empty_read_as_unchanged(monkeypatch):
+    combobox = "xpath=//div[@role='combobox']"
+    filled = {"origin": "Brisbane (BNE)"}
+    states = [_form(**filled), _form(**filled), _form(), _form(**filled), _form()]  # origin drops out, comes back
+    with pytest.raises(qantas.FlowChanged, match="acted on 4 times in a row"):
+        _search(monkeypatch, states=states, selectors=[combobox] * 5)
+
+
+def test_qantas_paging_the_calendar_on_is_not_stuck(monkeypatch):
+    arrow = "xpath=//button[@aria-label='Next month']"
+    states = [_form("one_way")] * 6 + [_form("one_way", on_results_page=True)]
+    calls, _ = _search(monkeypatch, states=states, selectors=[arrow] * 6, description="Next month arrow")
+    assert len(calls) == 6
+    assert not any("changed nothing" in instruction for instruction, _ in calls)
+
+
+def test_month_navigation():
+    assert qantas.is_month_navigation("Click the 'Next month' arrow in the calendar")
+    assert qantas.is_month_navigation("Go to the next month")
+    assert qantas.is_month_navigation("Month forward button")
+    assert not qantas.is_month_navigation("Trip Type combobox")
+    assert not qantas.is_month_navigation("Select 14 February 2027")
 
 
 # --- coffee: an add-to-cart failure says why in price_comparison.json ---------------------------------
