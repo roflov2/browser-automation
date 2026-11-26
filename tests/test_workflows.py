@@ -4,6 +4,7 @@ import argparse
 import asyncio
 from pathlib import Path
 from types import SimpleNamespace
+from typing import ClassVar
 
 import pytest
 
@@ -196,6 +197,25 @@ def test_qantas_picks_the_cheapest_direct_flight():
         == "$149"
     )
     assert qantas.choose_flight([flight(None), flight("$10", sold_out=True)]) is None
+
+
+def test_qantas_never_chooses_a_points_fare():
+    def flight(price, departs="19:00", award_only=False):
+        return qantas.Flight(flight_number=None, departs=departs, arrives="22:20", stops=0, duration=None,
+                             price=price, award_only=award_only, sold_out=False, fares=[])  # fmt: skip
+
+    # The model put the award price in `price` and did not flag it: the code still skips it.
+    cash = flight("From $529", departs="12:35")
+    assert qantas.choose_flight([flight("Classic 16,600PTS+ $58"), cash]) is cash
+    assert qantas.choose_flight([flight("16,600 PTS + $58"), flight("10,000 points"), cash]) is cash
+    flagged = flight("$10", award_only=True)
+    assert qantas.choose_flight([flagged, cash]) is cash
+    assert qantas.choose_flight([flagged, flight("16,600 PTS + $58")]) is None
+    assert qantas.cash_price("$835 or Classic Plus") == 835  # a reward badge next to a cash price is fine
+    fares = [qantas.FareOption(fare_name="Economy Flex", price="$995"),
+             qantas.FareOption(fare_name="Economy Saver", price="$529"),
+             qantas.FareOption(fare_name="Economy", price="16,600 PTS + $58")]  # fmt: skip
+    assert qantas.choose_fare(fares).fare_name == "Economy Saver"
 
 
 def test_fields_left_null_are_handled_where_they_are_read():
@@ -887,3 +907,114 @@ def test_cart_poll_reads_once_when_the_cart_is_unreadable(monkeypatch):
 def test_cart_poll_reads_through_a_navigation(monkeypatch):
     count, seen = _poll(monkeypatch, [2, None, 3], before=2)  # e.g. the theme goes to /cart after adding
     assert count == 3 and seen == [2, None, 3]
+
+
+# --- qantas: flight selection is three fixed steps, each checked -----------------------------------------
+class SelectionSite:
+    """The results page, fare panel and trip summary as select_flight sees them, driven by what is clicked.
+
+    `broken` names steps whose click does nothing on screen; `offers` maps a step to the observe results
+    returned for it (default: one element that does what the step asks).
+    """
+
+    PAGES: ClassVar[dict] = {
+        "results": {"url": "https://book.qantas.test/flights", "heading": "Flights", "results": True},
+        "fares": {"url": "https://book.qantas.test/flights", "heading": "Flights", "results": True, "fare_panel": True},
+        "trip": {"url": "https://book.qantas.test/flights", "heading": "Flights", "trip_summary": True,
+                 "summary_page": True},
+        "passengers": {"url": "https://book.qantas.test/passengers", "heading": "Passenger details"},
+    }  # fmt: skip
+    NEXT: ClassVar[dict] = {"results": "fares", "fares": "trip", "trip": "passengers"}
+    STEP: ClassVar[dict] = {"results": 1, "fares": 2, "trip": 3}
+
+    def __init__(self, broken=(), offers=None):
+        self.screen, self.broken, self.offers = "results", set(broken), offers or {}
+        self.observed, self.clicked, self.extracted = [], [], []
+
+    async def observe(self, instruction, **options):
+        step = self.STEP.get(self.screen)
+        self.observed.append(step)
+        default = [SimpleNamespace(description=f"step {step} target", selector=f"xpath=/step{step}", method="click",
+                                   arguments=[])]  # fmt: skip
+        return SimpleNamespace(data=self.offers.get(step, default))
+
+    async def act(self, action, **options):
+        self.clicked.append(action.description)
+        step = self.STEP.get(self.screen)
+        if step not in self.broken:
+            self.screen = self.NEXT[self.screen]
+        return SimpleNamespace(data=SimpleNamespace(success=True, action_description=action.description))
+
+    async def extract(self, instruction, schema, **options):
+        self.extracted.append(schema.__name__)
+        if schema is qantas.FarePanel:
+            return SimpleNamespace(data=qantas.FarePanel(fares=[
+                qantas.FareOption(fare_name="Economy Flex", price="$995"),
+                qantas.FareOption(fare_name="Economy Saver", price="$529")]))  # fmt: skip
+        return SimpleNamespace(data=qantas.SelectedFare(
+            flight_selected=True, flight="QF2310", fare_name="Economy Saver", fare_price="$529",
+            running_total="$529 AUD", subtotal="$529 AUD"))  # fmt: skip
+
+    async def js(self, page, fn, arg=None, default=None, lib=""):
+        if fn is qantas.JS_SELECTION_PAGE:
+            return dict(self.PAGES[self.screen])
+        return default
+
+    async def fingerprint(self, page):
+        return self.screen
+
+
+def select(monkeypatch, tmp_path, site):
+    async def nothing(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(qantas, "js", site.js)
+    monkeypatch.setattr(qantas, "fingerprint", site.fingerprint)
+    for name in ("settle", "shot", "try_act"):
+        monkeypatch.setattr(qantas, name, nothing)
+    flight = qantas.Flight(flight_number="QF2310", departs="12:35", arrives="16:00", stops=0, duration=None,
+                           price="$529", sold_out=False, fares=[])  # fmt: skip
+    return asyncio.run(qantas.select_flight(site, object(), flight, tmp_path))
+
+
+def test_qantas_selects_the_flight_in_three_checked_steps(monkeypatch, tmp_path):
+    site = SelectionSite()
+    item = select(monkeypatch, tmp_path, site)
+    assert site.screen == "passengers"
+    assert site.observed == [1, 2, 3]
+    assert site.clicked == ["step 1 target", "step 2 target", "step 3 target"]
+    assert site.extracted == ["FarePanel", "SelectedFare"]
+    assert item["status"] == "added"
+    assert (item["selected_variant"], item["selected_price"], item["cart_total_display"]) == (
+        "Economy Saver", 529, "$529 AUD")  # fmt: skip
+    assert [(s["step"], s["passed"], s["selector"]) for s in item["selection_steps"]] == [
+        (1, True, "xpath=/step1"), (2, True, "xpath=/step2"), (3, True, "xpath=/step3")]  # fmt: skip
+
+
+@pytest.mark.parametrize(
+    ("step", "message", "status", "item_status"),
+    [
+        (1, "Fare panel never opened", Status.ADD_TO_CART_FAILED, "add_failed"),
+        (2, "Fare not added to trip", Status.ADD_TO_CART_FAILED, "add_failed"),
+        (3, "Continue did not advance", Status.NO_CHECKOUT, "added"),
+    ],
+)
+def test_qantas_retries_a_failed_selection_step_once(monkeypatch, tmp_path, step, message, status, item_status):
+    site = SelectionSite(broken={step})
+    with pytest.raises(qantas.SelectionFailed, match=message) as failed:
+        select(monkeypatch, tmp_path, site)
+    assert site.observed == [*range(1, step), step, step]  # the failing step ran twice, nothing after it
+    assert failed.value.status == status and failed.value.step == step
+    assert failed.value.item["status"] == item_status
+    attempts = [s for s in failed.value.item["selection_steps"] if s["step"] == step]
+    assert [(s["attempt"], s["passed"], s["page_changed"]) for s in attempts] == [(1, False, False), (2, False, False)]
+
+
+def test_qantas_never_clicks_login_to_skip_to_payment(monkeypatch, tmp_path):
+    login = SimpleNamespace(description="LOGIN TO SKIP TO PAYMENT button", selector="xpath=/login", method="click",
+                            arguments=[])  # fmt: skip
+    site = SelectionSite(offers={3: [login]})
+    with pytest.raises(qantas.SelectionFailed, match="Continue did not advance"):
+        select(monkeypatch, tmp_path, site)
+    assert "LOGIN TO SKIP TO PAYMENT button" not in site.clicked
+    assert site.screen == "trip"
