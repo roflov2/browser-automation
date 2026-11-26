@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+from audit.runner import SessionLog, workflow_records
 from audit.workflows import qantas
 from audit.workflows.qantas import Passenger
 
@@ -60,7 +61,7 @@ def test_the_options_page_moves_on_with_the_footer_continue_clicked_in_code(monk
         return footer, accept, acted, target, marked, heading, ticked
 
     footer, accept, acted, target, marked, heading, ticked = _run(steps)
-    assert footer == {"text": "CONTINUE >"}  # the sticky footer's, not the skip link's "Continue"
+    assert footer == {"text": "CONTINUE >", "in_modal": False}  # the sticky footer's, not the skip link's "Continue"
     assert accept is None  # the skip link's "Accept" is no fare rules ACCEPT
     assert (acted.success, acted.description, acted.selector) == (True, "code click on CONTINUE >",
                                                                   qantas.CONTINUE_MARK)  # fmt: skip
@@ -90,7 +91,10 @@ def test_the_fare_rules_accept_inside_the_bottom_modal_is_clicked_in_code_not_th
         return accept, acted, heading
 
     accept, acted, heading = _run(steps, "review.html")
-    assert accept == {"text": "ACCEPT >"}  # the modal's, though it has role="dialog"; not the cookie banner's
+    assert accept == {
+        "text": "ACCEPT >",
+        "in_modal": True,
+    }  # the modal's, though it has role="dialog"; not the cookie banner's
     assert (acted.success, acted.selector) == (True, "[data-audit-accept]")
     assert heading == "Options"  # the modal's ACCEPT took the click, not the cookie Accept
 
@@ -105,10 +109,22 @@ def test_confirm_details_inside_the_bottom_modal_is_clicked_in_code(monkeypatch)
         heading = await page.evaluate("document.getElementById('heading').textContent")
         return found, clicked, heading
 
-    found, clicked, heading = _run(steps, "passenger.html")
-    assert found == {"text": "CONFIRM DETAILS"}  # the open modal's, over the footer's CONTINUE under it
+    session = SessionLog()
+    with workflow_records(session):
+        found, clicked, heading = _run(steps, "passenger.html")
+    assert found == {
+        "text": "CONFIRM DETAILS",
+        "in_modal": True,
+    }  # the open modal's, over the footer's CONTINUE under it
     assert clicked == "CONFIRM DETAILS"
     assert heading == "Seats"  # neither the footer, the cart panel nor EDIT was clicked
+    # Each stage of the code click is in the session record: found, what was under the click point, moved on.
+    records = {r["data"]["stage"]: r["data"] for r in session.history if r["data"].get("click") == "footer_forward"}
+    assert records["found"]["found"]["in_modal"] is True
+    assert records["before_click"]["target"]["hit_is_target"] is True
+    assert records["before_click"]["heading"] == "Passenger details"
+    assert records["mouse_click"]["moved_on"] is True and records["mouse_click"]["last_seen"]["heading"] == "Seats"
+    assert "dom_click" not in records
 
 
 @pytest.mark.browser

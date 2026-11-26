@@ -10,7 +10,7 @@ import pytest
 
 from audit.actions import Acted
 from audit.config import Settings
-from audit.core import SiteResult, Status
+from audit.core import SiteResult, Status, final_price_was_read
 from audit.workflows import WORKFLOWS, coffee, qantas
 from audit.workflows.coffee import CoffeeWorkflow
 from audit.workflows.qantas import FieldToFill, Passenger, QantasWorkflow, passenger_field_instruction
@@ -2050,3 +2050,46 @@ def test_qantas_verify_you_are_human_is_a_bot_signal():
     run = SiteResult(site="s", out_dir=Path())
     qantas.note_bot_signals(run, "passenger_details", ["Please verify you are human"])
     assert run.warnings == ["bot signal on passenger_details: Please verify you are human"]
+
+
+# --- qantas: a reCAPTCHA load failure does not fail a run that read the payment page ----
+@pytest.mark.parametrize(
+    ("text", "soft"),
+    [(RECAPTCHA, True),
+     ("reCAPTCHA failed to load; please reload", True),
+     ("Verify you are human", False),
+     ("Access denied", False),
+     ("Press and hold to confirm you are not a robot", False),
+     ("This site is protected by reCAPTCHA and the Google Privacy Policy and Terms of Service apply.", False),
+     (f"{RECAPTCHA} Verify you are human", False),
+     (None, False), ("", False)],
+)  # fmt: skip
+def test_qantas_only_a_recaptcha_load_failure_is_a_soft_bot_signal(text, soft):
+    assert qantas.is_soft_bot_signal(text) is soft
+
+
+def _blocked_checkout(reason, total="$529.00", is_checkout_page=True):
+    return _checkout("$529.00", total, []).model_copy(
+        update={"blocked_reason": reason, "is_checkout_page": is_checkout_page}
+    )
+
+
+def test_qantas_a_read_payment_page_is_not_blocked_by_a_recaptcha_load_failure():
+    run = SiteResult(site="s", out_dir=Path(), status=Status.OK)
+    cleared = qantas.clear_soft_block(_blocked_checkout(RECAPTCHA), run)
+    assert cleared.blocked_reason is None
+    assert run.warnings == [f"bot signal on payment: {RECAPTCHA}"]
+    assert final_price_was_read(cleared, 529.0)
+    assert qantas.compare_prices(run, cleared)["final_price_read"] is True
+
+
+@pytest.mark.parametrize(
+    "checkout",
+    [_blocked_checkout("Verify you are human"),  # a real check
+     _blocked_checkout(RECAPTCHA, total=None),  # no total read
+     _blocked_checkout(RECAPTCHA, is_checkout_page=False)],  # not on the payment page
+)  # fmt: skip
+def test_qantas_a_real_block_or_an_unread_page_keeps_its_blocked_reason(checkout):
+    run = SiteResult(site="s", out_dir=Path())
+    assert qantas.clear_soft_block(checkout, run) == checkout
+    assert not final_price_was_read(checkout, 529.0)

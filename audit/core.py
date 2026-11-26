@@ -23,6 +23,9 @@ OUTPUT_ROOT = Path("output")
 
 Item = dict[str, Any]  # one thing we tried to buy; see new_item()
 Report = dict[str, Any]  # the price comparison of one run
+# A workflow log record's structured data, kept with it in session.json's history:
+# log.info(message, extra={WORKFLOW_DATA: {...}}). See runner.WorkflowLogHandler.
+WORKFLOW_DATA = "audit_data"
 
 ITEM_FIELDS = [
     "name", "selected_variant", "shop_price_display", "selected_price_display",

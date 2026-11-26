@@ -2,6 +2,7 @@
 
 import argparse
 import asyncio
+import contextlib
 import json
 import logging
 from pathlib import Path
@@ -249,6 +250,50 @@ def test_history_is_redacted_and_noise_free():
     assert "timestamp" in session.history[0]
     session.start_site()
     assert session.history == []
+
+
+def test_a_workflow_note_is_kept_in_the_history_without_secret_values():
+    session = SessionLog(secrets=SECRETS)
+    session.note("Typed the name", field="first name", value="Samantha", seen={"email": "sam@real.example"})
+    [record] = session.history
+    assert record["level"] == "info" and record["message"] == "Typed the name"
+    assert record["data"] == {
+        "category": "workflow", "field": "first name", "value": "%first_name%", "seen": {"email": "%email%"},
+    }  # fmt: skip
+    assert "timestamp" in record
+    session.note("odd data", where=Path("x"))  # anything that is not JSON is kept as its str()
+    assert session.history[-1]["data"]["where"] == "x"
+
+
+def test_workflow_log_records_are_kept_while_a_site_is_audited():
+    session = SessionLog(secrets=SECRETS)
+    workflow_log = logging.getLogger("audit.workflows.example")
+    with caplog_level("audit", logging.WARNING), runner.workflow_records(session):  # kept under -q too
+        workflow_log.info(
+            "  Clicked for Samantha", extra={core.WORKFLOW_DATA: {"stage": "mouse_click", "moved_on": False}}
+        )
+        workflow_log.debug("debug detail is not kept")
+        logging.getLogger("audit.runner").info("nor are other loggers' records")
+    workflow_log.info("nor anything after the site")
+    [record] = session.history
+    assert record["message"] == "Clicked for %first_name%"
+    assert record["data"] == {
+        "category": "workflow", "logger": "audit.workflows.example", "stage": "mouse_click", "moved_on": False,
+    }  # fmt: skip
+    workflows = logging.getLogger("audit.workflows")
+    assert not any(isinstance(h, runner.WorkflowLogHandler) for h in workflows.handlers)
+    assert workflows.level == logging.NOTSET  # put back
+
+
+@contextlib.contextmanager
+def caplog_level(name: str, level: int):
+    logger = logging.getLogger(name)
+    old = logger.level
+    logger.setLevel(level)
+    try:
+        yield
+    finally:
+        logger.setLevel(old)
 
 
 class Total(BaseModel):

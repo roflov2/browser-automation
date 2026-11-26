@@ -30,6 +30,7 @@ from ..config import Settings
 from ..core import (
     BROWSER_ERRORS,
     STATUS_REASONS,
+    WORKFLOW_DATA,
     Blocked,
     Fee,
     FlowChanged,
@@ -2038,7 +2039,7 @@ JS_FOOTER_FORWARD = r"""({ mark, forward, never }) => {
     const inBar = found.filter(pinned);
     const pool = inModal.length ? inModal : inBar.length ? inBar : found;
     const el = pool[pool.length - 1];
-    const out = { text: clean(el.innerText) };
+    const out = { text: clean(el.innerText), in_modal: !!el.closest('page-bottom-modal') };
     if (mark) {
         document.querySelectorAll('[data-audit-continue]').forEach(e => e.removeAttribute('data-audit-continue'));
         el.setAttribute('data-audit-continue', '1');
@@ -2094,15 +2095,68 @@ CONFIRM_DETAILS = (
 )
 
 
-async def left_page(page: Page, before: dict) -> bool:
-    """Poll up to STEP_CHECK_MS for the URL or the main heading to differ from `before` (a selection_page)."""
+async def left_page(page: Page, before: dict, seen: dict | None = None) -> bool:
+    """Poll up to STEP_CHECK_MS for the URL or the main heading to differ from `before` (a selection_page).
+
+    `seen` is filled with the url and heading last read, for the session record.
+    """
+    seen = {} if seen is None else seen
     for poll_index in range(STEP_CHECK_MS // STEP_POLL_MS + 1):
         if poll_index:
             await pause(STEP_POLL_MS)
         now = await selection_page(page)
+        seen.update(url=now.get("url"), heading=now.get("heading"), polls=poll_index + 1)
         if now and (now.get("url") != before.get("url") or (now.get("heading") or "") != (before.get("heading") or "")):
             return True
     return False
+
+
+# What the session record needs about a button the code is about to click, or has clicked: is the marked element
+# still there and the size of a button, is it inside a <page-bottom-modal> (and is that modal still showing), and,
+# given the click point, which element is on top there (a sticky footer or an overlay would take a mouse click).
+JS_CLICK_PROBE = r"""({ mark, x, y }) => {
+    const el = document.querySelector(`[${mark}]`);
+    const out = { present: !!el, visible: !!el && vis(el) };
+    const modal = el && el.closest('page-bottom-modal');
+    out.in_modal = !!modal;
+    if (modal) {
+        const r = modal.getBoundingClientRect(), style = getComputedStyle(modal);
+        out.modal = { width: Math.round(r.width), height: Math.round(r.height), display: style.display,
+                      visibility: style.visibility, opacity: style.opacity, hidden: modal.hidden };
+    }
+    if (typeof x === 'number' && typeof y === 'number') {
+        const hit = document.elementFromPoint(x, y);
+        out.hit_is_target = !!(el && hit && (el === hit || el.contains(hit)));
+        out.hit = hit ? hit.tagName.toLowerCase() + (hit.id ? '#' + hit.id : '')
+            + (typeof hit.className === 'string' && hit.className.trim()
+                ? '.' + hit.className.trim().split(/\s+/).slice(0, 3).join('.') : '') : null;
+        out.hit_text = hit ? clean(hit.innerText).slice(0, 60) : null;
+    }
+    return out;
+}"""
+
+
+async def click_probe(page: Page, mark: str, found: dict | None = None) -> dict | None:
+    """JS_CLICK_PROBE for the element marked with `mark`, at `found`'s click point if given. Never raises."""
+    point = {"x": found.get("x"), "y": found.get("y")} if found else {}
+    try:
+        probe = await js(page, JS_CLICK_PROBE, {"mark": mark, **point}, default=None)
+    except Exception as error:  # noqa: BLE001 - a record only: never let it change the run
+        return {"error": f"{type(error).__name__}: {str(error)[:120]}"}
+    return probe if isinstance(probe, dict) else None
+
+
+async def screen_for_record(page: Page) -> str | None:
+    """The fingerprint, for the session record only. Never raises."""
+    try:
+        return await fingerprint(page)
+    except Exception:  # noqa: BLE001 - a record only: never let it change the run
+        return None
+
+
+def trace(message: str, **data: Any) -> None:
+    """A progress line that is also kept, with `data`, in session.json's history (category 'workflow')."""
+    log.info(message, extra={WORKFLOW_DATA: data})
 
 
 async def find_footer_forward(page: Page, mark: bool = False) -> dict | None:
@@ -2122,16 +2176,34 @@ async def click_footer_forward(page: Page) -> str | None:
     The button's text once the page has moved on (the URL or main heading changed); None if not found or the page
     stayed.
     """
+    what = "footer_forward"
     found = await find_footer_forward(page, mark=True)
+    trace(f"  Footer forward: {'found ' + repr(found.get('text')) if found else 'no button found'}",
+          click=what, stage="found", found=found)  # fmt: skip
     if found is None or "x" not in found:
         return None
     before = await selection_page(page)
+    trace(
+        "  Footer forward: before the click", click=what, stage="before_click",
+        url=before.get("url"), heading=before.get("heading"), fingerprint=await screen_for_record(page),
+        target=await click_probe(page, "data-audit-continue", found),
+    )  # fmt: skip
     await click_at(page, found["x"], found["y"])
-    if await left_page(page, before):
+    seen: dict = {}
+    left = await left_page(page, before, seen)
+    trace(f"  Footer forward: mouse click {'moved the page on' if left else 'did not move the page on'}",
+          click=what, stage="mouse_click", moved_on=left, last_seen=seen, fingerprint=await screen_for_record(page),
+          button_after=await click_probe(page, "data-audit-continue"))  # fmt: skip
+    if left:
         return str(found["text"])
     log.info(f"  {found['text']}: the page did not move on after the click; trying a DOM click")
     await js(page, JS_DOM_CLICK, "data-audit-continue")
-    return str(found["text"]) if await left_page(page, before) else None
+    seen = {}
+    left = await left_page(page, before, seen)
+    trace(f"  Footer forward: DOM click {'moved the page on' if left else 'did not move the page on'}",
+          click=what, stage="dom_click", moved_on=left, last_seen=seen, fingerprint=await screen_for_record(page),
+          button_after=await click_probe(page, "data-audit-continue"))  # fmt: skip
+    return str(found["text"]) if left else None
 
 
 # The travel insurance question ("Need Travel Insurance?" on the Options page): an insurance card (SELECT, or
@@ -2286,7 +2358,7 @@ JS_ACCEPT = r"""mark => {
             && !el.closest(skip) && !el.matches('a[href^="#"]'));
     if (!buttons.length) return null;
     const el = buttons[buttons.length - 1];  // the one at the bottom of the page
-    const out = { text: clean(el.innerText) };
+    const out = { text: clean(el.innerText), in_modal: !!el.closest('page-bottom-modal') };
     if (mark) {
         document.querySelectorAll('[data-audit-accept]').forEach(e => e.removeAttribute('data-audit-accept'));
         el.setAttribute('data-audit-accept', '1');
@@ -2304,32 +2376,60 @@ async def read_accept(page: Page, mark: bool = False) -> dict | None:
     return found if isinstance(found, dict) else None
 
 
-async def moved_on(page: Page, before: str | None, heading: str) -> bool:
+async def moved_on(page: Page, before: str | None, heading: str, seen: dict | None = None) -> bool:
     """Poll up to STEP_CHECK_MS: has the page left the fare rules? A new main heading, or a changed screen
-    without the fare rules' ACCEPT."""
+    without the fare rules' ACCEPT.
+
+    `seen` is filled with what was last read (url, heading, fingerprint, whether ACCEPT still shows), and `why`.
+    """
+    seen = {} if seen is None else seen
     for poll_index in range(STEP_CHECK_MS // STEP_POLL_MS + 1):
         if poll_index:
             await pause(STEP_POLL_MS)
-        now = (await selection_page(page)).get("heading") or ""
+        page_now = await selection_page(page)
+        now = page_now.get("heading") or ""
+        seen.update(url=page_now.get("url"), heading=now, polls=poll_index + 1)
         if now and now != heading:
+            seen["why"] = "new heading"
             return True
-        if await fingerprint(page) != before and await read_accept(page) is None:
+        screen = await fingerprint(page)
+        changed = screen != before
+        accept_shown = changed and await read_accept(page) is not None
+        seen.update(fingerprint=screen, screen_changed=changed, accept_shown=accept_shown if changed else None)
+        if changed and not accept_shown:
+            seen["why"] = "screen changed and ACCEPT gone"
             return True
     return False
 
 
 async def accept_fare_rules(page: Page) -> bool:
     """Click the fare rules' ACCEPT: a mouse click, then a DOM click. True once the page has moved on."""
+    what = "fare_rules_accept"
     found = await read_accept(page, mark=True)
+    trace(f"  Fare rules: {'found ' + repr(found.get('text')) if found else 'no ACCEPT found'}",
+          click=what, stage="found", found=found)  # fmt: skip
     if not found or "x" not in found:
         return False
-    before, heading = await fingerprint(page), (await selection_page(page)).get("heading") or ""
+    start = await selection_page(page)
+    before, heading = await fingerprint(page), start.get("heading") or ""
+    trace("  Fare rules: before the click", click=what, stage="before_click", url=start.get("url"),
+          heading=heading, fingerprint=before, target=await click_probe(page, "data-audit-accept", found))  # fmt: skip
     await click_at(page, found["x"], found["y"])
-    if await moved_on(page, before, heading):
+    seen: dict = {}
+    accepted = await moved_on(page, before, heading, seen)
+    trace(f"  Fare rules: mouse click {'moved the page on' if accepted else 'did not move the page on'}",
+          click=what, stage="mouse_click", moved_on=accepted, last_seen=seen,
+          button_after=await click_probe(page, "data-audit-accept"))  # fmt: skip
+    if accepted:
         return True
     log.info("  Fare rules: the page did not move on after clicking ACCEPT; trying a DOM click")
     await js(page, JS_DOM_CLICK, "data-audit-accept")
-    return await moved_on(page, before, heading)
+    seen = {}
+    accepted = await moved_on(page, before, heading, seen)
+    trace(f"  Fare rules: DOM click {'moved the page on' if accepted else 'did not move the page on'}",
+          click=what, stage="dom_click", moved_on=accepted, last_seen=seen,
+          button_after=await click_probe(page, "data-audit-accept"))  # fmt: skip
+    return accepted
 
 
 BOOKING_GOAL = (
@@ -2362,10 +2462,13 @@ async def next_booking_action(
     target = {} if target is None else target
     passengers = step_type == "passenger_details"
     complete = passengers and await fill_passenger_details(stagehand, page, passenger)
-    if complete and (clicked := await click_footer_forward(page)):
-        log.info(f"  Passenger details: confirmed ({clicked} clicked in code)")
-        target.update(description=f"{clicked} in the sticky footer", selector=CONTINUE_MARK)
-        return Acted(True, f"code click on {clicked}", CONTINUE_MARK)
+    if complete:
+        if clicked := await click_footer_forward(page):
+            log.info(f"  Passenger details: confirmed ({clicked} clicked in code)")
+            target.update(description=f"{clicked} in the sticky footer", selector=CONTINUE_MARK)
+            return Acted(True, f"code click on {clicked}", CONTINUE_MARK)
+        trace("  Passenger details: code click failed, asking the model", stage="model_fallback",
+              step_type=step_type, click="footer_forward")  # fmt: skip
     instruction = f"{BOOKING_GOAL} The current screen looks like: {state.heading or step_type}."
     if complete:
         instruction += CONFIRM_DETAILS
@@ -2442,6 +2545,9 @@ async def move_booking_on(
             log.info("  Fare rules: accepted")
             return Acted(True, "Fare rules: accepted (ACCEPT clicked in code)", "[data-audit-accept]")
         accept_open = await read_accept(page) is not None
+        if accept_open:
+            trace(f"  {state.heading or step_type}: code click failed, asking the model", stage="model_fallback",
+                  step_type=step_type, click="fare_rules_accept")  # fmt: skip
         if not extra and accept_open:
             extra = ACCEPT_FARE_RULES
         if (
@@ -2556,6 +2662,9 @@ async def walk_to_payment(stagehand: Stagehand, page: Page, passenger: Passenger
         if index == 1:
             await shot(page, out / "cart.png")  # first view of the selected trip and its running total
         note_bot_signals(result, step_type, [*state.validation_errors, state.blocked_reason])
+        if state.blocked_reason and is_soft_bot_signal(state.blocked_reason):
+            log.info(f"  Step {index}: bot signal kept as a warning, not a block: {state.blocked_reason[:120]}")
+            state = state.model_copy(update={"blocked_reason": None})
 
         if state.blocked_reason:
             raise Blocked(state.blocked_reason)
@@ -2649,6 +2758,15 @@ def compare_prices(result: SiteResult, checkout: CheckoutDetails | None) -> Repo
 # pages carry is no signal.
 BOT_SIGNAL = re.compile(r"recaptcha|captcha|verify you are human", re.IGNORECASE)
 NOT_BOT_SIGNAL = re.compile(r"protected by recaptcha|recaptcha.{0,40}privacy policy", re.IGNORECASE)
+# The bot signals that leave the page usable: the reCAPTCHA script failing to load ("Could not connect to the
+# reCAPTCHA service. ... reload to get a reCAPTCHA challenge"). The model reports it as blocking in some runs and
+# not in others (09:45 and 10:16 runs of 2026-11-27, same page); it is kept as a warning only.
+SOFT_BOT_SIGNAL = re.compile(r"could not connect to the recaptcha|recaptcha.{0,60}(failed|error|reload)", re.IGNORECASE)
+# Words that show a real check in the way, whatever else the text says.
+HARD_BOT_SIGNAL = re.compile(
+    r"verify you are human|are you a robot|press and hold|access denied|unusual traffic|not a robot",
+    re.IGNORECASE,
+)
 JS_PAGE_TEXT = r"""() => document.body ? document.body.innerText : ''"""
 
 
@@ -2663,6 +2781,29 @@ def note_bot_signals(result: SiteResult, where: str, texts: Iterable[str | None]
             if warning not in result.warnings:
                 log.warning(f"  {warning}")
                 result.warnings.append(warning)
+
+
+def is_soft_bot_signal(text: str | None) -> bool:
+    """True for a bot-check message that does not stop the page being used (the reCAPTCHA load failure); False for
+    a visible challenge, an access-denied page, the 'protected by reCAPTCHA' notice or anything else."""
+    text = " ".join(str(text or "").split())
+    return bool(
+        BOT_SIGNAL.search(text)
+        and not NOT_BOT_SIGNAL.search(text)
+        and SOFT_BOT_SIGNAL.search(text)
+        and not HARD_BOT_SIGNAL.search(text)
+    )
+
+
+def clear_soft_block(checkout: CheckoutDetails, result: SiteResult) -> CheckoutDetails:
+    """A payment page that was read (a checkout page with a total) is not blocked by a soft bot signal: its
+    blocked_reason is cleared, and the message is kept in result.warnings."""
+    reason = checkout.blocked_reason
+    if not (reason and is_soft_bot_signal(reason) and checkout.is_checkout_page and checkout.total):
+        return checkout
+    note_bot_signals(result, "payment", [reason])
+    log.info(f"  Payment page: read in full despite a bot signal; kept as a warning, not a block: {reason[:120]}")
+    return checkout.model_copy(update={"blocked_reason": None})
 
 
 def drop_unpaid_extras(checkout: CheckoutDetails) -> CheckoutDetails:
@@ -2695,6 +2836,7 @@ async def read_payment_page(stagehand: Stagehand, page: Page, result: SiteResult
     with contextlib.suppress(*BROWSER_ERRORS):  # a nicety: never let it fail the read
         page_text = await js(page, JS_PAGE_TEXT, default="")
     note_bot_signals(result, "payment", [checkout.blocked_reason, checkout.summary, page_text])
+    checkout = clear_soft_block(checkout, result)
     if checkout.payment_surcharges:  # replace the payment step's own offers with the per-method list
         result.extras = [
             e for e in result.extras if not (e["step_type"] == "payment" and e["category"] == "payment_surcharge")

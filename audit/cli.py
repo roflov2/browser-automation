@@ -15,12 +15,16 @@ from .workflows import WORKFLOWS
 def configure_logging(verbose: bool = False, quiet: bool = False) -> None:
     """Progress lines go to stdout exactly as the workflows word them; -v adds debug detail, -q keeps warnings only."""
     logger = logging.getLogger("audit")
-    logger.setLevel(logging.DEBUG if verbose else logging.WARNING if quiet else logging.INFO)
+    level = logging.DEBUG if verbose else logging.WARNING if quiet else logging.INFO
+    logger.setLevel(level)
     logger.propagate = False
     if not logger.handlers:
         handler = logging.StreamHandler(sys.stdout)
         handler.setFormatter(logging.Formatter("%(message)s"))
         logger.addHandler(handler)
+    # On the handler too: the runner lets the workflows' INFO records through to session.json under -q.
+    for each in logger.handlers:
+        each.setLevel(level)
 
 
 def build_parser(settings: Settings) -> argparse.ArgumentParser:
