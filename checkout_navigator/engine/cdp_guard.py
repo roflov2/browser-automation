@@ -31,7 +31,7 @@ from pathlib import Path
 from typing import IO, Any, TypeVar, cast
 from urllib.parse import urlparse
 
-from stagehand import Stagehand, local_browser
+from stagehand import LLMGenerateCallback, Stagehand, local_browser
 
 from checkout_navigator.config import SITE_HINTS_PATH, NavigatorConfig
 
@@ -291,20 +291,32 @@ async def open_session(config: NavigatorConfig) -> AsyncIterator[tuple[Any, Any]
         options["chromium_sandbox"] = False  # Chrome refuses to start sandboxed as root (containers, CI)
 
     with cdp_noise_filtered():
-        browser = await local_browser.launch(**options)
-        try:
-            stagehand = await Stagehand.create(
-                browser=browser, system_prompt=config.system_prompt, **config.llm.stagehand_kwargs
-            )
-            try:
-                page = await _fresh_tab(browser)
-                yield stagehand, page
-            finally:
-                with contextlib.suppress(*BROWSER_ERRORS):
-                    await stagehand.close()
-        finally:
-            with contextlib.suppress(*BROWSER_ERRORS):
-                await browser.close()
+        async with contextlib.AsyncExitStack() as stack:  # closed in reverse: Stagehand, Chrome, then Azure
+            model = await _model_options(config, stack)  # an Azure sign-in failure stops before Chrome opens
+            browser = await local_browser.launch(**options)
+            stack.push_async_callback(_close_quietly, browser)
+            stagehand = await Stagehand.create(browser=browser, system_prompt=config.system_prompt, **model)
+            stack.push_async_callback(_close_quietly, stagehand)
+            page = await _fresh_tab(browser)
+            yield stagehand, page
+
+
+async def _close_quietly(resource: Any) -> None:
+    with contextlib.suppress(*BROWSER_ERRORS):
+        await resource.close()
+
+
+async def _model_options(config: NavigatorConfig, stack: contextlib.AsyncExitStack) -> dict[str, Any]:
+    """Stagehand's model arguments: the Azure OpenAI callback when AZURE_OPENAI_ENDPOINT is set, else a model name."""
+    azure = config.llm.azure
+    if azure is None:
+        return config.llm.stagehand_kwargs
+    from checkout_navigator.engine.azure_llm import open_azure_llm  # noqa: PLC0415 - optional extras
+
+    llm = await stack.enter_async_context(open_azure_llm(azure))
+    log.info("Model: Azure OpenAI deployment %s", azure.deployment)
+    # AzureLLM returns plain dicts shaped like Stagehand's result TypedDicts; Stagehand validates them.
+    return {"model": cast(LLMGenerateCallback, llm)}
 
 
 async def _fresh_tab(browser: Any) -> Any:

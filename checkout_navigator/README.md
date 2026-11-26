@@ -53,6 +53,7 @@ observe ─► Are we at checkout? ── yes ─► DONE
 | Search defaults | `CBR → SYD`, city `Sydney`, 1 guest | `SEARCH_ORIGIN`, `SEARCH_DESTINATION`, `SEARCH_CITY`, `SEARCH_GUESTS` |
 | Persona | Alex Testbooking, `alex.testbooking@example.com`, `0491 570 156` (ACMA fictional range) | `PERSONA_<FIELD>` |
 | Model | `google/gemini-3.8-flash` | `NAVIGATOR_MODEL`, `MODEL_API_KEY` / `GOOGLE_GENERATIVE_AI_API_KEY` |
+| Azure OpenAI (replaces the model above) | off | `AZURE_OPENAI_ENDPOINT`, `AZURE_OPENAI_DEPLOYMENT`, `AZURE_OPENAI_API_VERSION` (`2024-12-01-preview`), `AZURE_OPENAI_MANAGED_IDENTITY` (`false`) |
 | Chrome profile | `.chrome-profile/` (shared with the legacy `audit` runs) | `CHROME_PROFILE_DIR`, `--profile-dir` |
 | Browser | headed; proxy unset | `HEADLESS`, `CHROME_PATH`, `BROWSER_PROXY_SERVER`, `BROWSER_PROXY_BYPASS` |
 
@@ -75,4 +76,26 @@ observe ─► Are we at checkout? ── yes ─► DONE
 | `ticketek/flow.py` queue wait | `cdp_guard.wait_out_queue` (generic queue detection, limit from hints) |
 | The four workflows' `SAFETY_PROMPT`s; `qantas.py` `NEVER_CLICK` / `NEVER_FORWARD` | `config.SYSTEM_PROMPT`, `cdp_guard.FINAL_PURCHASE`, `never_click` hints |
 
-Not carried over: the Azure OpenAI adapter (`audit/azure.py`) and Browserbase. Both still work for the legacy `audit` package. They can be wired in through `Stagehand.create(model=<callback>)` and the browser launch in `open_session` if needed.
+## Azure OpenAI
+
+`engine/azure_llm.py` is the legacy `audit/azure.py` adapter, carried over unchanged apart from where it reads its settings. Stagehand 4.4 has no setting for an Azure endpoint, so the adapter plugs in as Stagehand's LLM callback. Each model request becomes a chat completion on your deployment, signed in with a Microsoft Entra ID token from `DefaultAzureCredential`. No API key is used.
+
+```bash
+pip install -r checkout_navigator/requirements-azure.txt
+az login        # or set AZURE_CLIENT_ID, AZURE_TENANT_ID, AZURE_CLIENT_SECRET for a service principal
+export AZURE_OPENAI_ENDPOINT=https://<resource>.openai.azure.com AZURE_OPENAI_DEPLOYMENT=gpt-4o
+python -m checkout_navigator.run --url https://shop.example.com.au
+```
+
+The adapter keeps all of its legacy behaviour:
+
+- **Sign-in check.** The token is fetched before Chrome opens, so a sign-in problem stops the run straight away with a message.
+- **Schema repair.** Off-schema answers have forbidden keys dropped and missing nullable keys filled with null, and the model is asked once more if the answer still doesn't fit.
+- **Retries.** Throttling, server errors and dropped connections are retried up to three times, honouring `retry-after` (at most 60 s each), and every retry is logged.
+
+**Requirements:**
+
+- The signed-in identity needs the *Cognitive Services OpenAI User* role on the resource.
+- The deployment must accept JSON-schema response formats: gpt-4o 2024-08-06 or later, with API version 2024-08-01-preview or later.
+
+Not carried over: Browserbase. It still works for the legacy `audit` package. If needed, it can be wired into the browser launch in `open_session`.

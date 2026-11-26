@@ -19,6 +19,7 @@ PACKAGE_DIR = Path(__file__).resolve().parent
 SITE_HINTS_PATH = PACKAGE_DIR / "site_hints.yaml"
 
 DEFAULT_MODEL = "google/gemini-3.8-flash"
+DEFAULT_AZURE_API_VERSION = "2024-12-01-preview"
 LLM_TIMEOUT_MS = 90_000  # Stagehand timeouts are in milliseconds
 
 # Placeholder shopper typed into contact / passenger / guest forms. Typed values reach the page as Stagehand
@@ -75,11 +76,32 @@ def _env_bool(name: str, default: bool) -> bool:
     return default if value is None else value.lower() in ("1", "true", "yes", "on")
 
 
+class ConfigError(SystemExit):
+    """A setting is missing or invalid; exits with a message instead of a traceback."""
+
+
+@dataclass(frozen=True)
+class AzureConfig:
+    """Azure OpenAI signed in with Microsoft Entra ID (no API key). Setting it replaces the model name below."""
+
+    endpoint: str
+    deployment: str
+    api_version: str = DEFAULT_AZURE_API_VERSION
+    managed_identity: bool = False  # let DefaultAzureCredential also try the host's managed identity
+
+    def __post_init__(self) -> None:
+        if not self.endpoint.startswith("https://"):
+            raise ConfigError(f"AZURE_OPENAI_ENDPOINT must be an https:// URL: {self.endpoint}")
+        if not self.deployment:
+            raise ConfigError("AZURE_OPENAI_DEPLOYMENT is required when AZURE_OPENAI_ENDPOINT is set (e.g. gpt-4o)")
+
+
 @dataclass(frozen=True)
 class LLMConfig:
     model: str = DEFAULT_MODEL
     api_key: str | None = None
     timeout_ms: int = LLM_TIMEOUT_MS
+    azure: AzureConfig | None = None  # when set, every model call goes to the Azure deployment instead
 
     @property
     def stagehand_kwargs(self) -> dict[str, Any]:
@@ -150,7 +172,18 @@ def load_config(**overrides: Any) -> NavigatorConfig:
     model = _env("NAVIGATOR_MODEL") or _env("GEMINI_MODEL")
     if model and "/" not in model:
         model = f"google/{model}"
-    llm = LLMConfig(model=model or DEFAULT_MODEL, api_key=api_key)
+    endpoint = _env("AZURE_OPENAI_ENDPOINT")
+    azure = (
+        AzureConfig(
+            endpoint=endpoint,
+            deployment=_env("AZURE_OPENAI_DEPLOYMENT") or "",
+            api_version=_env("AZURE_OPENAI_API_VERSION", DEFAULT_AZURE_API_VERSION) or DEFAULT_AZURE_API_VERSION,
+            managed_identity=_env_bool("AZURE_OPENAI_MANAGED_IDENTITY", False),
+        )
+        if endpoint
+        else None
+    )
+    llm = LLMConfig(model=model or DEFAULT_MODEL, api_key=api_key, azure=azure)
 
     chrome = _env("CHROME_PATH")
     browser = BrowserConfig(

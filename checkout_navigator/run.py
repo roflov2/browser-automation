@@ -44,7 +44,7 @@ async def main_async(args: argparse.Namespace) -> dict[str, Any]:
         headless=args.headless,
         user_data_dir=args.profile_dir,
     )
-    if not config.llm.api_key:
+    if config.llm.azure is None and not config.llm.api_key:
         logging.getLogger(__name__).warning(
             "No model API key found (MODEL_API_KEY / GOOGLE_GENERATIVE_AI_API_KEY / ANTHROPIC_API_KEY); "
             "Stagehand will rely on its own environment lookup"
