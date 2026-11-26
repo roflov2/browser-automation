@@ -1976,10 +1976,11 @@ def is_footer_forward(text: str | None) -> bool:
 # Only a visible button inside the footer bar (or a bottom nav / footer) counts, so no "Continue" elsewhere on the
 # page is taken. The "skip to" links (a <nav class="skip-links"> of in-page anchors, hidden until focused) never
 # count, nor does any in-page anchor (href="#..."). A button in a fixed or sticky bar is preferred over one in a
-# plain nav. The patterns come from FOOTER_FORWARD / NEVER_FORWARD. With `mark`, it is marked with
+# plain nav. A button in an open <page-bottom-modal> (the passenger page's CONFIRM DETAILS) is preferred over all
+# of those: the modal sits on top of the footer. The patterns come from FOOTER_FORWARD / NEVER_FORWARD. With `mark`, it is marked with
 # data-audit-continue and its centre returned. Null if there is none.
 JS_FOOTER_FORWARD = r"""({ mark, forward, never }) => {
-    const bar = 'navigation-ribbon, nav, footer, [class*="ribbon" i], [class*="footer" i]';
+    const bar = 'page-bottom-modal, navigation-ribbon, nav, footer, [class*="ribbon" i], [class*="footer" i]';
     const skip = 'skip-links, [class*="skip" i], [id*="skip" i]';
     const ok = el => new RegExp(forward, 'i').test(clean(el.innerText)) && !new RegExp(never, 'i').test(clean(el.innerText));
     const pinned = el => {
@@ -1991,8 +1992,9 @@ JS_FOOTER_FORWARD = r"""({ mark, forward, never }) => {
     const found = Array.from(document.querySelectorAll('button, a, [role="button"]'))
         .filter(el => vis(el) && ok(el) && el.closest(bar) && !el.closest(skip) && !el.matches('a[href^="#"]'));
     if (!found.length) return null;
+    const inModal = found.filter(el => el.closest('page-bottom-modal'));
     const inBar = found.filter(pinned);
-    const pool = inBar.length ? inBar : found;
+    const pool = inModal.length ? inModal : inBar.length ? inBar : found;
     const el = pool[pool.length - 1];
     const out = { text: clean(el.innerText) };
     if (mark) {
@@ -2204,16 +2206,24 @@ async def answer_insurance(stagehand: Stagehand, page: Page, warnings: int = 0) 
 
 # The fare rules' ACCEPT button at the very bottom of the Options / Review page ("Fare rules", "Red e-Deal
 # conditions", then "< Back" and a red "ACCEPT >"). It accepts the fare conditions, which moves the booking on; it
-# does not pay. The page must show fare rules or conditions, and buttons inside a cookie / consent banner, a
-# dialog or the "skip to" links (and in-page anchors) are skipped, so no other "Accept" is taken. With `mark`, the button is marked with data-audit-accept,
-# scrolled into view and its centre returned. Null if there is no such button.
+# does not pay. On the live site the "< Back" / "ACCEPT >" pair sits inside an Angular <page-bottom-modal>, which
+# may have role="dialog": a button inside one is always allowed. The page must show fare rules or conditions, and
+# buttons inside a cookie / consent banner or the "skip to" links (and in-page anchors) are skipped, so no other
+# "Accept" is taken. With `mark`, the button is marked with data-audit-accept, scrolled into view and its centre
+# returned. Null if there is no such button.
 JS_ACCEPT = r"""mark => {
     const text = document.body ? document.body.innerText : '';
     if (!/fare rules|conditions/i.test(text)) return null;
-    const banner = '[id*="cookie" i], [class*="cookie" i], [id*="consent" i], [class*="consent" i], [role="dialog"]';
+    const banner = '[id*="cookie" i], [class*="cookie" i], [id*="consent" i], [class*="consent" i]';
     const skip = 'skip-links, [class*="skip" i], [id*="skip" i]';
+    // Outside any banner, or in a bottom modal that is itself inside the matched banner element (never a
+    // banner inside the modal).
+    const allowed = el => {
+        const b = el.closest(banner), m = el.closest('page-bottom-modal');
+        return !b || (m !== null && b.contains(m));
+    };
     const buttons = Array.from(document.querySelectorAll('button, a, [role="button"]'))
-        .filter(el => vis(el) && /^accept\b/i.test(clean(el.innerText)) && !el.closest(banner)
+        .filter(el => vis(el) && /^accept\b/i.test(clean(el.innerText)) && allowed(el)
             && !el.closest(skip) && !el.matches('a[href^="#"]'));
     if (!buttons.length) return null;
     const el = buttons[buttons.length - 1];  // the one at the bottom of the page

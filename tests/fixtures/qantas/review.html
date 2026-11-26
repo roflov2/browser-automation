@@ -1,0 +1,42 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Review</title>
+<style>
+  body { font-family: sans-serif; margin: 0; }
+  main { padding: 20px 20px 200px; }
+  page-bottom-modal { display: block; position: fixed; left: 0; right: 0; bottom: 0; background: #fff;
+                      border-top: 1px solid #ccc; padding: 12px 20px; }
+  page-bottom-modal button { padding: 12px 24px; }
+  #cookie-banner { position: fixed; top: 0; right: 0; width: 320px; background: #eee; padding: 12px; }
+  #cookie-banner button { padding: 8px 16px; }
+</style></head>
+<body>
+<!-- A stand-in for the Qantas Review page: the fare rules' "< Back" / "ACCEPT >" pair inside an Angular
+     <page-bottom-modal role="dialog">, as on the live site, and a cookie banner (after the modal in the DOM) with
+     its own "Accept" button. ACCEPT in the modal moves on to the Options page; the cookie Accept only says so. -->
+<main id="main">
+  <h1 id="heading">Review your trip</h1>
+  <section><h2>Brisbane to Perth</h2><p>QF 933 Sun 14 Feb 2027, Economy Sale $529.00</p></section>
+</main>
+<page-bottom-modal role="dialog" aria-label="Fare rules">
+  <h2>Fare rules</h2>
+  <p>Red e-Deal conditions: changes permitted for a fee; non-refundable.</p>
+  <div><div><div>
+    <button type="button" id="back">&lt; Back</button>
+    <button type="button" id="accept">ACCEPT &gt;</button>
+  </div></div></div>
+</page-bottom-modal>
+<div id="cookie-banner" class="cookie-consent">
+  <p>We use cookies.</p>
+  <button type="button" id="cookie-accept">Accept</button>
+</div>
+<script>
+  const heading = document.getElementById('heading');
+  document.getElementById('accept').addEventListener('click', () => {
+    heading.textContent = 'Options';
+    document.querySelector('page-bottom-modal').remove();
+  });
+  document.getElementById('cookie-accept').addEventListener('click', () => {
+    heading.textContent = 'Clicked cookie Accept';
+  });
+</script>
+</body></html>
