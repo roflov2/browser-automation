@@ -11,6 +11,7 @@ The run always stops on the payment page: no payment details are entered and not
 """
 
 import argparse
+import asyncio
 import contextlib
 import logging
 import re
@@ -68,7 +69,8 @@ MONTH_NAVIGATION = re.compile(
     re.IGNORECASE,
 )
 TRIP_SETTLE_MS = 800  # the trip-type list opens and closes in place; no navigation to wait for
-AIRPORT_SETTLE_MS = 1000  # the airport type-ahead fetches its suggestions after the code is typed
+AIRPORT_OPTION_WAIT_MS = 8000  # the type-ahead fetches its suggestions after the code is typed; they take a second or two
+AIRPORT_OPTION_POLL_MS = 250
 TYPE_DELAY_MS = 80  # between key presses, so the type-ahead sees each one
 # A marketing page ("Flights from Sydney to Ballina": fare deals, no flights) the search can land on.
 DEALS_PAGE = re.compile(r"/flight-deals/|/deals?/", re.IGNORECASE)
@@ -554,11 +556,13 @@ JS_FOCUS_AIRPORT = r"""which => {
     if (el.select) el.select();
     return document.activeElement === el;
 }"""
-# The visible suggestion for `code` ('BNE, Brisbane, Australia'): in the list the field controls, else anywhere.
+# The visible suggestion for `code`: in the list the field controls, else anywhere. Qantas shows the code as a
+# badge after the city ('Brisbane, Australia  BNE'), so the code is matched as an upper-case word anywhere in the
+# text (case-sensitive, so typing 'bne' does not match the 'bne' inside 'Brisbane').
 JS_AIRPORT_OPTION = r"""({ which, code }) => {
-    const starts = new RegExp(`^${code}\\b`, 'i');
+    const names = new RegExp(`(^|[^A-Za-z])${code.toUpperCase()}([^A-Za-z]|$)`);
     const pick = root => Array.from(root.querySelectorAll('[role="option"], li'))
-        .find(el => vis(el, 4, 4) && starts.test(clean(el.innerText)));
+        .find(el => vis(el, 4, 4) && names.test(clean(el.innerText)));
     const field = document.querySelector(`[data-audit-airport="${which}"]`);
     const ids = [document.activeElement, field].filter(Boolean)
         .map(e => e.getAttribute('aria-controls') || e.getAttribute('aria-owns')).filter(Boolean);
@@ -582,6 +586,25 @@ async def read_airport(page: Page, which: str) -> dict | None:
     """The departure or arrival field as the page shows it ({value, x, y, clear, ...}); None if not found."""
     found = await js(page, JS_AIRPORT_FIELD, which)
     return found if isinstance(found, dict) else None
+
+
+async def wait_for_airport_option(page: Page, which: str, code: str) -> dict | None:
+    """The type-ahead suggestion for `code` once it shows ({text, x, y}); None if it never does.
+
+    The suggestions are fetched after typing and take a second or two to appear, and the page can look settled
+    before they arrive, so this polls for the option itself rather than waiting for the page to go quiet.
+    """
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + AIRPORT_OPTION_WAIT_MS / 1000
+    while True:
+        option = await js(page, JS_AIRPORT_OPTION, {"which": which, "code": code})
+        if isinstance(option, dict):
+            await asyncio.sleep(AIRPORT_OPTION_POLL_MS / 1000)  # let the list finish rendering before it is clicked
+            again = await js(page, JS_AIRPORT_OPTION, {"which": which, "code": code})
+            return again if isinstance(again, dict) else option
+        if loop.time() >= deadline:
+            return None
+        await asyncio.sleep(AIRPORT_OPTION_POLL_MS / 1000)
 
 
 async def set_airport(page: Page, which: str, code: str) -> bool:
@@ -612,10 +635,12 @@ async def set_airport(page: Page, which: str, code: str) -> bool:
             await js(page, JS_FOCUS_AIRPORT, which, default=False)
         await page.key_press("Backspace")
         await page.type(code, delay=TYPE_DELAY_MS)
-        await settle(page, AIRPORT_SETTLE_MS)
-        option = await js(page, JS_AIRPORT_OPTION, {"which": which, "code": code})
-        if not isinstance(option, dict):
-            log.info(f"  {label}: typed '{code}' but found no '{code}, ...' option; leaving it to the model")
+        option = await wait_for_airport_option(page, which, code)
+        if option is None:
+            log.info(
+                f"  {label}: typed '{code}' but no '{code}' option appeared within "
+                f"{AIRPORT_OPTION_WAIT_MS / 1000:.0f}s; leaving it to the model"
+            )
             return False
         await click_at(page, option["x"], option["y"])
         await settle(page, TRIP_SETTLE_MS)
