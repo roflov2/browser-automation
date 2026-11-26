@@ -450,6 +450,9 @@ class SiteResult:
     extras: list[dict[str, Any]] = field(default_factory=list)
     steps: list[dict[str, Any]] = field(default_factory=list)
     comparison: Report = field(default_factory=dict)
+    # Things worth knowing that did not change the status, e.g. a bot-detection signal such as a reCAPTCHA error.
+    # Written to price_comparison.json and session.json as "warnings" only when there are any.
+    warnings: list[str] = field(default_factory=list)
 
     @property
     def added(self) -> list[Item]:
@@ -624,6 +627,7 @@ def write_reports(result: SiteResult, item_fields: Sequence[str] = ITEM_FIELDS) 
         "message": result.message,
         "failure_reason": result.failure_reason,
         **({"search": result.search} if result.search else {}),
+        **({"warnings": result.warnings} if result.warnings else {}),
         "items": result.items,
         **result.comparison,
         "extras": result.extras,

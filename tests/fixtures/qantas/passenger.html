@@ -1,0 +1,49 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Passenger details</title>
+<style>
+  body { font-family: sans-serif; margin: 0; }
+  main { padding: 20px 340px 200px 20px; }
+  shopping-cart { position: fixed; top: 0; right: 0; width: 300px; background: #f6f6f6; padding: 12px; }
+  navigation-ribbon { display: flex; justify-content: space-between; position: fixed; left: 0; right: 0; bottom: 0;
+                      background: #fff; border-top: 1px solid #ccc; padding: 12px 20px; }
+  page-bottom-modal { display: block; position: fixed; left: 0; right: 0; bottom: 0; background: #fff;
+                      border-top: 2px solid #c00; padding: 12px 20px; }
+  button { padding: 12px 24px; }
+</style></head>
+<body>
+<!-- A stand-in for the filled-in Qantas Passenger details page: the form, the right-hand shopping-cart panel with
+     a "Proceed to the seats selection step" button, the sticky footer, and an open <page-bottom-modal> holding the
+     CONFIRM DETAILS that moves the booking on. Any other click changes the heading to what was clicked. -->
+<main id="main">
+  <h1 id="heading">Passenger details</h1>
+  <form><label>First name <input value="Alex"></label> <label>Last name <input value="Doe"></label></form>
+</main>
+<shopping-cart><shopping-cart-panel><div>
+  <cart-collapsible-card><div><div><span>Flights $529.00</span></div></div></cart-collapsible-card>
+  <cart-collapsible-card><div><div><span>Options</span></div></div></cart-collapsible-card>
+  <cart-collapsible-card><div><div>
+    <button type="button" class="wrong" aria-label="Proceed to the seats selection step">Seats</button>
+  </div></div></cart-collapsible-card>
+</div></shopping-cart-panel></shopping-cart>
+<navigation-ribbon>
+  <button type="button" class="wrong">&lt; BACK</button>
+  <button type="button" class="wrong" id="footer-continue">CONTINUE &gt;</button>
+</navigation-ribbon>
+<page-bottom-modal role="dialog" aria-label="Confirm your details">
+  <p>Please check the passenger details are correct.</p>
+  <div><div><div>
+    <button type="button" class="wrong">EDIT</button>
+    <button type="button" id="confirm">CONFIRM DETAILS</button>
+  </div></div></div>
+</page-bottom-modal>
+<script>
+  const heading = document.getElementById('heading');
+  for (const b of document.querySelectorAll('.wrong')) {
+    b.addEventListener('click', () => { heading.textContent = `Clicked ${b.textContent}`; });
+  }
+  document.getElementById('confirm').addEventListener('click', () => {
+    heading.textContent = 'Seats';
+    document.querySelector('page-bottom-modal').remove();
+  });
+</script>
+</body></html>

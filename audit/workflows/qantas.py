@@ -16,7 +16,7 @@ import contextlib
 import itertools
 import logging
 import re
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterable
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -294,7 +294,9 @@ class CheckoutDetails(BaseModel):
     items: list[LineItem]
     subtotal: str | None = Field(description="Flight/fare total before optional extras and payment fees, as displayed")
     extras: list[Fee] = Field(
-        description="Optional extras currently included in the total (bags, seats, insurance, carbon offset, ...)"
+        description="Optional extras the customer has **selected** and that are included in the total (bags, seats, "
+        "insurance, carbon offset, ...). Do not list extras that are only offered, or where a decline option ('No "
+        "thanks', 'No, I don't want…') is selected; list those nowhere."
     )
     other_fees: list[Fee] = Field(
         description="Any compulsory charge added on top of the fare that is NOT a government tax and NOT an optional extra, "
@@ -1453,6 +1455,37 @@ async def wait_for_check(page: Page, check: Callable[[dict], bool], ms: int) -> 
     return state
 
 
+# The candidate element's own label, read from the page by the selector the model returned: its visible text, or
+# failing that its aria-label or value. Null if the selector does not resolve (or the element has no label).
+JS_ELEMENT_LABEL = r"""selector => {
+    let el = null;
+    try {
+        if (/^xpath=/i.test(selector) || selector.startsWith('/')) {
+            el = document.evaluate(selector.replace(/^xpath=/i, ''), document, null,
+                                   XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue;
+        } else {
+            el = document.querySelector(selector.replace(/^css=/i, ''));
+        }
+    } catch (e) {
+        return null;
+    }
+    if (!el || el.nodeType !== 1) return null;
+    return clean(el.innerText || el.textContent) || clean(el.getAttribute('aria-label'))
+        || clean(typeof el.value === 'string' ? el.value : '') || null;
+}"""
+
+
+async def element_label(page: Page | None, selector: str) -> str | None:
+    """The element's own text (or aria-label, or value) by its selector; None if it cannot be read."""
+    if page is None or not selector:
+        return None
+    try:
+        found = await js(page, JS_ELEMENT_LABEL, selector, default=None)
+    except BROWSER_ERRORS:  # the page went away mid-read: judged by the description instead
+        return None
+    return str(found) if isinstance(found, str) and found.strip() else None
+
+
 async def click_one(
     stagehand: Stagehand,
     instruction: str,
@@ -1461,6 +1494,7 @@ async def click_one(
     *,
     page: Page | None = None,
     refuse_selector: re.Pattern[str] | None = None,
+    refuse_label: re.Pattern[str] | None = None,
     avoid: str | None = None,
 ) -> Acted:
     """Observe and click the element the instruction names, unless the model returned a forbidden control.
@@ -1470,24 +1504,32 @@ async def click_one(
     `refuse_selector`, or whose selector is `avoid` (the click that just changed nothing) is never acted on; the
     first acceptable result is clicked, and if there is none it counts as a miss. With `page`, an act that fails
     after the page changed is reported as done (the click took effect).
+
+    `refuse_label` (anything that pays) is checked against the element's own label read from the page, not the
+    model's prose: a description such as "accepts the conditions, not confirming a purchase" must not refuse an
+    ACCEPT, and "PAY WITH CARD" is refused however it is described. When the label cannot be read (the selector
+    does not resolve), `refuse_label` is checked against the description instead.
     """
     found = await stagehand.observe(instruction + " Return nothing if there is no such element.")
     candidates = list(found.data or [])
     if not candidates:
         return Acted(False, "no matching element found")
 
-    def why_not(candidate: object) -> str | None:
+    async def why_not(candidate: object) -> str | None:
         description = str(getattr(candidate, "description", "") or "")
         selector = str(getattr(candidate, "selector", "") or "")
+        label = await element_label(page, selector) if refuse_label is not None else None
         if refuse.search(description):
             return description
+        if refuse_label is not None and refuse_label.search(description if label is None else label):
+            return description if label is None else f"{description} (labelled {label!r})"
         if refuse_selector is not None and refuse_selector.search(selector):
             return f"{description} (selector {selector})"
         if avoid and selector == avoid:
             return f"{description} (the same click changed nothing last turn)"
         return None
 
-    reasons = [why_not(candidate) for candidate in candidates]
+    reasons = [await why_not(candidate) for candidate in candidates]
     chosen = next((c for c, reason in zip(candidates, reasons, strict=True) if reason is None), None)
     if chosen is None:
         first = candidates[0]
@@ -1976,10 +2018,11 @@ def is_footer_forward(text: str | None) -> bool:
 # Only a visible button inside the footer bar (or a bottom nav / footer) counts, so no "Continue" elsewhere on the
 # page is taken. The "skip to" links (a <nav class="skip-links"> of in-page anchors, hidden until focused) never
 # count, nor does any in-page anchor (href="#..."). A button in a fixed or sticky bar is preferred over one in a
-# plain nav. The patterns come from FOOTER_FORWARD / NEVER_FORWARD. With `mark`, it is marked with
+# plain nav. A button in an open <page-bottom-modal> (the passenger page's CONFIRM DETAILS) is preferred over all
+# of those: the modal sits on top of the footer. The patterns come from FOOTER_FORWARD / NEVER_FORWARD. With `mark`, it is marked with
 # data-audit-continue and its centre returned. Null if there is none.
 JS_FOOTER_FORWARD = r"""({ mark, forward, never }) => {
-    const bar = 'navigation-ribbon, nav, footer, [class*="ribbon" i], [class*="footer" i]';
+    const bar = 'page-bottom-modal, navigation-ribbon, nav, footer, [class*="ribbon" i], [class*="footer" i]';
     const skip = 'skip-links, [class*="skip" i], [id*="skip" i]';
     const ok = el => new RegExp(forward, 'i').test(clean(el.innerText)) && !new RegExp(never, 'i').test(clean(el.innerText));
     const pinned = el => {
@@ -1991,8 +2034,9 @@ JS_FOOTER_FORWARD = r"""({ mark, forward, never }) => {
     const found = Array.from(document.querySelectorAll('button, a, [role="button"]'))
         .filter(el => vis(el) && ok(el) && el.closest(bar) && !el.closest(skip) && !el.matches('a[href^="#"]'));
     if (!found.length) return null;
+    const inModal = found.filter(el => el.closest('page-bottom-modal'));
     const inBar = found.filter(pinned);
-    const pool = inBar.length ? inBar : found;
+    const pool = inModal.length ? inModal : inBar.length ? inBar : found;
     const el = pool[pool.length - 1];
     const out = { text: clean(el.innerText) };
     if (mark) {
@@ -2005,24 +2049,41 @@ JS_FOOTER_FORWARD = r"""({ mark, forward, never }) => {
     return out;
 }"""
 CONTINUE_MARK = "[data-audit-continue]"
+# A move to the seat selection (the cart panel's "Proceed to the seats selection step"), unless the description is
+# of a form field (a "Seats" dropdown the form requires) or the "Seats and bags" step. Only what the model would
+# click is screened: the form is filled by fill_passenger_details, which never checks this.
+SEAT_STEP = (
+    r"^(?!.*\b(field|dropdown|input|checkbox|radio|combobox|textbox)\b)"
+    r".*?(\bseats?\b(?! *(and|&) *bags)|select seats|choose seats)"
+)
 # What the model may never click on the passenger details page: the loyalty sign-up, the travel arranger and
-# phone-number extras, and the "Red Email" marketing box, on top of the controls never clicked anywhere.
+# phone-number extras, the "Red Email" marketing box and a jump to seat selection, on top of the controls never
+# clicked anywhere. Checked against the model's description (click_one); a false refusal costs only a turn.
 PASSENGER_NEVER_CLICK = re.compile(
-    rf"{NEVER_CLICK.pattern}|\bjoin\b|sign ?up|travel arranger|red email|multiple phone|{NEVER_FORWARD.pattern}",
+    rf"{NEVER_CLICK.pattern}|\bjoin\b|sign ?up|travel arranger|red email|multiple phone|{SEAT_STEP}",
     re.IGNORECASE,
 )
+# Anything that pays, on the passenger details page: checked against the element's own label only (its
+# description when the label cannot be read), so prose such as "does not pay" refuses nothing.
+PASSENGER_NEVER_LABEL = NEVER_FORWARD
 # What the model may never click on any other booking step (the Options page above all): the "skip to" links,
-# the upsells (upgrade, hotel, car hire, Use cash), "Update search", and anything that pays, on top of the
-# controls never clicked anywhere. "Continue to payment" is allowed: the run stops on the payment page.
-BOOKING_PURCHASE = r"\bpay\b|purchase|book now|confirm (and pay|booking)"
+# the upsells (upgrade, hotel, car hire, Use cash) and "Update search", on top of the controls never clicked
+# anywhere. Checked against the description, like PASSENGER_NEVER_CLICK.
 BOOKING_NEVER_CLICK = re.compile(
     rf"{NEVER_CLICK.pattern}|skip (to|links?)\b|upgrade my flights|update search|search vehicles|use cash|select hotel"
-    rf"|add (a )?(hotel|car)|{BOOKING_PURCHASE}",
+    r"|add (a )?(hotel|car)",
     re.IGNORECASE,
 )
-# A selector the model may never click on a booking step: the skip links, and anything in a top-level <nav>
-# (the page header's links; the footer's CONTINUE is clicked in code).
-BOOKING_NEVER_SELECT = re.compile(r"skip-links|/nav\[", re.IGNORECASE)
+# Anything that pays, on any other booking step, checked against the element's label only (like
+# PASSENGER_NEVER_LABEL). "Continue to payment" is allowed: the run stops on the payment page.
+BOOKING_PURCHASE = r"\bpay\b|purchase|book now|confirm (and pay|booking)"
+BOOKING_NEVER_LABEL = re.compile(BOOKING_PURCHASE, re.IGNORECASE)
+# A selector the model may never click on a booking step: the skip links, anything in a top-level <nav> (the page
+# header's links; the footer's CONTINUE is clicked in code), and the right-hand trip summary / cart panel
+# (shopping-cart > shopping-cart-panel > cart-collapsible-card), whose buttons jump to other steps such as seats.
+BOOKING_NEVER_SELECT = re.compile(r"shopping-cart|cart-collapsible-card|skip-links|/nav\[", re.IGNORECASE)
+PASSENGER_NEVER_SELECT = BOOKING_NEVER_SELECT
+NO_CART = " Do not click anything in the trip summary / cart panel on the right."
 CONTINUE_ONLY = (
     " If there is a Continue / Next / Proceed button, click it. Do not click hotel, car hire, upgrade or insurance "
     "offer buttons, 'skip to' links, or anything in the page header."
@@ -2204,16 +2265,24 @@ async def answer_insurance(stagehand: Stagehand, page: Page, warnings: int = 0) 
 
 # The fare rules' ACCEPT button at the very bottom of the Options / Review page ("Fare rules", "Red e-Deal
 # conditions", then "< Back" and a red "ACCEPT >"). It accepts the fare conditions, which moves the booking on; it
-# does not pay. The page must show fare rules or conditions, and buttons inside a cookie / consent banner, a
-# dialog or the "skip to" links (and in-page anchors) are skipped, so no other "Accept" is taken. With `mark`, the button is marked with data-audit-accept,
-# scrolled into view and its centre returned. Null if there is no such button.
+# does not pay. On the live site the "< Back" / "ACCEPT >" pair sits inside an Angular <page-bottom-modal>, which
+# may have role="dialog": a button inside one is always allowed. The page must show fare rules or conditions, and
+# buttons inside a cookie / consent banner or the "skip to" links (and in-page anchors) are skipped, so no other
+# "Accept" is taken. With `mark`, the button is marked with data-audit-accept, scrolled into view and its centre
+# returned. Null if there is no such button.
 JS_ACCEPT = r"""mark => {
     const text = document.body ? document.body.innerText : '';
     if (!/fare rules|conditions/i.test(text)) return null;
-    const banner = '[id*="cookie" i], [class*="cookie" i], [id*="consent" i], [class*="consent" i], [role="dialog"]';
+    const banner = '[id*="cookie" i], [class*="cookie" i], [id*="consent" i], [class*="consent" i]';
     const skip = 'skip-links, [class*="skip" i], [id*="skip" i]';
+    // Outside any banner, or in a bottom modal that is itself inside the matched banner element (never a
+    // banner inside the modal).
+    const allowed = el => {
+        const b = el.closest(banner), m = el.closest('page-bottom-modal');
+        return !b || (m !== null && b.contains(m));
+    };
     const buttons = Array.from(document.querySelectorAll('button, a, [role="button"]'))
-        .filter(el => vis(el) && /^accept\b/i.test(clean(el.innerText)) && !el.closest(banner)
+        .filter(el => vis(el) && /^accept\b/i.test(clean(el.innerText)) && allowed(el)
             && !el.closest(skip) && !el.matches('a[href^="#"]'));
     if (!buttons.length) return null;
     const el = buttons[buttons.length - 1];  // the one at the bottom of the page
@@ -2302,6 +2371,8 @@ async def next_booking_action(
         instruction += CONFIRM_DETAILS
     elif not passengers:
         instruction += CONTINUE_ONLY
+    if passengers:
+        instruction += NO_CART
     if avoid:
         instruction += f" Do not choose {avoid} again: clicking it last time changed nothing."
     if state.validation_errors:
@@ -2317,7 +2388,14 @@ async def next_booking_action(
     # The sign-up, marketing and upsell controls are refused, not just discouraged.
     refuse = PASSENGER_NEVER_CLICK if passengers else BOOKING_NEVER_CLICK
     step = await click_one(
-        stagehand, instruction, refuse, target=chosen, page=page, refuse_selector=BOOKING_NEVER_SELECT, avoid=avoid
+        stagehand,
+        instruction,
+        refuse,
+        target=chosen,
+        page=page,
+        refuse_selector=PASSENGER_NEVER_SELECT if passengers else BOOKING_NEVER_SELECT,
+        refuse_label=PASSENGER_NEVER_LABEL if passengers else BOOKING_NEVER_LABEL,
+        avoid=avoid,
     )
     log.info(f"    {step.description}")
     await settle(page, SETTLE_MS)
@@ -2477,6 +2555,7 @@ async def walk_to_payment(stagehand: Stagehand, page: Page, passenger: Passenger
         )
         if index == 1:
             await shot(page, out / "cart.png")  # first view of the selected trip and its running total
+        note_bot_signals(result, step_type, [*state.validation_errors, state.blocked_reason])
 
         if state.blocked_reason:
             raise Blocked(state.blocked_reason)
@@ -2565,6 +2644,41 @@ def compare_prices(result: SiteResult, checkout: CheckoutDetails | None) -> Repo
     }
 
 
+# A bot-detection signal ("Could not connect to the reCAPTCHA service...", "Verify you are human"). It does not
+# change the run's status; it is kept in result.warnings. The "This site is protected by reCAPTCHA" notice many
+# pages carry is no signal.
+BOT_SIGNAL = re.compile(r"recaptcha|captcha|verify you are human", re.IGNORECASE)
+NOT_BOT_SIGNAL = re.compile(r"protected by recaptcha|recaptcha.{0,40}privacy policy", re.IGNORECASE)
+JS_PAGE_TEXT = r"""() => document.body ? document.body.innerText : ''"""
+
+
+def note_bot_signals(result: SiteResult, where: str, texts: Iterable[str | None]) -> None:
+    """Add each line of `texts` that reads like a bot check to result.warnings, once each."""
+    for text in texts:
+        for raw in str(text or "").splitlines():
+            line = " ".join(raw.split())[:300]
+            if not BOT_SIGNAL.search(line) or NOT_BOT_SIGNAL.search(line):
+                continue
+            warning = f"bot signal on {where}: {line}"
+            if warning not in result.warnings:
+                log.warning(f"  {warning}")
+                result.warnings.append(warning)
+
+
+def drop_unpaid_extras(checkout: CheckoutDetails) -> CheckoutDetails:
+    """Backstop for the extraction listing a declined extra (the 'Voluntary Carbon Program $14.60' with 'No thanks,
+    not for this trip' selected): extras worth more than zero while the total equals the subtotal cannot be in the
+    total, so they are dropped, with a warning."""
+    extras = money_sum(parse_amount(f.amount) for f in checkout.extras)
+    if positive(extras) and diff(parse_price(checkout.total), parse_price(checkout.subtotal)) == 0:
+        listed = ", ".join(f"{f.label} {f.amount}" for f in checkout.extras)
+        log.warning(
+            f"  Payment page: total equals subtotal ({checkout.total}), so these extras are not in it: {listed}"
+        )
+        return checkout.model_copy(update={"extras": []})
+    return checkout
+
+
 async def read_payment_page(stagehand: Stagehand, page: Page, result: SiteResult) -> CheckoutDetails:
     await shot(page, result.out_dir / "checkout.png")
     checkout = (
@@ -2576,6 +2690,11 @@ async def read_payment_page(stagehand: Stagehand, page: Page, result: SiteResult
             CheckoutDetails,
         )
     ).data
+    checkout = drop_unpaid_extras(checkout)
+    page_text = ""
+    with contextlib.suppress(*BROWSER_ERRORS):  # a nicety: never let it fail the read
+        page_text = await js(page, JS_PAGE_TEXT, default="")
+    note_bot_signals(result, "payment", [checkout.blocked_reason, checkout.summary, page_text])
     if checkout.payment_surcharges:  # replace the payment step's own offers with the per-method list
         result.extras = [
             e for e in result.extras if not (e["step_type"] == "payment" and e["category"] == "payment_surcharge")
