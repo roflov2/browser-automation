@@ -16,16 +16,19 @@ import contextlib
 import itertools
 import logging
 import re
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
+from pathlib import Path
 
 from pydantic import BaseModel, Field
 from stagehand import Page, Stagehand
 
-from ..actions import click_at, llm_act
+from ..actions import Acted, act_on, click_at, llm_act, try_act
 from ..config import Settings
 from ..core import (
     BROWSER_ERRORS,
+    STATUS_REASONS,
     Blocked,
     Fee,
     FlowChanged,
@@ -136,19 +139,43 @@ class SearchState(BaseModel):
 
 
 class FareOption(BaseModel):
-    fare_name: str = Field(description="Fare brand as displayed, e.g. 'Economy Sale', 'Economy Flex', 'Business'")
-    price: str | None = Field(description="Price as displayed, e.g. '$129'; null if unavailable/sold out")
+    fare_name: str = Field(
+        description="Fare brand as displayed, e.g. 'Economy Saver', 'Economy Flex', 'Business'. 'Classic Plus' and "
+        "'Classic Reward' are reward-seat badges, not fare names. If no fare name is shown (the fare panel is not "
+        "open yet), use the cabin name, e.g. 'Economy' or 'Business'"
+    )
+    price: str | None = Field(
+        description="Cash price as displayed, e.g. '$129'; null if unavailable, sold out or only shown in Qantas "
+        "Points (PTS)"
+    )
+
+
+class FarePanel(BaseModel):
+    fares: list[FareOption] = Field(
+        description="One entry per fare column of the open 'Select your fare' panel (e.g. 'Economy Saver', "
+        "'Economy Flex'), left to right, with its cash price. Empty if no such panel is open"
+    )
 
 
 class Flight(BaseModel):
-    flight_number: str | None = Field(description="e.g. 'QF 401'; null if not shown")
+    flight_number: str | None = Field(
+        description="Flight number, e.g. 'QF2310', shown under the times; null if not shown"
+    )
     departs: str | None = Field(
         default=None, description="Departure time as displayed, e.g. '6:00am'; null if not shown"
     )
     arrives: str | None = Field(default=None, description="Arrival time as displayed; null if not shown")
     stops: int | None = Field(default=None, description="Number of stops; 0 for a direct flight; null if not shown")
     duration: str | None
-    price: str | None = Field(description="Lowest price displayed for this flight, e.g. 'From $129'; null if sold out")
+    price: str | None = Field(
+        description="The lowest CASH price in this flight's Economy Cabin column, e.g. '$529'; null if only a "
+        "Qantas Points price (e.g. '16,600 PTS + $58') or 'No seats' is shown"
+    )
+    award_only: bool = Field(
+        default=False,
+        description="True if the only economy price shown for this flight is in Qantas Points / PTS, "
+        "e.g. '16,600 PTS + $58'",
+    )
     sold_out: bool
     fares: list[FareOption] = Field(description="Per-fare prices if they are visible for this flight; otherwise empty")
 
@@ -163,13 +190,16 @@ class Flights(BaseModel):
 
 class SelectedFare(BaseModel):
     flight_selected: bool = Field(
-        description="True only if a specific flight and fare is now selected (shown as selected, or in the trip "
-        "summary / cart) AND no fare-choice or upgrade popup is still open waiting for an answer"
+        description="True only if the page shows a 'Your trip' summary (or a cart) with this flight and a flight "
+        "subtotal above $0"
     )
     flight: str | None = Field(description="Selected flight, e.g. 'QF 401 06:00 SYD - 07:35 MEL'")
     fare_name: str | None = Field(description="Selected fare brand, e.g. 'Economy Sale'")
     fare_price: str | None = Field(description="Price shown for the selected fare, e.g. '$129'")
     running_total: str | None = Field(description="Trip total / cart total currently displayed, if any")
+    subtotal: str | None = Field(
+        default=None, description="Flight subtotal as displayed, e.g. '$995 AUD'; null if not shown"
+    )
     reason: str | None = Field(
         default=None, description="One short sentence explaining this reading of the screen; null if unsure"
     )
@@ -1187,11 +1217,29 @@ async def search_flights(stagehand: Stagehand, page: Page, trip: Trip) -> None:
         raise FlowChanged(f"Couldn't reach the flight results page: {wrong or state.reason or 'no reason given'}")
 
 
+# A Qantas Points (award) price, e.g. '16,600 PTS + $58' or '16,600PTS+ $58': never bookable as a guest.
+# No \b before 'pts': the page often runs it into the number ('600PTS'); the lookbehind keeps 'receipts' out.
+POINTS_PRICE = re.compile(r"(?<![a-z])pts\b|points", re.IGNORECASE)
+
+
+def cash_price(price: str | None) -> float | None:
+    """The amount of a cash price; None for a points price or no price at all."""
+    if not price or POINTS_PRICE.search(price):
+        return None
+    return parse_price(price)
+
+
 def choose_flight(flights: list[Flight]) -> Flight | None:
-    """Cheapest available flight, preferring direct services."""
-    available = [f for f in flights if not f.sold_out and parse_price(f.price) is not None]
+    """Cheapest available flight on a cash fare, preferring direct services. Award-only flights never count."""
+    available = [f for f in flights if not f.sold_out and not f.award_only and cash_price(f.price) is not None]
     direct = [f for f in available if f.stops == 0]
-    return min(direct or available, key=lambda f: parse_price(f.price) or 0.0, default=None)
+    return min(direct or available, key=lambda f: cash_price(f.price) or 0.0, default=None)
+
+
+def choose_fare(fares: list[FareOption]) -> FareOption | None:
+    """Cheapest cash fare in the open 'Select your fare' panel."""
+    priced = [f for f in fares if cash_price(f.price) is not None]
+    return min(priced, key=lambda f: cash_price(f.price) or 0.0, default=None)
 
 
 def describe_flight(flight: Flight) -> tuple[str, str]:
@@ -1209,32 +1257,196 @@ def describe_flight(flight: Flight) -> tuple[str, str]:
     return name, described
 
 
-async def select_flight(stagehand: Stagehand, page: Page, flight: Flight) -> dict:
+# Controls the selection steps must never act on, whatever the model returns for them.
+NEVER_CLICK = re.compile(
+    r"log ?in|sign ?in|start again|change (this flight|search)|rewards?\b|promo|(?<![a-z])pts\b|points",
+    re.IGNORECASE,
+)
+NOT_ECONOMY = re.compile(r"business|premium economy|first class", re.IGNORECASE)
+
+JS_BANNER = r"""() => /about our prices/i.test(document.body ? document.body.innerText : '')"""
+# Scroll the card of the chosen flight into view: the smallest block showing both its times (and number).
+JS_SCROLL_TO_FLIGHT = r"""words => {
+    const all = Array.from(document.querySelectorAll('li, article, section, div, [role="row"]'))
+        .filter(el => vis(el, 200, 40) && words.every(w => txt(el).includes(w)));
+    if (!all.length) return false;
+    all.sort((a, b) => txt(a).length - txt(b).length);
+    all[0].scrollIntoView({ block: 'center' });
+    return true;
+}"""
+JS_SELECTION_PAGE = r"""() => {
+    const text = document.body ? document.body.innerText : '';
+    const heading = document.querySelector('h1, [role="heading"][aria-level="1"], h2');
+    const selects = Array.from(document.querySelectorAll('button, a, [role="button"]'))
+        .filter(el => vis(el) && /^select$/i.test(clean(el.innerText)));
+    return {
+        url: location.href,
+        heading: heading ? clean(heading.innerText) : '',
+        fare_panel: /select your fare/i.test(text) && selects.length > 0,
+        trip_summary: /your trip/i.test(text) && /flight subtotal/i.test(text),
+        summary_page: /flight subtotal/i.test(text) && /change this flight/i.test(text)
+            && /login to skip to payment/i.test(text),
+        results: /select your fare|economy cabin/i.test(text),
+    };
+}"""
+
+
+class SelectionFailed(FlowChanged):
+    """One of the three selection steps did not do what it should, even after a retry."""
+
+    def __init__(self, step: int, message: str, item: dict) -> None:
+        super().__init__(message)
+        self.step, self.item = step, item
+        # Steps 1 and 2 never got a fare into the trip; step 3 has one but could not leave the trip summary.
+        self.status = Status.NO_CHECKOUT if step == 3 else Status.ADD_TO_CART_FAILED
+        self.reason = STATUS_REASONS[self.status]
+
+
+async def selection_page(page: Page) -> dict:
+    return await js(page, JS_SELECTION_PAGE, default={}) or {}
+
+
+async def click_one(stagehand: Stagehand, instruction: str, refuse: re.Pattern[str] = NEVER_CLICK) -> Acted:
+    """Observe and click the element the instruction names, unless the model returned a forbidden control.
+
+    The step itself is fixed in code: the model only picks which element. A result that looks like a login,
+    'Start again', 'Change this flight', Rewards or points control is never acted on and counts as a miss.
+    """
+    found = await stagehand.observe(instruction + " Return nothing if there is no such element.")
+    candidates = list(found.data or [])
+    if not candidates:
+        return Acted(False, "no matching element found")
+    first = candidates[0]
+    description = str(first.description or "")
+    if refuse.search(description):
+        log.info(f"    Refused to click {description!r} ({first.selector})")
+        return Acted(False, f"refused: {description}", str(first.selector or ""))
+    return await act_on(stagehand, first)
+
+
+async def select_flight(stagehand: Stagehand, page: Page, flight: Flight, out: Path) -> dict:
+    """Open the flight's fares, select the cheapest, then click Continue: three fixed steps, each checked.
+
+    Each step gets one retry. A step that still fails raises SelectionFailed naming it. The item is
+    'added' once the fare shows in the 'Your trip' summary (step 2).
+    """
     name, described = describe_flight(flight)
     item = new_item(name, flight.price)
-    question = (
-        f"We want {described} on its cheapest fare. Is a flight and fare now selected (shown as selected, or in the "
-        "trip summary / cart)? Report the selected flight, fare brand, fare price and any running total."
+    item["selection_steps"] = []
+
+    async def run_step(
+        step: int,
+        label: str,
+        instruction: str,
+        check: Callable[[dict], bool],
+        failure: str,
+        refuse: re.Pattern[str] = NEVER_CLICK,
+    ) -> dict:
+        for attempt in (1, 2):
+            before = await fingerprint(page)
+            acted = await click_one(stagehand, instruction, refuse)
+            await settle(page, SETTLE_MS)
+            state = await selection_page(page)
+            ok = acted.success and check(state)
+            after = await fingerprint(page)
+            record = {
+                "step": step,
+                "name": label,
+                "attempt": attempt,
+                "description": acted.description,
+                "selector": acted.selector,
+                "acted": acted.success,
+                "page_changed": before != after,
+                "passed": ok,
+            }
+            item["selection_steps"].append(record)
+            log.info(
+                f"    Selection step {step} ({label}), attempt {attempt}: {acted.description} [{acted.selector}] "
+                f"-> {'ok' if ok else 'check failed'}{'' if ok or before != after else ' (page unchanged)'}"
+            )
+            await shot(page, out / f"select-{step}-{label}.png")
+            if ok:
+                return state
+        if step < 3:  # after step 2 the fare is in the trip, whatever Continue does
+            item["status"] = "add_failed"
+        raise SelectionFailed(step, failure, item)
+
+    # Before step 1: get the info banner off the first rows, and bring the flight's card on screen.
+    if await js(page, JS_BANNER, default=False):
+        await try_act(stagehand, "Click the close 'x' button of the teal 'About our prices' banner.")
+    words = [w for w in (flight.departs, flight.arrives) if w]
+    if words:
+        await js(page, JS_SCROLL_TO_FLIGHT, words, default=False)
+
+    # Step 1: open the flight's fares from its Economy price.
+    price = f" (e.g. '{flight.price}')" if flight.price else ""
+    await run_step(
+        1,
+        "fares",
+        f"Click the Economy Cabin price link{price} in the card of {described}. Not the Business Cabin price, "
+        "not the date strip at the top, not the Rewards toggle and not a points (PTS) price.",
+        lambda state: bool(state.get("fare_panel")),
+        "Fare panel never opened: no 'Select your fare' panel with a SELECT button appeared after clicking the "
+        f"Economy price of {name}",
+        re.compile(f"{NEVER_CLICK.pattern}|{NOT_ECONOMY.pattern}", re.IGNORECASE),
     )
-    selected = None
-    for _ in range(4):
-        step = await llm_act(
-            stagehand,
-            f"Goal: {described} selected on its CHEAPEST available fare. Take the single next action towards that "
-            "goal (for example revealing the flight's fares, or choosing the cheapest one). If a popup offers a more "
-            f"expensive fare or an upgrade, decline it and keep the cheapest fare. {NO_RESEARCH}",
+
+    # Step 2: read the fare columns, pick the cheapest cash fare in code, click its SELECT.
+    panel = (
+        await stagehand.extract(
+            "List every fare column of the open 'Select your fare' panel (e.g. 'Economy Saver', 'Economy Flex') "
+            "with its cash price. Ignore Qantas Points (PTS) prices and the comparison rows below.",
+            FarePanel,
         )
-        log.info(f"    Flight selection: {step.description}")
-        await settle(page, SETTLE_MS)
-        selected = (await stagehand.extract(question, SelectedFare)).data
-        if selected.flight_selected:
-            break
-    if selected is not None:
-        item["selected_variant"] = selected.fare_name
-        item["selected_price_display"] = selected.fare_price
-        item["selected_price"] = parse_price(selected.fare_price)
-        item["cart_total_display"] = selected.running_total
-        item["status"] = "added" if selected.flight_selected else "add_failed"
+    ).data
+    fare = choose_fare(panel.fares)
+    log.info(f"    Fares shown: {'; '.join(f'{f.fare_name} {f.price}' for f in panel.fares) or 'none read'}")
+    target = (
+        f"the SELECT button under the '{fare.fare_name}' fare priced {fare.price}"
+        if fare
+        else "the SELECT button under the cheapest cash fare"
+    )
+    await run_step(
+        2,
+        "trip",
+        f"Click {target} in the open 'Select your fare' panel.",
+        lambda state: bool(state.get("trip_summary")),
+        "Fare not added to trip: no 'Your trip' summary with a flight subtotal appeared after clicking SELECT",
+    )
+    selected = (
+        await stagehand.extract(
+            f"We selected {described}. Read the 'Your trip' summary: the flight, fare brand, fare price, the flight "
+            "subtotal and any cart total.",
+            SelectedFare,
+        )
+    ).data
+    item["selected_variant"] = selected.fare_name or (fare.fare_name if fare else None)
+    item["selected_price_display"] = selected.fare_price or (fare.price if fare else None)
+    item["selected_price"] = parse_price(item["selected_price_display"])
+    item["cart_total_display"] = selected.subtotal or selected.running_total
+    item["status"] = "added"
+    log.info(
+        f"    Fare added: {item['selected_variant']} {item['selected_price_display']} "
+        f"(subtotal {item['cart_total_display']})"
+    )
+
+    # Step 3: Continue, in the sticky footer, never the login shortcut.
+    trip_page = await selection_page(page)
+
+    def left_trip_summary(state: dict) -> bool:
+        if not state or state.get("summary_page"):
+            return False
+        moved = state.get("url") != trip_page.get("url") or state.get("heading") != trip_page.get("heading")
+        return moved or not state.get("results")
+
+    await run_step(
+        3,
+        "continue",
+        "Click the red CONTINUE button in the sticky footer bar at the bottom of the page. Do not click "
+        "'Login to skip to payment', 'Start again' or 'Change this flight'.",
+        left_trip_summary,
+        "Continue did not advance: the 'Your trip' summary was still showing after clicking CONTINUE",
+    )
     return item
 
 
@@ -1546,8 +1758,12 @@ class QantasWorkflow(Workflow):
 
             listing = (
                 await stagehand.extract(
-                    "Extract every flight listed on this results page with its times, flight number, stops, duration, lowest "
-                    "displayed price, availability and per-fare prices where visible. Also report what the prices cover.",
+                    "Extract every flight listed on this results page with its times, flight number (e.g. 'QF2310', "
+                    "under the times), stops, duration and availability. For the price, read only the Economy Cabin "
+                    "column and only CASH prices (e.g. '$529'): ignore Qantas Points prices such as '16,600 PTS + "
+                    "$58' (mark such flights award_only), ignore the 'Classic Plus' / 'Classic Reward' badges (they "
+                    "are reward-seat badges, not fare names) and ignore the Rewards toggle. Also report what the "
+                    "prices cover.",
                     Flights,
                 )
             ).data
@@ -1572,12 +1788,14 @@ class QantasWorkflow(Workflow):
             log.info(
                 f"  Selecting: {flight.flight_number or ''} {flight.departs or ''}-{flight.arrives or ''} ({flight.price})"
             )
-            item = await select_flight(stagehand, page, flight)
+            try:
+                item = await select_flight(stagehand, page, flight, out)
+            except SelectionFailed as failed:  # keep what was clicked; the runner records the step's message
+                failed.item["price_basis"] = listing.price_basis
+                result.items.append(failed.item)
+                raise
             item["price_basis"] = listing.price_basis
             result.items.append(item)
-            if item["status"] != "added":
-                result.fail(Status.ADD_TO_CART_FAILED, "The flight and fare could not be selected")
-                return
 
             if not await walk_to_payment(stagehand, page, Passenger.from_settings(self.settings), result):
                 result.fail(Status.NO_CHECKOUT, result.message)
