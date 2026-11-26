@@ -9,6 +9,7 @@ details or start a trial or membership.
 from __future__ import annotations
 
 import copy
+import json
 import logging
 import re
 from dataclasses import dataclass, field
@@ -78,6 +79,27 @@ _OPTION_WORDS = re.compile(r"\b(option|list ?item|menu ?item|menuitem)\b", re.IG
 _OPENER_WORDS = re.compile(
     r"\b(combobox|combo box|dropdown|drop-down|select box|button|input|field|textbox)\b", re.IGNORECASE
 )
+# A click described like this commits or submits something (a form, a day in a calendar) rather than opening a list.
+_NOT_OPENER_WORDS = re.compile(
+    r"\b(submit|search|continue|next|confirm|done|apply|save|proceed|close)\b"
+    r"|\b\d{1,2}(st|nd|rd|th)?\s+(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\b"
+    r"|\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\s+\d{1,2}(st|nd|rd|th)?\b",
+    re.IGNORECASE,
+)
+# aria-haspopup values that mean "opens a list to choose from" (a "dialog" popup has no options to pick).
+_LIST_POPUPS = {"true", "listbox", "menu", "tree", "grid"}
+_LIST_ROLES = {"combobox", "listbox"}
+# The ARIA hints of the element an xpath selector names, or null if it cannot be found in the main frame.
+JS_POPUP_HINTS = r"""xpath => {
+    let el = null;
+    try {
+        el = document.evaluate(xpath, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue;
+    } catch (e) { return null; }
+    if (!el || el.nodeType !== 1) return null;
+    const hinted = el.closest('[aria-haspopup], [role="combobox"], [aria-expanded]') || el;
+    return { haspopup: hinted.getAttribute('aria-haspopup'), role: hinted.getAttribute('role'),
+             expanded: hinted.getAttribute('aria-expanded') };
+}"""
 CONTAINER_LEVELS = 3  # an option counts as "in the opened list" if it shares the opener's ancestor this many steps up
 
 
@@ -157,7 +179,45 @@ async def _pick_from_opened_list(
     return None
 
 
-async def llm_act(stagehand: _Actions, instruction: str, *, follow_up: bool = False, **options: Any) -> Acted:
+class _Evaluates(Protocol):
+    async def evaluate(self, expression: str) -> Any: ...
+
+
+async def popup_hints(page: _Evaluates | None, selector: str) -> dict[str, Any] | None:
+    """The ARIA popup hints (haspopup, role, expanded) of the element `selector` names; None if unreadable."""
+    steps = xpath_steps(selector)
+    if page is None or not steps:
+        return None
+    xpath = "/" + "/".join(steps)
+    try:
+        found = await page.evaluate(f"({JS_POPUP_HINTS})({json.dumps(xpath)})")
+    except Exception as error:  # noqa: BLE001 - a failed read falls back to the description
+        log.debug("Could not read the popup hints of %s: %s", selector, error)
+        return None
+    return found if isinstance(found, dict) else None
+
+
+def opened_a_list(description: str, before: dict[str, Any] | None, after: dict[str, Any] | None) -> bool:
+    """Whether a click (on an element with ARIA hints `before`, `after` it) may have opened a list to choose from.
+
+    The page's own markup decides when it has any say: a combobox or list popup, or aria-expanded turning true,
+    is an opener; an element with no such hint, or only a dialog popup, is not. Without markup (the element was
+    not found, or it carries no ARIA hints) the description decides: a submit, search, continue or a specific
+    date ("14 Feb 2027") is no opener, anything else may be.
+    """
+    hints = [h for h in (before, after) if h]
+    if any(str(h.get("haspopup") or "").lower() in _LIST_POPUPS or h.get("role") in _LIST_ROLES for h in hints):
+        return True
+    if after and after.get("expanded") == "true":
+        return True
+    if any(h.get("haspopup") or h.get("expanded") is not None for h in hints):
+        return False  # it says what it opens, and that is no list (a dialog), or it stayed closed
+    return not _NOT_OPENER_WORDS.search(description)
+
+
+async def llm_act(
+    stagehand: _Actions, instruction: str, *, follow_up: bool = False, page: _Evaluates | None = None, **options: Any
+) -> Acted:
     """Run one LLM action: observe, then act on the first element found.
 
     `options` are passed to both observe() and act() (e.g. `variables`, `timeout`, `locator`).
@@ -167,6 +227,10 @@ async def llm_act(stagehand: _Actions, instruction: str, *, follow_up: bool = Fa
     that as `locator.selectOption()`, which changes nothing on a `div` combobox yet reports success, so it is
     turned into a click that opens the list. The follow-up observe asks only for an option of the opened list
     (see is_option_of) and takes the first acceptable result, not just the first result.
+
+    A plain click is followed up only if it looks like it opened a list (see opened_a_list): read from the
+    element's ARIA attributes in `page` when one is given, else from its description. A click on a submit
+    button or a calendar day costs no second observe.
     """
     options.setdefault("timeout", LLM_TIMEOUT_MS)
     found = await stagehand.observe(instruction, **options)
@@ -181,7 +245,13 @@ async def llm_act(stagehand: _Actions, instruction: str, *, follow_up: bool = Fa
     if wanted is not None and not is_native_select(str(first.selector or "")):
         log.debug("selectOptionFromDropdown(%r) on a non-<select> %s: clicking it open instead", wanted, first.selector)
         first = _as_click(first)
+    before = await popup_hints(page, str(first.selector or "")) if wanted is None else None
     done = await act_on(stagehand, first, **options)
+    if done.success and first.method == "click" and wanted is None:
+        after = await popup_hints(page, str(first.selector or ""))
+        if not opened_a_list(str(first.description or ""), before, after):
+            log.debug("No follow-up after %r: it did not open a list", first.description)
+            return done
     if done.success and first.method == "click":
         picked = await _pick_from_opened_list(stagehand, first, wanted, instruction, **options)
         if picked is not None:

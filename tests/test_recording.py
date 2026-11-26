@@ -5,8 +5,10 @@ import json
 from datetime import datetime
 from types import SimpleNamespace
 
+import pytest
 from pydantic import BaseModel
 
+from audit.core import ExtractFailed
 from audit.runner import RecordingStagehand
 
 
@@ -65,3 +67,54 @@ def test_model_calls_are_counted():
 
     asyncio.run(scenario())
     assert stagehand.llm_calls == 3
+
+
+REJECTED = RuntimeError(
+    '[{"code":"invalid_type","expected":"boolean","received":"null","path":["structuredContent","form_visible"]}]'
+)
+
+
+class Flaky(FakeStagehand):
+    """Fails each model call with `errors` in turn, then answers."""
+
+    def __init__(self, *errors: Exception) -> None:
+        super().__init__()
+        self.errors = list(errors)
+
+    async def extract(self, instruction, schema, **options):
+        if self.errors:
+            self.calls.append((instruction, schema, options))
+            raise self.errors.pop(0)
+        return await super().extract(instruction, schema, **options)
+
+    async def observe(self, instruction, **options):
+        self.calls.append((instruction, None, options))
+        if self.errors:
+            raise self.errors.pop(0)
+        return ["found"]
+
+
+def test_a_rejected_answer_is_asked_for_once_more(caplog):
+    observing = RecordingStagehand(Flaky(REJECTED))
+    assert asyncio.run(observing.observe("find the button")) == ["found"]
+    assert observing.llm_calls == 2
+    assert "did not fit the schema; asking once more" in caplog.text
+
+    extracting = RecordingStagehand(Flaky(REJECTED))
+    assert asyncio.run(extracting.extract("Read the total", Total)).data.total == "$67.00"
+    assert extracting.llm_calls == 2
+
+
+def test_a_second_rejection_or_another_error_is_not_retried():
+    twice = RecordingStagehand(Flaky(REJECTED, REJECTED))
+    with pytest.raises(RuntimeError, match="structuredContent"):
+        asyncio.run(twice.observe("find the button"))
+    assert twice.llm_calls == 2
+
+    other = Flaky(RuntimeError("model returned no content"))
+    with pytest.raises(RuntimeError, match="no content"):
+        asyncio.run(RecordingStagehand(other).observe("find the button"))
+    assert len(other.calls) == 1
+
+    with pytest.raises(ExtractFailed, match="structuredContent"):
+        asyncio.run(RecordingStagehand(Flaky(REJECTED, REJECTED)).extract("x", Total))

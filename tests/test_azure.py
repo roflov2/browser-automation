@@ -20,6 +20,7 @@ from audit.azure import (
     UnsupportedRequest,
     chat_messages,
     completion_options,
+    drop_unknown_keys,
     fill_missing_nulls,
     open_azure_llm,
 )
@@ -168,6 +169,103 @@ def test_left_out_nullable_keys_are_answered_as_null():
                                 Cart.model_json_schema())  # fmt: skip
     assert filled == {"note": None, "offers": [{"category": "fee", "label": "Bag", "price": None, "price_basis": None,
                                                 "selected": True, "mandatory": False}]}  # fmt: skip
+
+
+# What Stagehand sends for observe() (captured from stagehand 4.4.0): every object closed, elementId with a pattern.
+OBSERVATION = {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "properties": {"elements": {"type": "array", "items": {
+        "type": "object",
+        "properties": {"elementId": {"type": "string", "pattern": "^\\d+-\\d+$"}, "description": {"type": "string"},
+                       "method": {"type": "string", "enum": ["click", "fill"]},
+                       "arguments": {"type": "array", "items": {"type": "string"}}},
+        "required": ["elementId", "description", "method", "arguments"],
+        "additionalProperties": False,
+    }}},
+    "required": ["elements"],
+    "additionalProperties": False,
+}  # fmt: skip
+# What it sends for extract() of a pydantic model: extra keys allowed ({}), a non-nullable boolean.
+EXTRACTION = {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "properties": {"form_visible": {"type": "boolean"}, "origin": {"type": ["string", "null"]}},
+    "required": ["form_visible", "origin"],
+    "additionalProperties": {},
+}
+ELEMENT = {"elementId": "0-18372", "description": "Search flights button", "method": "click", "arguments": []}
+
+
+def structured(schema: dict, name: str = "Observation") -> dict:
+    return {**STRUCTURED, "response_format": {"type": "json_schema", "name": name, "schema": schema}}
+
+
+def answers(*replies: object):
+    """A FakeAzure answer function giving each reply in turn (JSON-encoded), the last one again after that."""
+    queue = list(replies)
+    return lambda _: completion(json.dumps(queue.pop(0) if len(queue) > 1 else queue[0]))
+
+
+def test_keys_the_schema_forbids_are_dropped_and_others_kept():
+    answer = {"elements": [{**ELEMENT, "why": "it submits"}], "explanation": "The search button submits the form."}
+    assert drop_unknown_keys(answer, OBSERVATION) == {"elements": [ELEMENT]}
+
+    kept = {"form_visible": True, "origin": None, "note": "extra"}
+    assert drop_unknown_keys(dict(kept), EXTRACTION) == kept  # additionalProperties {} allows it
+    open_schema = {"type": "object", "properties": {"a": {"type": "string"}}}
+    assert drop_unknown_keys({"a": "x", "b": 1}, open_schema) == {"a": "x", "b": 1}  # absent: allowed
+    assert drop_unknown_keys({"a": "x", "b": 1}, {**open_schema, "additionalProperties": True}) == {"a": "x", "b": 1}
+
+
+def test_an_extra_key_is_repaired_without_asking_again():
+    client = FakeAzure(answers({"elements": [ELEMENT], "explanation": "because"}))
+
+    result = asyncio.run(AzureLLM(client, "d")(structured(OBSERVATION)))
+
+    assert len(client.calls) == 1
+    assert result["structured_content"] == {"elements": [ELEMENT]}
+
+
+def test_a_valid_answer_is_not_asked_again():
+    client = FakeAzure(answers({"form_visible": True, "origin": "BNE"}))
+    llm = AzureLLM(client, "d")
+
+    asyncio.run(llm(structured(EXTRACTION, "Extraction")))
+
+    assert len(client.calls) == 1
+    assert llm.calls == 1
+
+
+def test_null_for_a_required_boolean_is_asked_again_once(caplog):
+    client = FakeAzure(answers({"form_visible": None, "origin": None}, {"form_visible": True, "origin": None}))
+    llm = AzureLLM(client, "d")
+
+    result = asyncio.run(llm(structured(EXTRACTION, "Extraction")))
+
+    assert result["structured_content"] == {"form_visible": True, "origin": None}  # null is never turned into false
+    assert len(client.calls) == 2
+    assert llm.calls == 2  # the re-ask is a call of its own in the logs
+    first, second = client.calls
+    assert second["messages"][: len(first["messages"])] == first["messages"]
+    assistant, feedback = second["messages"][-2:]
+    assert assistant == {"role": "assistant", "content": json.dumps({"form_visible": None, "origin": None})}
+    assert "form_visible: None is not of type 'boolean'" in feedback["content"]
+    assert result["usage"]["total_tokens"] == 256  # both calls' tokens
+    assert "does not fit its schema" in caplog.text
+    wire.LLMStructuredGenerateResult.model_validate(result)
+
+
+def test_a_bare_element_id_is_asked_again_and_a_second_bad_answer_is_returned(caplog):
+    bare = {"elements": [{**ELEMENT, "elementId": "18372"}]}
+    client = FakeAzure(answers(bare))
+
+    result = asyncio.run(AzureLLM(client, "d")(structured(OBSERVATION)))
+
+    assert len(client.calls) == 2  # asked once more, not in a loop
+    assert "elements/0/elementId" in client.calls[1]["messages"][-1]["content"]
+    assert result["structured_content"] == bare  # not prefixed with '0-': Stagehand's check decides
+    assert "second Observation answer does not fit either" in caplog.text
 
 
 def rate_limited(retry_after: str = "7") -> Exception:

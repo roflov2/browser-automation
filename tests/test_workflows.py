@@ -331,6 +331,14 @@ class TripWidget:
             return {"x": 10, "y": 60} if self.open else default
         if fn in (qantas.JS_AIRPORT_FIELD, qantas.JS_FOCUS_AIRPORT, qantas.JS_AIRPORT_OPTION):
             return default  # no airport fields unless a test fakes them
+        if fn in (
+            qantas.JS_DATE_FIELD,
+            qantas.JS_DATE_DIALOG,
+            qantas.JS_DAY_CELL,
+            qantas.JS_DATE_CONTINUE,
+            qantas.JS_SCROLL_DATES,
+        ):
+            return default  # no date control unless a test fakes it
         if fn is qantas.JS_DOM_CLICK:
             self.events.append(("dom_click", arg))
             if arg == "data-audit-trip-option" and self.open:
@@ -613,6 +621,82 @@ def test_month_navigation():
     assert qantas.is_month_navigation("Month forward button")
     assert not qantas.is_month_navigation("Trip Type combobox")
     assert not qantas.is_month_navigation("Select 14 February 2027")
+
+
+# --- qantas: the departure date is set in code, and the picker's pending day is not taken for it --------------
+FEB_14 = qantas.date(2027, 2, 14)
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["Sun, 14 Feb 2027", "14 Feb 2027", "Depart BNE Sun, 14 Feb 2027", "14 February 2027", "February 14, 2027",
+     "Button to select travel dates, currently set to 14 Feb 2027", "14/02/2027", "2027-02-14"],
+)  # fmt: skip
+def test_dates_that_name_the_day(text):
+    assert qantas.shows_date(text, FEB_14)
+
+
+@pytest.mark.parametrize("text", ["29 Nov 2026", "14 Feb 2026", "4 Feb 2027", "114 Feb 2027", "14 Mar 2027", "", None])
+def test_dates_that_do_not(text):
+    assert not qantas.shows_date(text, FEB_14)
+
+
+def test_date_text_and_the_date_a_control_shows():
+    assert qantas.date_text(FEB_14) == "14 Feb 2027"
+    assert qantas.date_text(qantas.date(2027, 3, 2)) == "2 Mar 2027"
+    assert qantas.shown_date("Button to select travel dates, currently set to 29 Nov 2026") == "29 Nov 2026"
+    assert qantas.shown_date("Travel dates") == "Travel dates"
+    assert qantas.shown_date(None) is None
+
+
+class DateWidget(TripWidget):
+    """The form's travel-dates button, already showing `shown`; no picker opens."""
+
+    def __init__(self, shown):
+        super().__init__(None)
+        self.shown = shown
+
+    async def js(self, page, fn, arg=None, default=None, lib=""):
+        if fn is qantas.JS_DATE_FIELD:
+            return {"text": f"Button to select travel dates, currently set to {self.shown}", "x": 5, "y": 5}
+        return await super().js(page, fn, arg, default, lib)
+
+
+def test_qantas_search_tells_the_model_the_date_is_set(monkeypatch):
+    widget = DateWidget("14 Feb 2027")
+    calls, _ = _search(monkeypatch, states=[_form(depart_date="1 Jan 2027"), _form(on_results_page=True)],
+                       selectors=["xpath=//button[1]"], widget=widget)  # fmt: skip
+    instruction = calls[0][0]
+    assert "date=14 Feb 2027" in instruction  # the form's date, not the extraction's
+    assert "departure date is already set to 14 Feb 2027: do not open the date picker" in instruction
+
+
+def test_qantas_search_shows_the_model_the_form_s_date_not_the_picker_s(monkeypatch):
+    widget = DateWidget("29 Nov 2026")  # the picker said 14 Feb; the form still has its default
+    calls, _ = _search(monkeypatch, states=[_form(depart_date="14 Feb 2027"), _form(on_results_page=True)],
+                       selectors=["xpath=//button[1]"], widget=widget)  # fmt: skip
+    assert "date=29 Nov 2026" in calls[0][0]
+    assert "do not open the date picker" not in calls[0][0]
+
+
+# --- qantas: taking turns between two controls that change nothing is stuck too ------------------------------
+def test_alternating():
+    held = ("one_way", "bne", "per", "14 feb 2027", False)
+    day, submit = ("xpath=//button[7]", held, "14 Feb cell"), ("xpath=//form/button", held, "Search flights")
+    assert qantas.alternating([day, submit, day, submit]) == ("14 Feb cell", "Search flights")
+    assert qantas.alternating([day, submit, day]) is None  # too few
+    assert qantas.alternating([day, day, submit, submit]) is None  # repeats, not turns (the repeat count's job)
+    moved = ("xpath=//button[7]", (*held[:3], "15 feb 2027", False), "14 Feb cell")
+    assert qantas.alternating([day, submit, moved, submit]) is None  # the search changed
+    third = ("xpath=//x", held, "Guests")
+    assert qantas.alternating([day, submit, third, submit]) is None
+
+
+def test_qantas_search_stops_when_two_controls_take_turns(monkeypatch):
+    day, submit = "xpath=/html[1]/body[1]/div[7]//button[7]", "xpath=//form//button[@type='submit']"
+    states = [_form("one_way", depart_date="14 Feb 2027")] * 6
+    with pytest.raises(qantas.FlowChanged, match="alternating between"):
+        _search(monkeypatch, states=states, selectors=[day, submit, day, submit, day])  # stops after 4 of the 14
 
 
 # --- coffee: an add-to-cart failure says why in price_comparison.json ---------------------------------
