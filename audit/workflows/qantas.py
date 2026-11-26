@@ -346,36 +346,150 @@ class Passenger:
 # ---------------------------------------------------------------------------
 # Site steps
 # ---------------------------------------------------------------------------
+# The city a results page names for an airport ("Brisbane to Perth  Change search"). An airport not listed here
+# has to show its code: a city is never guessed.
+AIRPORT_CITIES = {
+    "BNE": "Brisbane",
+    "PER": "Perth",
+    "SYD": "Sydney",
+    "MEL": "Melbourne",
+    "CBR": "Canberra",
+    "ADL": "Adelaide",
+    "OOL": "Gold Coast",
+    "CNS": "Cairns",
+    "HBA": "Hobart",
+    "DRW": "Darwin",
+}
+
+
+def shows_airport(shown: str, code: str) -> bool:
+    """Whether a shown airport ('Brisbane (BNE)', 'BNE, Brisbane, Australia', 'Brisbane') is `code`."""
+    names = [code, AIRPORT_CITIES.get(code.upper(), "")]
+    return any(name and re.search(rf"\b{re.escape(name)}\b", shown, re.IGNORECASE) for name in names)
+
+
 def wrong_results(state: SearchState, trip: Trip, url: str) -> str | None:
     """Why a page the extraction calls 'results' is not our search's results; None if it may be.
 
     A real results page may hide the search form, so only an airport that is shown and names another code
-    counts against it: an empty (null) field never does.
+    or city counts against it: an empty (null) field never does.
     """
     if DEALS_PAGE.search(url):
         return f"a flight-deals page ({url}), not search results"
     for field, code in (("origin", trip.origin), ("destination", trip.destination)):
         shown = getattr(state, field)
-        if shown and not re.search(rf"\b{re.escape(code)}\b", shown, re.IGNORECASE):
+        if shown and not shows_airport(shown, code):
             return f"{field} shows '{shown}', not {code}"
     return None
 
 
-async def wait_for_results(stagehand: Stagehand, page: Page, question: str, trip: Trip) -> SearchState:
+# The results page, told from the page text alone (its class names are unknown): the "Economy Cabin" column
+# header and at least one flight card with a time and a dollar price.
+JS_RESULTS_PAGE = r"""() => {
+    const text = document.body ? document.body.innerText : '';
+    if (!/economy cabin/i.test(text)) return false;
+    const time = /\b\d{2}:\d{2}\b/, price = /\$\s?\d/;
+    return Array.from(document.querySelectorAll('li, article, section, div, [role="row"]')).some(el => {
+        const t = txt(el);
+        return t.length < 800 && time.test(t) && price.test(t) && vis(el, 200, 30);
+    });
+}"""
+# The route in the results page's subheading: "Brisbane to Perth  Change search".
+JS_RESULTS_ROUTE = r"""() => {
+    const all = Array.from(document.querySelectorAll('h1, h2, h3, p, div, section, header'))
+        .filter(el => vis(el, 20, 8) && /change search/i.test(txt(el)) && txt(el).length < 200);
+    all.sort((a, b) => txt(a).length - txt(b).length);
+    for (const el of all) {
+        const m = clean(txt(el)).match(/([A-Z][A-Za-z .'()-]*?)\s+to\s+([A-Z][A-Za-z .'()-]*?)\s*change search/i);
+        if (m) return { origin: m[1].trim(), destination: m[2].trim() };
+    }
+    return null;
+}"""
+
+
+async def page_shows_results(page: Page) -> bool:
+    return bool(await js(page, JS_RESULTS_PAGE, default=False))
+
+
+async def results_state(page: Page, state: SearchState) -> SearchState:
+    """`state` as a results page, with the route the page's own subheading shows in place of the model's."""
+    route = await js(page, JS_RESULTS_ROUTE, default=None)
+    update: dict = {"on_results_page": True, "loading": False}
+    if isinstance(route, dict):
+        update.update({k: route[k] for k in ("origin", "destination") if route.get(k)})
+    return state.model_copy(update=update)
+
+
+def nothing_shown(state: SearchState) -> bool:
+    """Neither the form nor results nor a spinner: a submitted search still rendering, so wait, don't act."""
+    return not (state.form_visible or state.on_results_page or state.loading or state.blocked_reason)
+
+
+async def wait_for_results(
+    stagehand: Stagehand, page: Page, question: str, trip: Trip, state: SearchState | None = None
+) -> SearchState:
     """Wait (without clicking anything in the page) for a loading flight list to appear."""
-    state: SearchState | None = None
     for attempt in range(3):
         await wait_for_render(page, RESULTS_RENDER_SECONDS)
+        if await page_shows_results(page):
+            base = state or (await stagehand.extract(question, SearchState)).data
+            return await results_state(page, base)
         state = with_airports((await stagehand.extract(question, SearchState)).data, await page_airports(page))
         if state.on_results_page and (wrong := wrong_results(state, trip, await page.url())):
             log.info(f"  The loaded page is not our search's results: {wrong}")
             break  # search_flights goes back to the search form
-        if state.blocked_reason or state.on_results_page or not state.loading:
+        if state.blocked_reason or state.on_results_page or not (state.loading or nothing_shown(state)):
             break
         log.info(f"  Waiting for the flight results to load ({attempt + 1}/3): {state.reason}")
         await settle(page, SETTLE_MS)
     assert state is not None
     return state
+
+
+# The search form's Rewards / "use points" switch, if it is on: a role="switch" or checkbox labelled with points
+# or Rewards. Clicked off in code so the model never has to.
+JS_POINTS_SWITCH = r"""() => {
+    const label = el => clean([el.getAttribute('aria-label'), el.closest('label') && txt(el.closest('label')),
+        el.id && document.querySelector(`label[for="${CSS.escape(el.id)}"]`)
+            && txt(document.querySelector(`label[for="${CSS.escape(el.id)}"]`)),
+        el.parentElement && txt(el.parentElement)].filter(Boolean).join(' '));
+    for (const el of document.querySelectorAll('[role="switch"], input[type="checkbox"]')) {
+        const l = label(el);
+        if (!/points|rewards?\b|classic reward/i.test(l) || l.length > 200) continue;
+        const on = el.getAttribute('aria-checked') === 'true' || el.checked === true;
+        if (!on) return { found: true, on: false };
+        clickEl(el);
+        return { found: true, on: true };
+    }
+    return { found: false, on: false };
+}"""
+POINTS_RULE = " Never touch the Rewards / 'use points' / 'Classic Reward' switch: we pay with money."
+
+
+async def keep_cash_search(page: Page, state: SearchState) -> tuple[SearchState, str]:
+    """Turn the points switch off in code if it is on; else the one instruction the model gets about it."""
+    if not state.using_points:
+        return state, ""
+    if await switch_off_points(page):
+        return state.model_copy(update={"using_points": False}), ""
+    return state, " The Rewards / points switch is on: turn it off now, and do nothing else."
+
+
+async def last_look_for_results(page: Page, state: SearchState) -> SearchState:
+    """Before giving up: the last action may have been the submit, so give the results time to render."""
+    if state.on_results_page:
+        return state
+    await wait_for_render(page, RESULTS_RENDER_SECONDS)
+    return await results_state(page, state) if await page_shows_results(page) else state
+
+
+async def switch_off_points(page: Page) -> bool:
+    """Turn the form's points switch off in code; True if it was found (whether or not it needed turning off)."""
+    found = await js(page, JS_POINTS_SWITCH, default=None)
+    if isinstance(found, dict) and found.get("on"):
+        log.info("  Turned the Rewards / points switch off")
+        await settle(page, TRIP_SETTLE_MS)
+    return bool(isinstance(found, dict) and found.get("found"))
 
 
 # The trip-type control on qantas.com is a custom React widget (a `div` combobox and a `ul/li` list), so it is
@@ -1054,7 +1168,7 @@ def form_rules(trip_type: str | None, airports: dict[str, str | None], trip: Tri
         )
     if shows_date(depart, trip.depart):
         rules += f" The departure date is already set to {date_text(trip.depart)}: do not open the date picker."
-    return rules
+    return rules + POINTS_RULE
 
 
 async def start_again(stagehand: Stagehand, page: Page, wrong: str, wrong_pages: int) -> int:
@@ -1153,7 +1267,8 @@ async def search_flights(stagehand: Stagehand, page: Page, trip: Trip) -> None:
     for _ in range(MAX_SEARCH_STEPS):
         if state.blocked_reason:
             raise Blocked(state.blocked_reason)
-        if state.on_results_page:
+        if state.on_results_page or await page_shows_results(page):
+            state = await results_state(page, state)
             wrong = wrong_results(state, trip, await page.url())
             if wrong is None:
                 return
@@ -1162,12 +1277,14 @@ async def search_flights(stagehand: Stagehand, page: Page, trip: Trip) -> None:
             state, trip_type, airports = await form.read()
             held, last, repeats, hint, recent = None, None, 0, "", []
             continue
-        if state.loading:
-            # A submitted search renders slowly; acting on a half-loaded page is how a search gets restarted.
-            state = await wait_for_results(stagehand, page, question, trip)
-            if state.loading:
+        if state.loading or nothing_shown(state):
+            # A submitted search renders slowly, and a half-rendered page reads as nothing at all; acting on it
+            # is how a search gets restarted. Only the visible form is acted on.
+            state = await wait_for_results(stagehand, page, question, trip, state)
+            if state.loading or nothing_shown(state):
                 break
             continue
+        state, points = await keep_cash_search(page, state)
         if (trip_type or state.trip_type) != "one_way" and await set_one_way(page):
             trip_type = "one_way"
         airports = await form.keep_airports(airports)
@@ -1180,7 +1297,7 @@ async def search_flights(stagehand: Stagehand, page: Page, trip: Trip) -> None:
             f"date={state.depart_date}, guests={state.guests}, using points={state.using_points}. Correct whatever "
             "does not match the goal (opening the search form first if it is hidden, and choosing airports and dates "
             f"from the site's own lists or calendar), then submit the search once everything matches."
-            f"{form_rules(trip_type, airports, trip, state.depart_date)}{hint}",
+            f"{form_rules(trip_type, airports, trip, state.depart_date)}{hint}{points}",
             follow_up=True,  # a custom dropdown needs opening before its option can be picked
             page=page,
         )
@@ -1212,6 +1329,7 @@ async def search_flights(stagehand: Stagehand, page: Page, trip: Trip) -> None:
         )
     if state.blocked_reason:
         raise Blocked(state.blocked_reason)
+    state = await last_look_for_results(page, state)
     wrong = wrong_results(state, trip, await page.url()) if state.on_results_page else None
     if not state.on_results_page or wrong:
         raise FlowChanged(f"Couldn't reach the flight results page: {wrong or state.reason or 'no reason given'}")
