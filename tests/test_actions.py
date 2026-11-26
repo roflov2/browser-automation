@@ -3,6 +3,7 @@
 import asyncio
 from types import SimpleNamespace
 
+import pytest
 from stagehand import Action
 
 from audit import actions
@@ -144,7 +145,8 @@ def test_a_click_on_a_combobox_is_still_followed_up():
     done = run(stagehand, follow_up=True, page=page)
     assert len(stagehand.instructions) == 2  # the markup says it is a list opener, whatever the description says
     assert done.description == "One way"
-    assert len(page.scripts) == 2  # read before and after the click
+    hints = [script for script in page.scripts if "aria-expanded" in script]
+    assert len(hints) == 2  # read before and after the click (the other script is act_once_more's page state)
 
 
 def test_the_markup_decides_when_it_has_hints():
@@ -173,3 +175,69 @@ def test_opened_a_list():
     assert not actions.opened_a_list("February 14th", None, None)
     assert actions.opened_a_list("Search flights", {"role": "combobox"}, None)
     assert not actions.opened_a_list("Fare type", {"expanded": "false"}, {"expanded": "false"})
+
+
+# --- a browser session hiccup during act is retried once, re-observing ----------------------------------
+HICCUP = RuntimeError("RPCError: -32001 Session with given id not found")
+
+
+class HiccupStagehand(FakeStagehand):
+    """act() raises `errors` in turn, then succeeds."""
+
+    def __init__(self, *observed, errors=()):
+        super().__init__(*observed)
+        self.errors = list(errors)
+
+    async def act(self, act, **options):
+        self.acted.append(act)
+        if self.errors:
+            raise self.errors.pop(0)
+        return SimpleNamespace(data=SimpleNamespace(success=True, action_description=act.description))
+
+
+class StatePage:
+    """page.evaluate() for act_once_more's page state: `states` in turn, the last one repeating."""
+
+    def __init__(self, *states):
+        self.states = list(states)
+
+    async def evaluate(self, expression):
+        if "location.href" not in expression:
+            return None
+        return self.states.pop(0) if len(self.states) > 1 else self.states[0]
+
+
+def test_an_act_hiccup_observes_again_and_acts_on_the_new_element(monkeypatch):
+    monkeypatch.setattr(actions, "HICCUP_PAUSE_S", 0)
+    old, new = action(SUBMIT, "Continue (old frame)"), action(SUBMIT, "Continue")
+    stagehand = HiccupStagehand([old], [new], errors=[HICCUP])
+    seen = []
+    done = run(stagehand, page=StatePage("same"), target=seen.append)
+    assert done.success and done.description == "Continue"
+    assert stagehand.acted == [old, new]  # one re-observe, one re-act
+    assert len(stagehand.instructions) == 2
+    assert seen == [old]  # the target is reported before the act
+
+
+def test_a_second_hiccup_is_raised(monkeypatch):
+    monkeypatch.setattr(actions, "HICCUP_PAUSE_S", 0)
+    stagehand = HiccupStagehand([action(SUBMIT, "Continue")], [action(SUBMIT, "Continue")], errors=[HICCUP, HICCUP])
+    with pytest.raises(RuntimeError, match="Session with given id not found"):
+        run(stagehand, page=StatePage("same"))
+    assert len(stagehand.acted) == 2
+
+
+def test_an_act_that_took_effect_despite_a_hiccup_is_not_repeated(monkeypatch):
+    monkeypatch.setattr(actions, "HICCUP_PAUSE_S", 0)
+    stagehand = HiccupStagehand([action(SUBMIT, "Continue")], errors=[HICCUP])
+    done = run(stagehand, page=StatePage("before", "after"))
+    assert done.success and "page changed despite a CDP error" in done.description
+    assert len(stagehand.acted) == 1 and len(stagehand.instructions) == 1  # no second observe, no second act
+
+
+def test_other_act_errors_are_not_retried(monkeypatch):
+    monkeypatch.setattr(actions, "HICCUP_PAUSE_S", 0)
+    stagehand = HiccupStagehand([action(SUBMIT, "Continue")], errors=[RuntimeError("model returned no content")])
+    with pytest.raises(RuntimeError, match="no content"):
+        run(stagehand, page=StatePage("same"))
+    assert len(stagehand.acted) == 1

@@ -1593,3 +1593,138 @@ def test_qantas_gives_up_after_the_second_flight_and_on_other_steps(monkeypatch,
     with pytest.raises(qantas.SelectionFailed):  # step 3 (Continue) failing is not the fare's fault: no next flight
         asyncio.run(qantas.select_a_flight(object(), object(), [flight("07:00", "$1"), *flights], run, None))
     assert len(run.items) == 1
+
+
+# --- qantas: a browser hiccup on passenger details does not end the run; CONTINUE clicked in code ---------
+HICCUP = RuntimeError("RPCError: -32001 Session with given id not found")
+
+
+class PassengerPage:
+    """The completed passenger details page and its sticky footer's CONTINUE, at the js()/click_at() boundary.
+
+    `has_continue`: the footer's CONTINUE is found in code; `takes`: whether clicking it moves the page on.
+    """
+
+    def __init__(self, has_continue=True, takes=True):
+        self.has_continue, self.takes, self.screen = has_continue, takes, "passengers"
+        self.events = []
+
+    async def js(self, page, fn, arg=None, default=None, lib=""):
+        if fn is qantas.JS_CONTINUE:
+            if not self.has_continue or self.screen != "passengers":
+                return default
+            return {"text": "CONTINUE", **({"x": 1300, "y": 960} if arg else {})}
+        if fn is qantas.JS_SELECTION_PAGE:
+            return {"url": f"https://book.qantas.test/{self.screen}", "heading": self.screen.title()}
+        if fn in (qantas.JS_INSURANCE, qantas.JS_ACCEPT):
+            return default  # no insurance question, no fare rules
+        if fn is qantas.JS_DOM_CLICK:
+            self.events.append(("dom_click", arg))
+            return True
+        raise AssertionError(f"unexpected script {fn[:40]!r}")
+
+    async def click_at(self, page, x, y):
+        self.events.append(("click", x, y))
+        if self.takes:
+            self.screen = "payment"
+
+    async def fingerprint(self, page):
+        return self.screen
+
+
+def _passengers(monkeypatch, tmp_path, site, *, acts=(), observed=()):
+    """walk_to_payment from a completed passenger details page. `acts`: what each llm_act call does (an
+    exception to raise, or None to succeed); `observed`: descriptions click_one's observe returns."""
+    events, acts, observed = site.events, list(acts), list(observed)
+
+    class Stagehand:
+        async def extract(self, instruction, schema, **options):
+            if schema is qantas.PassengerForm:
+                return SimpleNamespace(data=qantas.PassengerForm(fields=[], complete=True))
+            events.append("extract")
+            if site.screen == "payment":
+                return SimpleNamespace(data=_step("payment", "Payment", payment=True))
+            return SimpleNamespace(data=_step("passenger_details", "Passenger details"))
+
+        async def observe(self, instruction, **options):
+            events.append("observe")
+            description = observed.pop(0) if observed else "CONTINUE button"
+            return SimpleNamespace(data=[SimpleNamespace(description=description, selector="xpath=/x", method="click",
+                                                         arguments=[])])  # fmt: skip
+
+        async def act(self, action, **options):
+            events.append(("act", action.description))
+            if action.description == "CONTINUE button":
+                site.screen = "payment"
+            return SimpleNamespace(data=SimpleNamespace(success=True, action_description=action.description))
+
+    async def fake_llm_act(stagehand, instruction, **options):
+        events.append("llm_act")
+        options["target"](SimpleNamespace(description="CONTINUE button in the footer", selector="xpath=/nav/button"))
+        outcome = acts.pop(0) if acts else None
+        if outcome is not None:
+            raise outcome
+        site.screen = "payment"
+        return Acted(True, "clicked CONTINUE", "xpath=/nav/button")
+
+    async def nothing(*args, **kwargs):
+        return None
+
+    class Page:
+        async def url(self):
+            return f"https://book.qantas.test/{site.screen}"
+
+    monkeypatch.setattr(qantas, "llm_act", fake_llm_act)
+    monkeypatch.setattr(qantas, "js", site.js)
+    monkeypatch.setattr(qantas, "click_at", site.click_at)
+    monkeypatch.setattr(qantas, "fingerprint", site.fingerprint)
+    for name in ("wait_for_render", "shot", "settle", "pause"):
+        monkeypatch.setattr(qantas, name, nothing)
+    run = SiteResult(site="s", out_dir=tmp_path)
+    return run, asyncio.run(qantas.walk_to_payment(Stagehand(), Page(), Passenger(), run))
+
+
+def test_qantas_clicks_continue_in_code_on_a_completed_passenger_form(monkeypatch, tmp_path):
+    site = PassengerPage()
+    run, reached = _passengers(monkeypatch, tmp_path, site)
+    assert reached is True
+    assert ("click", 1300, 960) in site.events
+    assert "llm_act" not in site.events and "observe" not in site.events  # the model was not asked
+    assert (run.steps[0]["action"], run.steps[0]["selector"]) == ("code click on CONTINUE", qantas.CONTINUE_MARK)
+
+
+def test_qantas_passenger_details_never_lets_the_model_click_join(monkeypatch, tmp_path):
+    site = PassengerPage(has_continue=False)
+    run, reached = _passengers(monkeypatch, tmp_path, site, observed=["JOIN FOR FREE button"])
+    assert reached is True
+    assert not any(e == ("act", "JOIN FOR FREE button") for e in site.events)
+    assert run.steps[0]["action"].startswith("refused: JOIN FOR FREE")
+    assert ("act", "CONTINUE button") in site.events  # the next turn's choice was fine, and was clicked
+
+
+def test_qantas_a_browser_hiccup_on_a_booking_step_does_not_end_the_run(monkeypatch, tmp_path):
+    monkeypatch.setattr(qantas, "click_continue", lambda page: _false())  # leave the move to the model
+    site = PassengerPage(has_continue=False)
+    monkeypatch.setattr(qantas, "click_one", _llm_click_one)
+    run, reached = _passengers(monkeypatch, tmp_path, site, acts=[HICCUP])
+    assert reached is True  # the page was read again, the next action went through
+    first = run.steps[0]
+    assert first["action"].startswith("browser session hiccup while acting on CONTINUE button in the footer")
+    assert " | then: clicked CONTINUE" in first["action"]
+    assert first["selector"] == "xpath=/nav/button"
+
+
+def test_qantas_a_real_error_on_a_booking_step_still_ends_the_run_but_says_what_was_clicked(monkeypatch, tmp_path):
+    monkeypatch.setattr(qantas, "click_one", _llm_click_one)
+    site = PassengerPage(has_continue=False)
+    with pytest.raises(RuntimeError, match="model returned no content"):
+        _passengers(monkeypatch, tmp_path, site, acts=[RuntimeError("model returned no content")])
+
+
+async def _false():
+    return False
+
+
+async def _llm_click_one(stagehand, instruction, refuse=qantas.NEVER_CLICK, target=None):
+    """click_one routed to the (faked) llm_act, so a test can make the act itself raise."""
+    return await qantas.llm_act(stagehand, instruction, target=target)

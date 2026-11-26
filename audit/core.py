@@ -348,6 +348,27 @@ STATUS_REASONS: dict[str, FailureReason] = {
 # (and our own AuditError) are RuntimeErrors, waits raise TimeoutError, sockets raise OSError. Programming
 # errors (TypeError, KeyError, AttributeError, ...) are deliberately not in here, so they are never hidden.
 BROWSER_ERRORS: tuple[type[Exception], ...] = (RuntimeError, TimeoutError, OSError)
+# CDP chatter Stagehand logs while a page navigates; it is filtered out of the logs.
+NOISY_CDP_PHRASES = (
+    "CDP response failed",
+    "Frame with the given id was not found",
+    "Cannot find context with specified id",
+    "Session with given id not found",
+)
+# A browser call failing for one of these reasons means the page (or one of its frames) went away under us, e.g. a
+# navigation or a frame being replaced: a hiccup to retry, not a bug.
+TRANSIENT_EVALUATE_ERRORS = (
+    *NOISY_CDP_PHRASES,
+    "Execution context was destroyed",
+    "Inspected target navigated or closed",
+    "Target closed",
+    "No frame for given id",
+)
+
+
+def is_transient(error: BaseException) -> bool:
+    """Whether `error` is a browser session hiccup (TRANSIENT_EVALUATE_ERRORS) rather than a real failure."""
+    return any(phrase in str(error) for phrase in TRANSIENT_EVALUATE_ERRORS)
 
 
 class AuditError(RuntimeError):

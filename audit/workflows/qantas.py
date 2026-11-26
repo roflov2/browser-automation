@@ -20,6 +20,7 @@ from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from pathlib import Path
+from typing import Any
 
 from pydantic import BaseModel, Field
 from stagehand import Page, Stagehand
@@ -40,6 +41,7 @@ from ..core import (
     drip_outcome,
     drip_verdict,
     final_price_was_read,
+    is_transient,
     money_sum,
     new_item,
     parse_amount,
@@ -1450,7 +1452,12 @@ async def wait_for_check(page: Page, check: Callable[[dict], bool], ms: int) -> 
     return state
 
 
-async def click_one(stagehand: Stagehand, instruction: str, refuse: re.Pattern[str] = NEVER_CLICK) -> Acted:
+async def click_one(
+    stagehand: Stagehand,
+    instruction: str,
+    refuse: re.Pattern[str] = NEVER_CLICK,
+    target: Callable[[object], None] | None = None,
+) -> Acted:
     """Observe and click the element the instruction names, unless the model returned a forbidden control.
 
     The step itself is fixed in code: the model only picks which element. A result that looks like a login,
@@ -1461,6 +1468,8 @@ async def click_one(stagehand: Stagehand, instruction: str, refuse: re.Pattern[s
     if not candidates:
         return Acted(False, "no matching element found")
     first = candidates[0]
+    if target is not None:
+        target(first)
     description = str(first.description or "")
     if refuse.search(description):
         log.info(f"    Refused to click {description!r} ({first.selector})")
@@ -1881,8 +1890,11 @@ def passenger_field_instruction(entry: FieldToFill, passenger: Passenger) -> tup
     return f"Type %{entry.detail}% into {field}.", {entry.detail: getattr(passenger, entry.detail)}
 
 
-async def fill_passenger_details(stagehand: Stagehand, page: Page, passenger: Passenger) -> None:
-    """Fill the required guest fields, two passes at most (a first pass can reveal more fields)."""
+async def fill_passenger_details(stagehand: Stagehand, page: Page, passenger: Passenger) -> bool:
+    """Fill the required guest fields, two passes at most (a first pass can reveal more fields).
+
+    True once a reading finds no required field left empty; False if the second pass still found some.
+    """
     for _ in range(2):
         form = (
             await stagehand.extract(
@@ -1893,25 +1905,79 @@ async def fill_passenger_details(stagehand: Stagehand, page: Page, passenger: Pa
             )
         ).data
         if form.complete or not form.fields:
-            return
+            return True
         for entry in form.fields[:20]:
             planned = passenger_field_instruction(entry, passenger)
             if planned is None:
                 log.debug("No passenger detail for field %r (%s)", entry.label, entry.detail)
                 continue
             instruction, variables = planned
+            typed: dict[str, Any] = {"variables": variables} if variables else {}
             try:
                 step = await llm_act(
                     stagehand,
                     instruction,
                     follow_up=not variables,
                     page=page,  # a custom dropdown needs opening before the option can be picked
-                    **({"variables": variables} if variables else {}),
+                    **typed,
                 )
                 log.info(f"    Guest details: {step.description}")
             except BROWSER_ERRORS as error:  # one field failing must not stop the rest; the step check reports it
                 log.warning(f"    Guest details: could not fill '{entry.label}' ({type(error).__name__}: {error})")
             await settle(page, 400)
+    return False
+
+
+# The sticky footer's red "CONTINUE >" (in the navigation-ribbon bar at the bottom of each booking page). Only a
+# button inside that bar (or a bottom nav / footer) counts, so no "Continue" elsewhere on the page is taken. With
+# `mark`, it is marked with data-audit-continue and its centre returned. Null if there is none.
+JS_CONTINUE = r"""mark => {
+    const bar = 'navigation-ribbon, nav, footer, [class*="ribbon" i], [class*="footer" i]';
+    const found = Array.from(document.querySelectorAll('button, a, [role="button"]'))
+        .filter(el => vis(el) && /^continue\b/i.test(clean(el.innerText)) && el.closest(bar));
+    if (!found.length) return null;
+    const el = found[found.length - 1];
+    const out = { text: clean(el.innerText) };
+    if (mark) {
+        document.querySelectorAll('[data-audit-continue]').forEach(e => e.removeAttribute('data-audit-continue'));
+        el.setAttribute('data-audit-continue', '1');
+        const r = el.getBoundingClientRect();
+        out.x = r.left + r.width / 2;
+        out.y = r.top + r.height / 2;
+    }
+    return out;
+}"""
+CONTINUE_MARK = "[data-audit-continue]"
+# What the model may never click on the passenger details page: the loyalty sign-up, the travel arranger and
+# phone-number extras, and the "Red Email" marketing box, on top of the controls never clicked anywhere.
+PASSENGER_NEVER_CLICK = re.compile(
+    rf"{NEVER_CLICK.pattern}|\bjoin\b|sign ?up|travel arranger|red email|multiple phone", re.IGNORECASE
+)
+
+
+async def left_page(page: Page, before: dict) -> bool:
+    """Poll up to STEP_CHECK_MS for the URL or the main heading to differ from `before` (a selection_page)."""
+    for poll_index in range(STEP_CHECK_MS // STEP_POLL_MS + 1):
+        if poll_index:
+            await pause(STEP_POLL_MS)
+        now = await selection_page(page)
+        if now and (now.get("url") != before.get("url") or (now.get("heading") or "") != (before.get("heading") or "")):
+            return True
+    return False
+
+
+async def click_continue(page: Page) -> bool:
+    """Click the sticky footer's CONTINUE in code: a mouse click, then a DOM click. True once the page moved on."""
+    found = await js(page, JS_CONTINUE, True, default=None)
+    if not isinstance(found, dict) or "x" not in found:
+        return False
+    before = await selection_page(page)
+    await click_at(page, found["x"], found["y"])
+    if await left_page(page, before):
+        return True
+    log.info("  CONTINUE: the page did not move on after the click; trying a DOM click")
+    await js(page, JS_DOM_CLICK, "data-audit-continue")
+    return await left_page(page, before)
 
 
 # The travel insurance question ("Need Travel Insurance?" on the Options page): an insurance card (SELECT, or
@@ -2113,18 +2179,40 @@ BOOKING_GOAL = (
 
 
 async def next_booking_action(
-    stagehand: Stagehand, page: Page, passenger: Passenger, state: StepState, step_type: str, extra: str = ""
+    stagehand: Stagehand,
+    page: Page,
+    passenger: Passenger,
+    state: StepState,
+    step_type: str,
+    extra: str = "",
+    target: dict | None = None,
 ) -> Acted:
-    """Take the one action that moves the booking on from `step_type`, declining every extra."""
-    if step_type == "passenger_details":
-        await fill_passenger_details(stagehand, page, passenger)
+    """Take the one action that moves the booking on from `step_type`, declining every extra.
+
+    A completed passenger form moves on with the footer's CONTINUE, clicked in code. `target` is filled with the
+    element the model chose before it is acted on, so a caller can record it even if the act raises.
+    """
+    target = {} if target is None else target
+    passengers = step_type == "passenger_details"
+    if passengers and await fill_passenger_details(stagehand, page, passenger) and await click_continue(page):
+        log.info("  Passenger details: CONTINUE clicked in code")
+        target.update(description="CONTINUE in the sticky footer", selector=CONTINUE_MARK)
+        return Acted(True, "code click on CONTINUE", CONTINUE_MARK)
     instruction = f"{BOOKING_GOAL} The current screen looks like: {state.heading or step_type}."
     if state.validation_errors:
         instruction += (
             f" The page shows these errors: {'; '.join(state.validation_errors[:3])}. Fix the first one if it is "
             "a missing choice or field (never by adding a paid extra)."
         )
-    step = await llm_act(stagehand, f"{instruction}{extra} {NO_RESEARCH}")
+    instruction = f"{instruction}{extra} {NO_RESEARCH}"
+
+    def chosen(action: object) -> None:
+        target.update(description=getattr(action, "description", ""), selector=getattr(action, "selector", ""))
+
+    if passengers:  # the sign-up and marketing controls are refused, not just discouraged
+        step = await click_one(stagehand, instruction, PASSENGER_NEVER_CLICK, target=chosen)
+    else:
+        step = await llm_act(stagehand, instruction, page=page, target=chosen)
     log.info(f"    {step.description}")
     await settle(page, SETTLE_MS)
     return step
@@ -2141,7 +2229,13 @@ class InsuranceRefused(Exception):
 
 
 async def move_booking_on(
-    stagehand: Stagehand, page: Page, passenger: Passenger, state: StepState, step_type: str, warnings: list[int]
+    stagehand: Stagehand,
+    page: Page,
+    passenger: Passenger,
+    state: StepState,
+    step_type: str,
+    warnings: list[int],
+    target: dict | None = None,
 ) -> Acted:
     """One turn on a booking step: answer the insurance question in code, accept the fare rules in code once it is
     settled, and only then (if neither moved the page on) ask the model. `warnings` counts the insurance warnings.
@@ -2157,7 +2251,41 @@ async def move_booking_on(
             return Acted(True, "Fare rules: accepted (ACCEPT clicked in code)", "[data-audit-accept]")
         if not extra and await read_accept(page) is not None:
             extra = ACCEPT_FARE_RULES
-    return await next_booking_action(stagehand, page, passenger, state, step_type, extra)
+    return await next_booking_action(stagehand, page, passenger, state, step_type, extra, target)
+
+
+async def take_turn(
+    stagehand: Stagehand,
+    page: Page,
+    passenger: Passenger,
+    state: StepState,
+    step_type: str,
+    warnings: list[int],
+    entry: dict,
+) -> bool:
+    """move_booking_on, recording on the step's `entry` what was clicked (or being clicked when an error struck).
+
+    A browser session hiccup that survives the retries is logged and the turn ends: the loop reads the page
+    again, and a step that keeps failing ends the run through the stuck check. False if the insurance answer was
+    refused for good.
+    """
+    target: dict = {}
+    try:
+        acted = await move_booking_on(stagehand, page, passenger, state, step_type, warnings, target)
+    except InsuranceRefused:
+        return False
+    except BROWSER_ERRORS as error:
+        what = "browser session hiccup" if is_transient(error) else f"{type(error).__name__}"
+        clicked = target.get("description") or "the page"
+        note_action(
+            entry, Acted(False, f"{what} while acting on {clicked}: {str(error)[:150]}", target.get("selector") or "")
+        )
+        if not is_transient(error):
+            raise
+        log.warning(f"  {what} while acting on {clicked} ({str(error)[:120]}); reading the page again")
+        return True
+    note_action(entry, acted)
+    return True
 
 
 async def walk_to_payment(stagehand: Stagehand, page: Page, passenger: Passenger, result: SiteResult) -> bool:
@@ -2180,14 +2308,13 @@ async def walk_to_payment(stagehand: Stagehand, page: Page, passenger: Passenger
                 result.message = f"Stuck on '{last_state.heading or last_state.step_type}': {errors}"
                 return False
             step_type = "payment" if last_state.is_payment_page else last_state.step_type
-            try:
-                acted = await move_booking_on(stagehand, page, passenger, last_state, step_type, insurance_warnings)
-            except InsuranceRefused:
+            if not await take_turn(
+                stagehand, page, passenger, last_state, step_type, insurance_warnings, result.steps[-1]
+            ):
                 result.message = (
                     f"Stuck on '{last_state.heading or last_state.step_type}': insurance selection not accepted"
                 )
                 return False
-            note_action(result.steps[-1], acted)
             continue
         state = (
             await stagehand.extract(
@@ -2237,12 +2364,10 @@ async def walk_to_payment(stagehand: Stagehand, page: Page, passenger: Passenger
         # the next turn knows without asking the model.
         last_state, last_seen = state, seen
         # After the step's offers are recorded: insurance and fare rules are answered in code, never by the model.
-        try:
-            acted = await move_booking_on(stagehand, page, passenger, state, step_type, insurance_warnings)
-        except InsuranceRefused:  # Continue refused twice for want of an insurance answer
+        if not await take_turn(stagehand, page, passenger, state, step_type, insurance_warnings, result.steps[-1]):
+            # Continue refused twice for want of an insurance answer
             result.message = f"Stuck on '{state.heading or step_type}': insurance selection not accepted"
             return False
-        note_action(result.steps[-1], acted)
 
     result.message = f"Payment page not reached within {MAX_BOOKING_STEPS} steps"
     return False

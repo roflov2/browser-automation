@@ -8,14 +8,16 @@ details or start a trial or membership.
 
 from __future__ import annotations
 
+import asyncio
 import copy
 import json
 import logging
 import re
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
-from .core import BROWSER_ERRORS
+from .core import BROWSER_ERRORS, is_transient
 
 log = logging.getLogger(__name__)
 
@@ -65,6 +67,55 @@ async def act_on(stagehand: _Actions, action: Any, **options: Any) -> Acted:
     return Acted(
         bool(result.data.success), result.data.action_description or action.description, str(action.selector or "")
     )
+
+
+HICCUP_PAUSE_S = 1.0  # before trying again after a browser session hiccup
+# What a person would see change: the URL, and the amount and content of the text. Read straight through
+# page.evaluate() (no helpers), so a hiccup leaves it unread (None) rather than wrong.
+_PAGE_STATE = r"""(() => {
+    const text = document.body ? document.body.innerText : '';
+    let hash = 0;
+    for (let i = 0; i < text.length; i++) hash = (hash * 31 + text.charCodeAt(i)) | 0;
+    return location.href + '|' + text.length + '|' + hash;
+})()"""
+
+
+async def page_state(page: _Evaluates | None) -> str | None:
+    """A cheap summary of the screen, to tell whether an action took effect; None if unreadable."""
+    if page is None:
+        return None
+    try:
+        state = await page.evaluate(_PAGE_STATE)
+    except Exception as error:  # noqa: BLE001 - unreadable just means "cannot tell"
+        log.debug("Could not read the page state: %s", error)
+        return None
+    return state if isinstance(state, str) else None
+
+
+async def act_once_more(
+    stagehand: _Actions, action: Any, instruction: str, page: _Evaluates | None, **options: Any
+) -> Acted:
+    """act_on(), with one more go after a browser session hiccup (a CDP session or frame replaced mid-act).
+
+    The element the first observe returned may belong to the dead session, so the retry observes again and
+    acts on the new first result. It never clicks twice: if the page changed despite the error, the first act
+    took effect and is reported as done.
+    """
+    before = await page_state(page)
+    try:
+        return await act_on(stagehand, action, **options)
+    except Exception as error:
+        if not is_transient(error):
+            raise
+        log.warning("act: browser session hiccup (%s), trying once more", str(error)[:120])
+    await asyncio.sleep(HICCUP_PAUSE_S)
+    after = await page_state(page)
+    if before is not None and after is not None and after != before:
+        return Acted(True, "acted (page changed despite a CDP error)", str(action.selector or ""))
+    found = await stagehand.observe(instruction, **options)
+    if not found.data:
+        return Acted(False, "no matching element found after a browser session hiccup")
+    return await act_on(stagehand, found.data[0], **options)
 
 
 async def click_at(page: _Clicks, x: float, y: float) -> None:
@@ -216,7 +267,13 @@ def opened_a_list(description: str, before: dict[str, Any] | None, after: dict[s
 
 
 async def llm_act(
-    stagehand: _Actions, instruction: str, *, follow_up: bool = False, page: _Evaluates | None = None, **options: Any
+    stagehand: _Actions,
+    instruction: str,
+    *,
+    follow_up: bool = False,
+    page: _Evaluates | None = None,
+    target: Callable[[Any], None] | None = None,
+    **options: Any,
 ) -> Acted:
     """Run one LLM action: observe, then act on the first element found.
 
@@ -231,6 +288,10 @@ async def llm_act(
     A plain click is followed up only if it looks like it opened a list (see opened_a_list): read from the
     element's ARIA attributes in `page` when one is given, else from its description. A click on a submit
     button or a calendar day costs no second observe.
+
+    `target`, if given, is told the observed element before it is acted on, so a caller can record what was
+    being clicked even when the act raises. A browser session hiccup during the act is retried once
+    (act_once_more), with `page` used to tell whether the first act took effect.
     """
     options.setdefault("timeout", LLM_TIMEOUT_MS)
     found = await stagehand.observe(instruction, **options)
@@ -238,15 +299,17 @@ async def llm_act(
         log.debug("Nothing to act on for %r", instruction)
         return Acted(False, "no matching element found")
     first = found.data[0]
+    if target is not None:
+        target(first)
     if not follow_up:
-        return await act_on(stagehand, first, **options)
+        return await act_once_more(stagehand, first, instruction, page, **options)
     arguments = list(getattr(first, "arguments", None) or [])
     wanted = str(arguments[0]) if arguments and first.method == "selectOptionFromDropdown" else None
     if wanted is not None and not is_native_select(str(first.selector or "")):
         log.debug("selectOptionFromDropdown(%r) on a non-<select> %s: clicking it open instead", wanted, first.selector)
         first = _as_click(first)
     before = await popup_hints(page, str(first.selector or "")) if wanted is None else None
-    done = await act_on(stagehand, first, **options)
+    done = await act_once_more(stagehand, first, instruction, page, **options)
     if done.success and first.method == "click" and wanted is None:
         after = await popup_hints(page, str(first.selector or ""))
         if not opened_a_list(str(first.description or ""), before, after):

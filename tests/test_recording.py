@@ -118,3 +118,29 @@ def test_a_second_rejection_or_another_error_is_not_retried():
 
     with pytest.raises(ExtractFailed, match="structuredContent"):
         asyncio.run(RecordingStagehand(Flaky(REJECTED, REJECTED)).extract("x", Total))
+
+
+def test_an_observe_hiccup_is_retried_once(caplog, monkeypatch):
+    from audit import actions
+
+    monkeypatch.setattr(actions, "HICCUP_PAUSE_S", 0)
+    hiccup = RuntimeError("RPCError: -32001 Session with given id not found")
+    observing = RecordingStagehand(Flaky(hiccup))
+    assert asyncio.run(observing.observe("find the button")) == ["found"]
+    assert observing.llm_calls == 2
+    assert "observe: browser session hiccup" in caplog.text
+    with pytest.raises(RuntimeError, match="Session with given id"):
+        asyncio.run(RecordingStagehand(Flaky(hiccup, hiccup)).observe("find the button"))
+
+
+def test_an_act_hiccup_is_left_to_llm_act():
+    class Acting(FakeStagehand):
+        calls_made = 0
+
+        async def act(self, action, **options):
+            Acting.calls_made += 1
+            raise RuntimeError("Session with given id not found")
+
+    with pytest.raises(RuntimeError):
+        asyncio.run(RecordingStagehand(Acting()).act("click"))
+    assert Acting.calls_made == 1  # re-acting needs a fresh observe first, which only llm_act can do
