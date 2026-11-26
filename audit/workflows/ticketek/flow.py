@@ -1087,6 +1087,7 @@ async def read_event(
             stagehand,
             f"If a 'Select venue' or city/venue dropdown is shown with no venue selected, open it and select {wanted}.",
             follow_up=True,
+            page=page,
         )
         if step and step.success:
             log.info(f"  Venue dropdown: {step.description}")

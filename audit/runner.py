@@ -167,6 +167,13 @@ EXTRACT_IGNORE = (
 )
 # Stagehand methods that call the model, besides extract(): counted towards a run's llm_calls.
 LLM_METHODS = frozenset({"observe", "act"})
+# In the error Stagehand raises when the model's answer fails its schema check ('"path":["structuredContent",...]').
+SCHEMA_REJECTED = "structuredContent"
+
+
+def schema_rejected(error: BaseException) -> bool:
+    """True for Stagehand's 'the model's answer did not fit the schema' error, which asking again usually fixes."""
+    return SCHEMA_REJECTED in str(error)
 
 
 class RecordingStagehand:
@@ -175,6 +182,7 @@ class RecordingStagehand:
     extract() gets an explicit timeout, leaves out the page furniture in EXTRACT_IGNORE, raises a
     specific error when it fails, and has every result appended to the run's extractions.jsonl.
     Every model call (extract, observe, act, retries included) is counted in `llm_calls`.
+    A model answer Stagehand rejects for not fitting its schema is asked for once more, by any of the three.
     Everything else is passed straight through.
     """
 
@@ -203,6 +211,11 @@ class RecordingStagehand:
                 ) from error
             except Exception as error:
                 msg = str(error)
+                if attempt == 0 and schema_rejected(error):
+                    log.warning(
+                        "  extract(%s): the model's answer did not fit the schema; asking once more", schema.__name__
+                    )
+                    continue
                 if attempt == 0 and "locator must belong to the target page" in msg:
                     options.pop("ignore_locators", None)
                     continue
@@ -232,7 +245,14 @@ class RecordingStagehand:
 
         async def counted(*args: Any, **kwargs: Any) -> Any:
             self.llm_calls += 1
-            result = await attribute(*args, **kwargs)
+            try:
+                result = await attribute(*args, **kwargs)
+            except Exception as error:
+                if not schema_rejected(error):
+                    raise
+                log.warning("  %s: the model's answer did not fit the schema; asking once more", name)
+                self.llm_calls += 1
+                result = await attribute(*args, **kwargs)
             usage = getattr(getattr(result, "metadata", None), "usage", None)
             if usage is not None:  # observe/act are not in extractions.jsonl, so -v is where their cost shows
                 instruction = str(args[0] if args else kwargs.get("instruction", ""))

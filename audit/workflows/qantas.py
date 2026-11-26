@@ -13,6 +13,7 @@ The run always stops on the payment page: no payment details are entered and not
 import argparse
 import asyncio
 import contextlib
+import itertools
 import logging
 import re
 from dataclasses import dataclass
@@ -61,6 +62,7 @@ NO_RESEARCH = (
 MAX_SEARCH_STEPS = 14
 MAX_BOOKING_STEPS = 25
 MAX_STUCK_REPEATS = 3
+ALTERNATING_STEPS = 4  # A, B, A, B with nothing changed counts as stuck
 # Paging the date picker on with the same arrow is progress the search state cannot show (the date stays empty
 # until a day is picked), so it gets a year of months before it counts as stuck.
 MAX_MONTH_REPEATS = 12
@@ -69,7 +71,9 @@ MONTH_NAVIGATION = re.compile(
     re.IGNORECASE,
 )
 TRIP_SETTLE_MS = 800  # the trip-type list opens and closes in place; no navigation to wait for
-AIRPORT_OPTION_WAIT_MS = 8000  # the type-ahead fetches its suggestions after the code is typed; they take a second or two
+AIRPORT_OPTION_WAIT_MS = (
+    8000  # the type-ahead fetches its suggestions after the code is typed; they take a second or two
+)
 AIRPORT_OPTION_POLL_MS = 250
 TYPE_DELAY_MS = 80  # between key presses, so the type-ahead sees each one
 # A marketing page ("Flights from Sydney to Ballina": fare deals, no flights) the search can land on.
@@ -469,6 +473,24 @@ def search_held(state: SearchState, before: tuple | None = None) -> tuple:
     return tuple(held)
 
 
+def alternating(recent: list[tuple[str, tuple, str]]) -> tuple[str, str] | None:
+    """The two controls' descriptions when the last ALTERNATING_STEPS actions took turns between just those two
+    controls (A, B, A, B) and the search held the same throughout; None otherwise.
+
+    The repeat count only sees the same control twice in a row, so a model clicking a calendar day and then the
+    search button hidden behind the calendar, over and over, would otherwise use up every step.
+    """
+    if len(recent) < ALTERNATING_STEPS:
+        return None
+    steps = recent[-ALTERNATING_STEPS:]
+    controls = [selector for selector, _, _ in steps]
+    if len(set(controls)) != 2 or len({held for _, held, _ in steps}) != 1:
+        return None
+    if any(a == b for a, b in itertools.pairwise(controls)):
+        return None  # not taking turns
+    return steps[-2][2], steps[-1][2]
+
+
 def is_month_navigation(step_description: str) -> bool:
     """True for the date picker's next/previous-month arrow, which is clicked again and again on purpose."""
     return bool(MONTH_NAVIGATION.search(step_description))
@@ -687,11 +709,305 @@ def with_airports(state: SearchState, airports: dict[str, str | None]) -> Search
     return state.model_copy(update=update) if update else state
 
 
+# The departure date. On qantas.com the search form's date control is a button ("Button to select travel dates,
+# currently set to 29 Nov 2026") that opens a full-screen "Select travel dates" modal, rendered as a portal under
+# <body> (outside the search form). The modal's subheading shows the day picked so far ("Depart BNE Sun, 14 Feb
+# 2027"); its months are stacked vertically and scroll, each a heading ("February 2027") followed by a grid of day
+# <button>s that show the day number and a price; a sticky footer holds a red "Continue" button. Picking a day does
+# NOT set the form's date: only Continue does, and closes the modal.
+# These selectors follow that description (from the run log and screenshots of 2026-11-26); the modal's HTML was
+# not captured. Elements are found by role and text, never by position, and marked with data-audit-* attributes.
+MONTHS = (
+    "January",
+    "February",
+    "March",
+    "April",
+    "May",
+    "June",
+    "July",
+    "August",
+    "September",
+    "October",
+    "November",
+    "December",
+)  # fmt: skip  - not strftime('%B'): that follows the machine's locale
+DATE_DIALOG_WAIT_MS = 6000  # the modal fetches its fares before it renders the months
+DATE_POLL_MS = 250
+MAX_DATE_SCROLLS = 12  # the months scroll; a year ahead is about this many screens
+# The form's travel-dates control: a button, input or combobox outside any open dialog whose own label names dates.
+JS_DATE_FIELD = r"""() => {
+    const named = el => clean([el.getAttribute('aria-label'), el.getAttribute('placeholder'), el.getAttribute('name'),
+        ...(el.getAttribute('aria-labelledby') || '').split(/\s+/).filter(Boolean)
+            .map(id => (document.getElementById(id) || {}).innerText), el.innerText].filter(Boolean).join(' '));
+    const inDialog = el => !!el.closest('[role="dialog"], [aria-modal="true"], [data-audit-date-dialog]');
+    const found = Array.from(document.querySelectorAll('button, [role="button"], input, [role="combobox"]'))
+        .filter(el => vis(el) && !inDialog(el) && !el.closest('header, nav, footer'))
+        .filter(el => /travel dates|depart(ure|ing)? date|\bdates?\b/i.test(named(el))
+                      && !/return date/i.test(named(el)));
+    const inForm = el => Number(!!el.closest('form, [role="search"], [class*="search" i], [id*="search" i]'));
+    found.sort((a, b) => inForm(b) - inForm(a));
+    const el = found[0];
+    if (!el) return null;
+    document.querySelectorAll('[data-audit-date]').forEach(e => e.removeAttribute('data-audit-date'));
+    el.setAttribute('data-audit-date', '1');
+    el.scrollIntoView({ block: 'center' });
+    const r = el.getBoundingClientRect();
+    return { text: named(el), value: el.value || null, x: r.left + r.width / 2, y: r.top + r.height / 2 };
+}"""
+# The open date modal: a dialog (or, failing a role, the outermost visible block holding a "Select travel dates"
+# title and a Continue button). Returns its subheading line that names the leg ('Depart BNE Sun, 14 Feb 2027').
+JS_DATE_DIALOG = r"""() => {
+    const titled = el => /select (your )?travel dates|select (a )?(departure )?date/i.test(clean(el.innerText).slice(0, 400));
+    let el = dialogs().find(d => vis(d) && titled(d));
+    if (!el) {
+        const title = Array.from(document.querySelectorAll('h1, h2, h3, h4, [role="heading"], [class*="title" i]'))
+            .find(h => vis(h, 4, 4) && /^select (your )?travel dates$/i.test(clean(h.innerText)));
+        for (let up = title; up && up !== document.body; up = up.parentElement) {
+            const hasContinue = Array.from(up.querySelectorAll('button')).some(b => /^continue$/i.test(clean(b.innerText)));
+            if (hasContinue) el = up;
+            if (up.parentElement === document.body) break;
+        }
+    }
+    if (!el) return null;
+    document.querySelectorAll('[data-audit-date-dialog]').forEach(e => e.removeAttribute('data-audit-date-dialog'));
+    el.setAttribute('data-audit-date-dialog', '1');
+    const lines = (el.innerText || '').split('\n').map(clean).filter(Boolean);
+    return { picked: lines.find(l => /^depart(ing|ure)?\b/i.test(l)) || null };
+}"""
+# The day's button in the open modal. A cell that carries the date itself (an ISO date in any attribute, or an
+# aria-label naming the day) is taken first; otherwise the cell is found under its month's heading ('February
+# 2027'), among the buttons before the next month's heading, by the first line of its text that is a day number.
+JS_DAY_CELL = r"""({ iso, day, month, label }) => {
+    const dialog = document.querySelector('[data-audit-date-dialog]');
+    if (!dialog) return null;
+    const labelled = new RegExp(label, 'i');
+    const usable = b => vis(b, 4, 4) && !b.disabled && b.getAttribute('aria-disabled') !== 'true';
+    const cells = Array.from(dialog.querySelectorAll('button, [role="gridcell"], [role="button"], td'));
+    let el = cells.find(b => usable(b) && (Array.from(b.attributes).some(a => a.value.startsWith(iso))
+        || labelled.test(b.getAttribute('aria-label') || '')));
+    if (!el) {
+        const heads = Array.from(dialog.querySelectorAll('*')).filter(h => h.children.length <= 1
+            && /^[A-Za-z]+ \d{4}$/.test(clean(h.innerText)));
+        const head = heads.find(h => clean(h.innerText).toLowerCase() === month.toLowerCase());
+        if (!head) return null;
+        const next = heads.find(h => clean(h.innerText) !== clean(head.innerText)
+            && (head.compareDocumentPosition(h) & Node.DOCUMENT_POSITION_FOLLOWING));
+        const after = (a, b) => !!(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING);
+        el = Array.from(dialog.querySelectorAll('button')).filter(b => after(head, b) && (!next || after(b, next)))
+            .find(b => (b.innerText || '').split('\n').map(clean).find(l => /^\d{1,2}$/.test(l)) === String(day));
+        if (el && !usable(el)) { el.scrollIntoView({ block: 'center' }); if (!usable(el)) return { disabled: true }; }
+    }
+    if (!el) return null;
+    document.querySelectorAll('[data-audit-day]').forEach(e => e.removeAttribute('data-audit-day'));
+    el.setAttribute('data-audit-day', '1');
+    el.scrollIntoView({ block: 'center' });
+    const r = el.getBoundingClientRect();
+    return { text: clean(el.innerText), x: r.left + r.width / 2, y: r.top + r.height / 2 };
+}"""
+# Scroll the modal's month list one screen on (its first scrollable block); false once it cannot scroll further.
+JS_SCROLL_DATES = r"""() => {
+    const dialog = document.querySelector('[data-audit-date-dialog]');
+    if (!dialog) return false;
+    const box = [dialog, ...dialog.querySelectorAll('*')].find(e => e.scrollHeight > e.clientHeight + 20
+        && /auto|scroll/.test(getComputedStyle(e).overflowY));
+    if (!box) return false;
+    const before = box.scrollTop;
+    box.scrollTop = before + box.clientHeight * 0.8;
+    return box.scrollTop > before;
+}"""
+# The modal's Continue button (never its close ✕).
+JS_DATE_CONTINUE = r"""() => {
+    const dialog = document.querySelector('[data-audit-date-dialog]');
+    const el = dialog && Array.from(dialog.querySelectorAll('button, [role="button"]'))
+        .find(b => vis(b, 4, 4) && /^continue$/i.test(clean(b.innerText) || b.getAttribute('aria-label') || ''));
+    if (!el) return null;
+    document.querySelectorAll('[data-audit-date-continue]').forEach(e => e.removeAttribute('data-audit-date-continue'));
+    el.setAttribute('data-audit-date-continue', '1');
+    el.scrollIntoView({ block: 'nearest' });
+    const r = el.getBoundingClientRect();
+    return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+}"""
+SHOWN_DATE = re.compile(r"\b\d{1,2}\s+[A-Za-z]{3,9}\.?,?\s+\d{4}\b|\b[A-Za-z]{3,9}\.?\s+\d{1,2},?\s+\d{4}\b")
+
+
+def date_text(day: date) -> str:
+    """The date as Qantas writes it, e.g. '14 Feb 2027'."""
+    return f"{day.day} {MONTHS[day.month - 1][:3]} {day.year}"
+
+
+def date_label_pattern(day: date) -> str:
+    """A regex (valid in Python and JavaScript) that matches `day` written out: '14 Feb 2027', 'Sun, 14 February
+    2027', 'February 14, 2027', '14/02/2027' or '2027-02-14'."""
+    month = MONTHS[day.month - 1]
+    name = f"{month[:3]}(?:{month[3:]})?\\.?"
+    return (
+        rf"(?:^|[^0-9]){day.day}(?:st|nd|rd|th)?\s+{name},?\s+{day.year}(?:[^0-9]|$)"
+        rf"|(?:^|[^A-Za-z]){name}\s+{day.day}(?:st|nd|rd|th)?,?\s+{day.year}(?:[^0-9]|$)"
+        rf"|(?:^|[^0-9])0?{day.day}/0?{day.month}/{day.year}(?:[^0-9]|$)|{day.isoformat()}"
+    )
+
+
+def shows_date(text: str | None, day: date) -> bool:
+    """True if `text` names `day` ('Sun, 14 Feb 2027' or '... currently set to 14 Feb 2027' for 14 Feb 2027)."""
+    return bool(text and re.search(date_label_pattern(day), text, re.IGNORECASE))
+
+
+def shown_date(text: str | None) -> str | None:
+    """The date a control's text names ('29 Nov 2026' from 'Button to select travel dates, currently set to 29 Nov
+    2026'), else the text itself; None for no text."""
+    if not text:
+        return None
+    found = SHOWN_DATE.search(text)
+    return found.group(0) if found else text
+
+
+async def poll(page: Page, fn: str, arg: object = None, *, gone: bool = False) -> dict | None:
+    """Run `fn` until it finds something (or, with `gone`, until it finds nothing) for up to DATE_DIALOG_WAIT_MS.
+
+    Returns what it last found (None if nothing, or once gone).
+    """
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + DATE_DIALOG_WAIT_MS / 1000
+    while True:
+        found = await js(page, fn, arg)
+        found = found if isinstance(found, dict) else None
+        if (found is None) == gone or loop.time() >= deadline:
+            return found
+        await asyncio.sleep(DATE_POLL_MS / 1000)
+
+
+async def read_date_field(page: Page) -> dict | None:
+    """The form's travel-dates control as the page shows it ({text, x, y}); None if not found."""
+    found = await js(page, JS_DATE_FIELD)
+    return found if isinstance(found, dict) else None
+
+
+async def date_dialog(page: Page) -> dict | None:
+    """The open 'Select travel dates' modal ({picked}); None if it is not open."""
+    found = await js(page, JS_DATE_DIALOG)
+    return found if isinstance(found, dict) else None
+
+
+async def open_date_dialog(page: Page, field: dict) -> dict | None:
+    """Open the modal from the form's date control (a real click, a DOM click if nothing opened); the modal."""
+    await click_at(page, field["x"], field["y"])
+    dialog = await poll(page, JS_DATE_DIALOG)
+    if dialog is None:
+        await js(page, JS_DOM_CLICK, "data-audit-date", default=False)
+        dialog = await poll(page, JS_DATE_DIALOG)
+    return dialog
+
+
+async def find_day_cell(page: Page, day: date) -> dict | None:
+    """The day's button in the open modal, scrolling the months on until its month is rendered; None if not found."""
+    arg = {"iso": day.isoformat(), "day": day.day, "month": f"{MONTHS[day.month - 1]} {day.year}",
+           "label": date_label_pattern(day)}  # fmt: skip
+    for _ in range(MAX_DATE_SCROLLS + 1):
+        cell = await js(page, JS_DAY_CELL, arg)
+        if isinstance(cell, dict):
+            return cell
+        if not await js(page, JS_SCROLL_DATES, default=False):
+            return None
+        await settle(page, TRIP_SETTLE_MS)
+    return None
+
+
+async def pick_day(page: Page, day: date) -> str | None:
+    """Pick `day` in the open modal; None once the modal shows it as picked, else why it could not be."""
+    cell = await find_day_cell(page, day)
+    if cell is None:
+        return f"no {date_text(day)} button in the date picker"
+    if cell.get("disabled"):
+        return f"{date_text(day)} cannot be picked (the day is disabled)"
+    await click_at(page, cell["x"], cell["y"])
+    await settle(page, TRIP_SETTLE_MS)
+    dialog = await date_dialog(page)
+    if dialog and not shows_date(dialog.get("picked"), day):  # React ignored the mouse click: try a DOM click
+        await js(page, JS_DOM_CLICK, "data-audit-day", default=False)
+        await settle(page, TRIP_SETTLE_MS)
+        dialog = await date_dialog(page)
+    if dialog and not shows_date(dialog.get("picked"), day):
+        return f"clicked {date_text(day)} but the picker shows '{dialog.get('picked')}'"
+    return None
+
+
+async def confirm_dates(page: Page) -> str | None:
+    """Click the modal's Continue and wait for it to close; None once closed, else why it did not."""
+    button = await js(page, JS_DATE_CONTINUE)
+    if not isinstance(button, dict):
+        return "no Continue button in the date picker"
+    await click_at(page, button["x"], button["y"])
+    if await poll(page, JS_DATE_DIALOG, gone=True) is not None:
+        await js(page, JS_DOM_CLICK, "data-audit-date-continue", default=False)
+        if await poll(page, JS_DATE_DIALOG, gone=True) is not None:
+            return "clicked Continue but the date picker stayed open"
+    await settle(page, TRIP_SETTLE_MS)
+    return None
+
+
+async def set_depart_date(page: Page, day: date) -> bool:
+    """Set the search form's departure date to `day` in code, without the model. True if the form now shows it.
+
+    Opens the date picker (or works in the one already open), clicks the day, then Continue, which is what sets
+    the date. The model cannot be relied on here: it clicked the day and then the form's search button hidden
+    behind the still-open picker, over and over, and never chose Continue.
+    """
+    wanted = date_text(day)
+    try:
+        dialog = await date_dialog(page)
+        field = await read_date_field(page)
+        if dialog is None:
+            if field is None:
+                log.info("  Departure date: no travel-dates control found in the page; leaving it to the model")
+                return False
+            if shows_date(field["text"], day):
+                log.info(f"  Departure date: already '{wanted}'")
+                return True
+            dialog = await open_date_dialog(page, field)
+            if dialog is None:
+                log.info("  Departure date: the date picker did not open; leaving it to the model")
+                return False
+        problem = await pick_day(page, day) or await confirm_dates(page)
+        if problem:
+            log.info(f"  Departure date: {problem}; leaving it to the model")
+            return False
+        after = await read_date_field(page)
+    except BROWSER_ERRORS as error:  # a failed helper leaves the date to the model, as before
+        log.info(f"  Departure date: could not be set in the page ({error}); leaving it to the model")
+        return False
+    done = bool(after and shows_date(after["text"], day))
+    log.info(
+        f"  Departure date: set to '{wanted}'"
+        if done
+        else f"  Departure date: the form shows '{shown_date((after or field or {}).get('text'))}' after choosing '{wanted}'"
+    )
+    return done
+
+
+async def page_depart_date(page: Page) -> str | None:
+    """The date the form's own travel-dates control shows ('29 Nov 2026'); None if it can't be read.
+
+    Read from the form, not the picker: the picker's subheading shows a day that is not set until Continue.
+    """
+    try:
+        await date_dialog(page)  # marks an open picker, so that none of its buttons is taken for the form's
+        field = await read_date_field(page)
+    except BROWSER_ERRORS as error:  # a failed read falls back to the extraction's date
+        log.debug("Date read failed: %s", error)
+        return None
+    return shown_date(field["text"]) if field else None
+
+
+def with_depart_date(state: SearchState, shown: str | None) -> SearchState:
+    """`state` with the date the form's control shows in place of the extraction's reading, where the DOM has one."""
+    return state.model_copy(update={"depart_date": shown}) if shown else state
+
+
 def airports_set(airports: dict[str, str | None], trip: Trip) -> bool:
     return shows_code(airports.get("origin"), trip.origin) and shows_code(airports.get("destination"), trip.destination)
 
 
-def form_rules(trip_type: str | None, airports: dict[str, str | None], trip: Trip) -> str:
+def form_rules(trip_type: str | None, airports: dict[str, str | None], trip: Trip, depart: str | None = None) -> str:
     """What the model is told to leave alone: the parts of the form already set in code."""
     rules = ""
     if trip_type == "one_way":
@@ -701,6 +1017,8 @@ def form_rules(trip_type: str | None, airports: dict[str, str | None], trip: Tri
             f" The departure and arrival airports are already set to {trip.origin} and {trip.destination}: "
             "do not touch, clear or swap them."
         )
+    if shows_date(depart, trip.depart):
+        rules += f" The departure date is already set to {date_text(trip.depart)}: do not open the date picker."
     return rules
 
 
@@ -722,18 +1040,32 @@ async def start_again(stagehand: Stagehand, page: Page, wrong: str, wrong_pages:
 
 @dataclass
 class SearchForm:
-    """The parts of the search form set and read in code, without the model: trip type and airports."""
+    """The parts of the search form set and read in code, without the model: trip type, airports and date."""
 
     stagehand: Stagehand
     page: Page
     trip: Trip
     question: str
     helper_works: bool = True  # False once set_airports failed: the airports are then the model's, not fought over
+    date_works: bool = True  # False once set_depart_date failed: likewise for the date
 
     async def prepare(self) -> None:
-        """Set the trip type, then both airports."""
+        """Set the trip type, then both airports, then the departure date."""
         await set_one_way(self.page)
         self.helper_works = await set_airports(self.page, self.trip)
+        self.date_works = await set_depart_date(self.page, self.trip.depart)
+
+    async def keep_date(self, depart: str | None) -> str | None:
+        """Set the date again if it is not set or the picker is open (while the helper works); what it shows now.
+
+        The model is never handed a page with the picker open: the day it shows there is not set until Continue.
+        """
+        if not self.date_works:
+            return depart
+        if shows_date(depart, self.trip.depart) and await date_dialog(self.page) is None:
+            return depart
+        self.date_works = await set_depart_date(self.page, self.trip.depart)
+        return await page_depart_date(self.page)
 
     async def keep_airports(self, airports: dict[str, str | None]) -> dict[str, str | None]:
         """Set the airports back if the last action changed one (while the helper works); what they show now."""
@@ -743,9 +1075,10 @@ class SearchForm:
         return await page_airports(self.page)
 
     async def read(self) -> tuple[SearchState, str | None, dict[str, str | None]]:
-        """The search state, with the trip type and airports the DOM shows in place of the extraction's reading."""
+        """The search state, with the trip type, airports and date the DOM shows in place of the extraction's."""
         state = (await self.stagehand.extract(self.question, SearchState)).data
         trip_type, airports = await page_trip_type(self.page), await page_airports(self.page)
+        state = with_depart_date(state, await page_depart_date(self.page))
         return with_airports(with_trip_type(state, trip_type), airports), trip_type, airports
 
 
@@ -773,6 +1106,7 @@ async def search_flights(stagehand: Stagehand, page: Page, trip: Trip) -> None:
     state, trip_type, airports = await form.read()
     held: tuple | None = None  # what the search held after the last action, empty fields carried over
     last: tuple[str, tuple] | None = None  # (control acted on, what the search held after it)
+    recent: list[tuple[str, tuple, str]] = []  # the last few (control, what the search held, description)
     repeats = 0
     wrong_pages = 0
     hint = ""
@@ -786,7 +1120,7 @@ async def search_flights(stagehand: Stagehand, page: Page, trip: Trip) -> None:
             wrong_pages = await start_again(stagehand, page, wrong, wrong_pages)
             await form.prepare()
             state, trip_type, airports = await form.read()
-            held, last, repeats, hint = None, None, 0, ""
+            held, last, repeats, hint, recent = None, None, 0, "", []
             continue
         if state.loading:
             # A submitted search renders slowly; acting on a half-loaded page is how a search gets restarted.
@@ -797,6 +1131,7 @@ async def search_flights(stagehand: Stagehand, page: Page, trip: Trip) -> None:
         if (trip_type or state.trip_type) != "one_way" and await set_one_way(page):
             trip_type = "one_way"
         airports = await form.keep_airports(airports)
+        state = with_depart_date(state, await form.keep_date(state.depart_date))
         state = with_airports(with_trip_type(state, trip_type), airports)
         step = await llm_act(
             stagehand,
@@ -805,8 +1140,9 @@ async def search_flights(stagehand: Stagehand, page: Page, trip: Trip) -> None:
             f"date={state.depart_date}, guests={state.guests}, using points={state.using_points}. Correct whatever "
             "does not match the goal (opening the search form first if it is hidden, and choosing airports and dates "
             f"from the site's own lists or calendar), then submit the search once everything matches."
-            f"{form_rules(trip_type, airports, trip)}{hint}",
+            f"{form_rules(trip_type, airports, trip, state.depart_date)}{hint}",
             follow_up=True,  # a custom dropdown needs opening before its option can be picked
+            page=page,
         )
         await settle(page, SETTLE_MS)
         state, trip_type, airports = await form.read()
@@ -816,10 +1152,16 @@ async def search_flights(stagehand: Stagehand, page: Page, trip: Trip) -> None:
         repeats = repeats + 1 if now == last else 0
         last = now
         paging = is_month_navigation(step.description)
+        recent = [*recent[-(ALTERNATING_STEPS - 1) :], (step.selector, held, step.description)]
         if repeats >= (MAX_MONTH_REPEATS if paging else MAX_STUCK_REPEATS):
             raise FlowChanged(
                 f"Stuck on the flight search: '{step.description}' was acted on {repeats + 1} times in a row "
                 f"and the search did not change (trip type={state.trip_type}, from={state.origin}, to={state.destination})"
+            )
+        if (pair := alternating(recent)) and not any(is_month_navigation(d) for d in pair):
+            raise FlowChanged(
+                f"Stuck on the flight search: alternating between '{pair[0]}' and '{pair[1]}' for "
+                f"{ALTERNATING_STEPS} steps and the search did not change (date={state.depart_date})"
             )
         hint = (
             f" Your last action ('{step.description}') changed nothing in the search. If it opened a list or menu, "
@@ -924,7 +1266,8 @@ async def fill_passenger_details(stagehand: Stagehand, page: Page, passenger: Pa
                 step = await llm_act(
                     stagehand,
                     instruction,
-                    follow_up=not variables,  # a custom dropdown needs opening before the option can be picked
+                    follow_up=not variables,
+                    page=page,  # a custom dropdown needs opening before the option can be picked
                     **({"variables": variables} if variables else {}),
                 )
                 log.info(f"    Guest details: {step.description}")

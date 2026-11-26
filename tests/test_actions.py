@@ -111,3 +111,65 @@ def test_native_select():
     assert is_native_select("form > select")
     assert not is_native_select(COMBOBOX)
     assert not is_native_select("xpath=/html[1]/body[1]/div[1]/selector-widget[1]")
+
+
+# --- follow up only after a click that opened a list -----------------------------------------------------
+SUBMIT = "xpath=/html[1]/body[1]/div[1]/form[1]/button[1]"
+DAY = "xpath=/html[1]/body[1]/div[7]/div[4]/div[1]/div[3]/button[7]"
+
+
+class FakePage:
+    """evaluate() answers the ARIA hints for each xpath, from `hints` (None: not found)."""
+
+    def __init__(self, hints):
+        self.hints = hints
+        self.scripts = []
+
+    async def evaluate(self, expression):
+        self.scripts.append(expression)
+        return next((value for xpath, value in self.hints.items() if f'"{xpath}"' in expression), None)
+
+
+def test_a_click_on_a_submit_button_or_a_day_is_not_followed_up():
+    for selector, description in ((SUBMIT, "Submit search for flights."), (DAY, "The '14 Feb 2027' button")):
+        stagehand = FakeStagehand([action(selector, description)], [action(ONE_WAY, "One way")])
+        done = run(stagehand, follow_up=True)
+        assert len(stagehand.instructions) == 1, description  # no second observe
+        assert done.description == description
+
+
+def test_a_click_on_a_combobox_is_still_followed_up():
+    page = FakePage({COMBOBOX.removeprefix("xpath="): {"haspopup": "listbox", "role": "combobox", "expanded": "false"}})
+    stagehand = FakeStagehand([action(COMBOBOX, "Search flights trip type")], [action(ONE_WAY, "One way")])
+    done = run(stagehand, follow_up=True, page=page)
+    assert len(stagehand.instructions) == 2  # the markup says it is a list opener, whatever the description says
+    assert done.description == "One way"
+    assert len(page.scripts) == 2  # read before and after the click
+
+
+def test_the_markup_decides_when_it_has_hints():
+    xpath = SUBMIT.removeprefix("xpath=")
+    opened = FakePage({xpath: {"haspopup": None, "role": None, "expanded": "true"}})
+    stagehand = FakeStagehand([action(SUBMIT, "Search options")], [action(ONE_WAY, "One way")])
+    run(stagehand, follow_up=True, page=opened)
+    assert len(stagehand.instructions) == 2  # aria-expanded turned true
+
+    dialog = FakePage({xpath: {"haspopup": "dialog", "role": None, "expanded": None}})
+    stagehand = FakeStagehand([action(SUBMIT, "Travel dates")], [action(ONE_WAY, "One way")])
+    run(stagehand, follow_up=True, page=dialog)
+    assert len(stagehand.instructions) == 1  # a dialog has no options to pick
+
+    unreadable = FakePage({})
+    stagehand = FakeStagehand([action(SUBMIT, "Travel dates")], [action(ONE_WAY, "One way")])
+    run(stagehand, follow_up=True, page=unreadable)
+    assert len(stagehand.instructions) == 2  # not found: the description decides, and it may be an opener
+
+
+def test_opened_a_list():
+    assert actions.opened_a_list("Trip type combobox", None, None)
+    assert not actions.opened_a_list("Button to submit the flight search", None, None)
+    assert not actions.opened_a_list("Continue", None, None)
+    assert not actions.opened_a_list("Sun 14 February", None, None)
+    assert not actions.opened_a_list("February 14th", None, None)
+    assert actions.opened_a_list("Search flights", {"role": "combobox"}, None)
+    assert not actions.opened_a_list("Fare type", {"expanded": "false"}, {"expanded": "false"})

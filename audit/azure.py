@@ -30,6 +30,12 @@ MAX_WAIT_SECONDS = 60.0
 RETRY_STATUSES = {408, 429, 500, 502, 503, 504}
 RETRY_ERRORS = {"APIConnectionError", "APITimeoutError"}  # by name: openai is an optional import
 LOW_QUOTA_SHARE = 0.1  # report when less than this share of the per-minute token or request limit is left
+MAX_REPORTED_ERRORS = 5  # schema errors quoted back to the model when it is asked again
+REASK_HINT = (
+    "Reply again with JSON that matches the schema exactly: no keys the schema does not list, booleans must be "
+    "true or false (never null unless the schema allows null), and every elementId must be copied exactly as shown "
+    "in square brackets in the accessibility tree, frame number included, like 0-18372."
+)
 
 
 class UnsupportedRequest(ValueError):
@@ -198,6 +204,65 @@ def fill_missing_nulls(value: Any, schema: Any, root: dict[str, Any] | None = No
     return value
 
 
+def drop_unknown_keys(value: Any, schema: Any, root: dict[str, Any] | None = None) -> Any:
+    """Removes keys an object schema forbids (`additionalProperties: false`), at any depth; changes `value` in place.
+
+    Without strict mode gpt-4o sometimes adds a key of its own (an "explanation" next to observe's elements), and
+    Stagehand's check rejects the whole answer for it. Only keys the schema rules out are removed: where extra keys
+    are allowed (Stagehand's extract schemas send `additionalProperties: {}`) they are kept. Nothing is invented.
+    """
+    root = root if root is not None else (schema if isinstance(schema, dict) else {})
+    variants = _variants(schema, root)
+    if isinstance(value, dict):
+        closed = [v for v in variants if v.get("type") in ("object", None) and v.get("additionalProperties") is False]
+        if closed:
+            allowed = set().union(*((v.get("properties") or {}).keys() for v in closed))
+            for key in [k for k in value if k not in allowed]:
+                del value[key]
+        for variant in variants:
+            for key, child in (variant.get("properties") or {}).items():
+                if key in value:
+                    drop_unknown_keys(value[key], child, root)
+    elif isinstance(value, list):
+        for variant in variants:
+            items = variant.get("items")
+            if isinstance(items, dict):
+                for element in value:
+                    drop_unknown_keys(element, items, root)
+    return value
+
+
+def schema_errors(value: Any, schema: Any) -> list[str]:
+    """What is wrong with `value` against `schema`, one line per error ('elements/2/elementId: ...'); [] if it fits.
+
+    Uses jsonschema (part of the azure extra). Without it nothing is checked here and Stagehand's own check decides.
+    """
+    if not isinstance(schema, dict):
+        return []
+    try:
+        import jsonschema  # noqa: PLC0415 - optional extra
+    except ImportError:
+        log.debug("jsonschema is not installed: the model's answers are not checked before Stagehand sees them")
+        return []
+    validator_class = jsonschema.validators.validator_for(schema, default=jsonschema.Draft202012Validator)
+    try:
+        validator = validator_class(schema)
+        errors = sorted(validator.iter_errors(value), key=lambda e: list(e.absolute_path))
+    except jsonschema.exceptions.SchemaError as error:  # a schema we cannot read is left to Stagehand
+        log.debug("Could not check the answer against its schema: %s", error.message)
+        return []
+    return [f"{'/'.join(str(p) for p in e.absolute_path) or '(root)'}: {e.message}" for e in errors]
+
+
+def structured_answer(text: str, schema: Any) -> Any:
+    """The model's JSON answer with the safe repairs made: left-out nullable keys as null, forbidden keys removed."""
+    answer = parse_json(text)
+    if schema is not None:
+        fill_missing_nulls(answer, schema)
+        drop_unknown_keys(answer, schema)
+    return answer
+
+
 def _usage(usage: Any) -> dict[str, int] | None:
     if usage is None:
         return None
@@ -215,12 +280,29 @@ def _usage(usage: Any) -> dict[str, int] | None:
     return result
 
 
-def stagehand_result(response: Any, structured: bool, schema: Any = None) -> dict[str, Any]:
-    """A chat completion as Stagehand's LLM result; a structured answer gets the nulls it left out (see above)."""
+def reply_text(response: Any) -> str:
+    """The text of a chat completion's first choice; raises if the model refused."""
     choice = response.choices[0]
     if getattr(choice.message, "refusal", None):
         raise ValueError(f"Azure OpenAI refused the request: {choice.message.refusal}")
-    text = choice.message.content or ""
+    return str(choice.message.content or "")
+
+
+def add_usage(result: dict[str, Any], earlier: Any) -> dict[str, Any]:
+    """`result` with an earlier call's tokens added in, so a re-asked answer is billed for both calls."""
+    first = _usage(earlier)
+    if not first:
+        return result
+    usage = dict(result.get("usage") or {})
+    for key, tokens in first.items():
+        usage[key] = usage.get(key, 0) + tokens
+    return {**result, "usage": usage}
+
+
+def stagehand_result(response: Any, structured: bool, schema: Any = None) -> dict[str, Any]:
+    """A chat completion as Stagehand's LLM result; a structured answer gets the safe repairs (see above)."""
+    choice = response.choices[0]
+    text = reply_text(response)
     result: dict[str, Any] = {"role": "assistant", "content": {"type": "text", "text": text}}
     if choice.finish_reason:
         result["stop_reason"] = choice.finish_reason
@@ -228,10 +310,7 @@ def stagehand_result(response: Any, structured: bool, schema: Any = None) -> dic
     if usage:
         result["usage"] = usage
     if structured:
-        answer = parse_json(text)
-        if schema is not None:
-            fill_missing_nulls(answer, schema)
-        return {**result, "output_format": "json_schema", "structured_content": answer}
+        return {**result, "output_format": "json_schema", "structured_content": structured_answer(text, schema)}
     return {**result, "output_format": "text"}
 
 
@@ -299,6 +378,10 @@ class AzureLLM:
 
     Throttles (429), server errors and dropped connections are retried here rather than inside the OpenAI client
     (which retries silently), so each one is printed with the endpoint's message and the quota it reports.
+
+    A structured answer is checked against the request's schema before Stagehand sees it (Stagehand's own check
+    ends the step on any mismatch). After the safe repairs, one that still does not fit is sent back to the model
+    once, with the errors; the second answer is returned whatever it is, and Stagehand's check has the last word.
     """
 
     def __init__(self, client: Any, deployment: str, sleep: Any = asyncio.sleep) -> None:
@@ -354,10 +437,35 @@ class AzureLLM:
     async def __call__(self, params: Any) -> dict[str, Any]:
         request = as_dict(params)
         options = completion_options(request)
-        response = await self._complete(chat_messages(request), options)
+        messages = chat_messages(request)
+        response = await self._complete(messages, options)
         format_ = options.get("response_format")
-        schema = format_["json_schema"]["schema"] if format_ else None
-        return stagehand_result(response, structured=format_ is not None, schema=schema)
+        if format_ is None:
+            return stagehand_result(response, structured=False)
+        schema = format_["json_schema"]["schema"]
+        text = reply_text(response)
+        errors = schema_errors(structured_answer(text, schema), schema)
+        if not errors:
+            return stagehand_result(response, structured=True, schema=schema)
+        name = format_["json_schema"].get("name", "answer")
+        log.warning(
+            f"  Azure OpenAI call {self.calls}: the {name} answer does not fit its schema "
+            f"({'; '.join(errors[:MAX_REPORTED_ERRORS])}); asking once more"
+        )
+        again = [
+            *messages,
+            {"role": "assistant", "content": text},
+            {
+                "role": "user",
+                "content": "Your JSON did not match the schema: "
+                f"{'; '.join(errors[:MAX_REPORTED_ERRORS])}. {REASK_HINT}",
+            },
+        ]
+        retried = await self._complete(again, options)
+        result = add_usage(stagehand_result(retried, structured=True, schema=schema), response.usage)
+        if still := schema_errors(result["structured_content"], schema):
+            log.warning(f"  Azure OpenAI call {self.calls}: the second {name} answer does not fit either ({still[0]})")
+        return result
 
 
 @contextlib.asynccontextmanager

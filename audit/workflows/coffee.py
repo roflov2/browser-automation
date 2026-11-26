@@ -519,7 +519,8 @@ async def add_product_to_cart(stagehand: Stagehand, page: Page, product: Product
             step = await llm_act(
                 stagehand,
                 f"Change the package size or weight selector (currently '{state.selected_size}') to {target}.",
-                follow_up=True,  # a custom dropdown needs opening before the option can be picked
+                follow_up=True,
+                page=page,  # a custom dropdown needs opening before the option can be picked
             )
             log.info(f"    Size selection: {step.description}")
             await settle(page, 800)
