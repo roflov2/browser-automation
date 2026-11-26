@@ -1016,13 +1016,43 @@ class SelectionSite:
     NEXT: ClassVar[dict] = {"results": "fares", "fares": "trip", "trip": "passengers"}
     STEP: ClassVar[dict] = {"results": 1, "fares": 2, "trip": 3}
 
-    def __init__(self, broken=(), offers=None, after=None, slow=0, fails=()):
+    def __init__(self, broken=(), offers=None, after=None, slow=0, fails=(), select=None, escape_closes=False):
         """`after`: the page Continue leads to; `slow`: page reads before a click shows; `fails`: steps whose
-        click raises (the element re-rendered) although it takes effect."""
+        click raises (the element re-rendered) although it takes effect. `select`: the fare panel's SELECT
+        buttons are found in code, and these clicks on them add the fare ('mouse', 'dom'; None: no buttons
+        found, so the model is asked). `escape_closes`: Escape closes the open fare panel."""
         self.screen, self.broken, self.offers = "results", set(broken), offers or {}
         self.next = {**self.NEXT, "trip": after or "passengers"}
         self.slow, self.fails, self.pending = slow, set(fails), None
+        self.select, self.escape_closes = select, escape_closes
         self.observed, self.clicked, self.extracted, self.reads = [], [], [], 0
+        self.events = []
+
+    # The browser page select_flight talks to directly.
+    async def key_press(self, key, delay=None):
+        self.events.append(("key", key))
+        if self.escape_closes and self.screen == "fares":
+            self.screen = "results"
+
+    async def url(self):
+        return self.PAGES[self.screen]["url"]
+
+    async def click_at(self, page, x, y):
+        self.events.append(("click", x, y))
+        if self.screen == "fares" and "mouse" in (self.select or ()):
+            self.screen = "trip"
+
+    def fare_buttons(self):
+        """The fare panel's buttons as JS_FARE_BUTTONS lists them: a hidden duplicate, Red e-Deal's SELECT, Flex's
+        SELECT, the points fare's LOG IN TO SELECT."""
+        cell = {"visible": True, "box": [100, 500, 120, 40], "in_view": True, "hit": True}
+        return [
+            {**cell, "i": 0, "text": "SELECT", "column": "ECONOMY RED E-DEAL $529 SELECT", "visible": False,
+             "box": [0, 0, 0, 0], "in_view": False, "hit": False},
+            {**cell, "i": 1, "text": "SELECT", "column": "ECONOMY RED E-DEAL $529 SELECT 1 left at this price"},
+            {**cell, "i": 2, "text": "SELECT", "column": "ECONOMY FLEX $639 SELECT", "box": [300, 500, 120, 40]},
+            {**cell, "i": 3, "text": "LOG IN TO SELECT", "column": "ECONOMY CLASSIC PLUS 50,400 PTS + $77"},
+        ]  # fmt: skip
 
     async def observe(self, instruction, **options):
         step = self.STEP.get(self.screen)
@@ -1052,10 +1082,11 @@ class SelectionSite:
         self.extracted.append(schema.__name__)
         if schema is qantas.FarePanel:
             return SimpleNamespace(data=qantas.FarePanel(fares=[
-                qantas.FareOption(fare_name="Economy Flex", price="$995"),
-                qantas.FareOption(fare_name="Economy Saver", price="$529")]))  # fmt: skip
+                qantas.FareOption(fare_name="ECONOMY FLEX", price="$639"),
+                qantas.FareOption(fare_name="ECONOMY RED E-DEAL", price="$529"),
+                qantas.FareOption(fare_name="ECONOMY CLASSIC PLUS", price="50,400 PTS + $77")]))  # fmt: skip
         return SimpleNamespace(data=qantas.SelectedFare(
-            flight_selected=True, flight="QF2310", fare_name="Economy Saver", fare_price="$529",
+            flight_selected=True, flight="QF2310", fare_name="Economy Red e-Deal", fare_price="$529",
             running_total="$529 AUD", subtotal="$529 AUD"))  # fmt: skip
 
     async def js(self, page, fn, arg=None, default=None, lib=""):
@@ -1064,6 +1095,19 @@ class SelectionSite:
             page = dict(self.PAGES[self.screen])
             self.swap()
             return page
+        if fn is qantas.JS_FARE_BUTTONS:
+            return self.fare_buttons() if self.select is not None and self.screen == "fares" else default
+        if fn is qantas.JS_MARK_FARE_SELECT:
+            self.events.append(("mark", arg))
+            box = next(b["box"] for b in self.fare_buttons() if b["i"] == arg)
+            return {"x": box[0] + box[2] / 2, "y": box[1] + box[3] / 2}
+        if fn is qantas.JS_DOM_CLICK:
+            self.events.append(("dom_click", arg))
+            if self.screen == "fares" and "dom" in (self.select or ()):
+                self.screen = "trip"
+            return True
+        if fn is qantas.JS_DIAGNOSTICS:
+            return {"url": self.PAGES[self.screen]["url"], "messages": []}
         return default
 
     async def fingerprint(self, page):
@@ -1078,9 +1122,10 @@ def select(monkeypatch, tmp_path, site):
     monkeypatch.setattr(qantas, "fingerprint", site.fingerprint)
     for name in ("settle", "shot", "try_act", "pause"):
         monkeypatch.setattr(qantas, name, nothing)
+    monkeypatch.setattr(qantas, "click_at", site.click_at)
     flight = qantas.Flight(flight_number="QF2310", departs="12:35", arrives="16:00", stops=0, duration=None,
                            price="$529", sold_out=False, fares=[])  # fmt: skip
-    return asyncio.run(qantas.select_flight(site, object(), flight, tmp_path))
+    return asyncio.run(qantas.select_flight(site, site, flight, tmp_path))
 
 
 def test_qantas_selects_the_flight_in_three_checked_steps(monkeypatch, tmp_path):
@@ -1092,7 +1137,7 @@ def test_qantas_selects_the_flight_in_three_checked_steps(monkeypatch, tmp_path)
     assert site.extracted == ["FarePanel", "SelectedFare"]
     assert item["status"] == "added"
     assert (item["selected_variant"], item["selected_price"], item["cart_total_display"]) == (
-        "Economy Saver", 529, "$529 AUD")  # fmt: skip
+        "Economy Red e-Deal", 529, "$529 AUD")  # fmt: skip
     assert [(s["step"], s["passed"], s["selector"]) for s in item["selection_steps"]] == [
         (1, True, "xpath=/step1"), (2, True, "xpath=/step2"), (3, True, "xpath=/step3")]  # fmt: skip
 
@@ -1437,3 +1482,114 @@ def test_qantas_walk_tells_the_model_to_click_accept_when_code_could_not(monkeyp
     assert run.steps[0]["action"].startswith("clicked the Continue button")  # what the model clicked is kept
     assert " | then: " in run.steps[0]["action"]  # each repeat on the same page appended
     assert run.steps[0]["selector"] == "xpath=/html/body/nav/button"
+
+
+# --- qantas: SELECT on the fare is clicked in code ----------------------------------------------------
+def test_qantas_picks_the_visible_select_in_the_chosen_fare_s_column():
+    buttons = SelectionSite().fare_buttons()
+    assert qantas.pick_fare_select(buttons, "ECONOMY RED E-DEAL")["i"] == 1  # not the hidden copy (i=0)
+    assert qantas.pick_fare_select(buttons, "Economy Flex")["i"] == 2
+    assert qantas.pick_fare_select(buttons, "ECONOMY CLASSIC PLUS") is None  # LOG IN TO SELECT is never taken
+    covered = [{**b, "hit": False} if b["i"] == 1 else b for b in buttons]  # under the sticky footer
+    assert qantas.pick_fare_select(covered, "RED E-DEAL") is None
+    off_screen = [{**b, "in_view": False} if b["i"] == 1 else b for b in buttons]
+    assert qantas.pick_fare_select(off_screen, "red e-deal") is None
+    assert qantas.fare_brand("ECONOMY RED E-DEAL").search("Economy Red e-Deal $529")
+    assert not qantas.fare_brand("ECONOMY RED E-DEAL").search("ECONOMY FLEX $639")
+
+
+def test_qantas_step_2_clicks_select_in_code_without_the_model(monkeypatch, tmp_path):
+    site = SelectionSite(select=("mouse",))
+    item = select(monkeypatch, tmp_path, site)
+    assert item["status"] == "added"
+    assert site.observed == [1, 3]  # the model picked no element for step 2
+    assert ("mark", 1) in site.events and ("click", 160.0, 520.0) in site.events
+    assert not any(e[0] == "dom_click" for e in site.events)
+    step2 = next(s for s in item["selection_steps"] if s["step"] == 2)
+    assert (step2["attempt"], step2["passed"], step2["code_click"], step2["button_text"]) == (1, True, True, "SELECT")
+    assert step2["box"] == [100, 500, 120, 40] and step2["element_from_point"] is True
+    assert step2["selector"] == qantas.FARE_SELECT_MARK
+
+
+def test_qantas_step_2_falls_back_to_a_dom_click_on_the_same_button(monkeypatch, tmp_path):
+    site = SelectionSite(select=("dom",))
+    item = select(monkeypatch, tmp_path, site)
+    assert item["status"] == "added"
+    assert ("dom_click", "data-audit-fare-select") in site.events
+    step2 = next(s for s in item["selection_steps"] if s["step"] == 2)
+    assert (step2["attempt"], step2["passed"], step2["dom_click"]) == (1, True, True)
+
+
+def test_qantas_step_2_asks_the_model_only_when_no_button_is_found(monkeypatch, tmp_path):
+    site = SelectionSite()  # JS_FARE_BUTTONS finds nothing
+    item = select(monkeypatch, tmp_path, site)
+    assert site.observed == [1, 2, 3]
+    assert next(s for s in item["selection_steps"] if s["step"] == 2)["code_click"] is False
+
+
+def test_qantas_step_2_retry_starts_clean_and_reports_why(monkeypatch, tmp_path):
+    site = SelectionSite(select=(), escape_closes=True)  # the site ignores every click on SELECT
+    with pytest.raises(qantas.SelectionFailed, match="Fare not added to trip") as failed:
+        select(monkeypatch, tmp_path, site)
+    assert ("key", "Escape") in site.events
+    assert site.observed == [1, 1]  # Escape closed the panel, so step 1 ran again to reopen it; no model SELECT
+    marks = [e for e in site.events if e[0] == "mark"]
+    assert marks == [("mark", 1), ("mark", 1)]  # the retry clicked the same button, found again
+    attempts = [s for s in failed.value.item["selection_steps"] if s["step"] == 2]
+    assert attempts[1]["escape"] is True and attempts[1]["reopened"] is True
+    diagnostics = failed.value.item["step2_diagnostics"]
+    assert diagnostics["url"] == "https://book.qantas.test/flights" and diagnostics["console"] == []
+
+
+def test_qantas_console_messages_are_read_from_stagehand_events():
+    event = SimpleNamespace(params=SimpleNamespace(root={"type": "error", "args": [
+        {"type": "string", "value": "Failed to add fare"}, {"type": "object", "description": "Error: 409"}]}))  # fmt: skip
+    assert qantas.console_text(event) == "error: Failed to add fare Error: 409"
+    assert qantas.console_text(object()) == "log: "
+
+
+def test_qantas_tries_the_next_cheapest_flight_when_a_fare_cannot_be_added(monkeypatch, tmp_path):
+    tried = []
+
+    async def fake_select_flight(stagehand, page, flight, out):
+        tried.append(flight.departs)
+        item = qantas.new_item(flight.departs, flight.price)
+        if flight.departs == "12:35":
+            item["status"] = "add_failed"
+            raise qantas.SelectionFailed(2, "Fare not added to trip: no 'Your trip' summary", item)
+        item["status"] = "added"
+        return item
+
+    def flight(departs, price):
+        return qantas.Flight(flight_number=None, departs=departs, arrives=None, stops=0, duration=None, price=price,
+                             sold_out=False, fares=[])  # fmt: skip
+
+    monkeypatch.setattr(qantas, "select_flight", fake_select_flight)
+    flights = qantas.rank_flights([flight("15:00", "$569"), flight("12:35", "$529"), flight("18:25", "$529"),
+                                   flight("19:00", "16,600 PTS + $58")])  # fmt: skip
+    assert [f.departs for f in flights] == ["12:35", "18:25", "15:00"]
+    run = SiteResult(site="s", out_dir=tmp_path)
+    item = asyncio.run(qantas.select_a_flight(object(), object(), flights, run, "per adult"))
+    assert tried == ["12:35", "18:25"] and item["name"] == "18:25"
+    assert [(i["name"], i["status"]) for i in run.items] == [("12:35", "add_failed"), ("18:25", "added")]
+    assert [i["name"] for i in run.added] == ["18:25"]
+
+
+def test_qantas_gives_up_after_the_second_flight_and_on_other_steps(monkeypatch, tmp_path):
+    async def always_fails(stagehand, page, flight, out):
+        raise qantas.SelectionFailed(2 if flight.departs != "07:00" else 3, "nope", qantas.new_item("x", None))
+
+    def flight(departs, price):
+        return qantas.Flight(flight_number=None, departs=departs, arrives=None, stops=0, duration=None, price=price,
+                             sold_out=False, fares=[])  # fmt: skip
+
+    monkeypatch.setattr(qantas, "select_flight", always_fails)
+    run = SiteResult(site="s", out_dir=tmp_path)
+    flights = [flight("12:35", "$529"), flight("18:25", "$529"), flight("15:00", "$569")]
+    with pytest.raises(qantas.SelectionFailed):
+        asyncio.run(qantas.select_a_flight(object(), object(), flights, run, None))
+    assert len(run.items) == 2  # the cheapest and one more, never a third
+    run = SiteResult(site="s", out_dir=tmp_path)
+    with pytest.raises(qantas.SelectionFailed):  # step 3 (Continue) failing is not the fare's fault: no next flight
+        asyncio.run(qantas.select_a_flight(object(), object(), [flight("07:00", "$1"), *flights], run, None))
+    assert len(run.items) == 1
