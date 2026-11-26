@@ -1622,8 +1622,8 @@ class PassengerPage:
             return {"text": self.label, **({"x": 1300, "y": 960} if arg["mark"] else {})}
         if fn is qantas.JS_SELECTION_PAGE:
             return {"url": f"https://book.qantas.test/{self.screen}", "heading": self.screen.title()}
-        if fn in (qantas.JS_INSURANCE, qantas.JS_ACCEPT):
-            return default  # no insurance question, no fare rules
+        if fn in (qantas.JS_INSURANCE, qantas.JS_ACCEPT, qantas.JS_ELEMENT_LABEL):
+            return default  # no insurance question, no fare rules; no label read, so the description is checked
         if fn is qantas.JS_DOM_CLICK:
             self.events.append(("dom_click", arg))
             return True
@@ -1770,7 +1770,8 @@ def test_qantas_the_model_is_told_confirm_details_is_allowed():
     for prompt in (qantas.SAFETY_PROMPT, qantas.BOOKING_GOAL):
         assert "'Confirm details' (passenger details) and 'Accept' (fare rules) are allowed" in prompt
     assert "does not pay" in qantas.CONFIRM_DETAILS
-    assert qantas.PASSENGER_NEVER_CLICK.search("Confirm and pay button")
+    assert qantas.PASSENGER_NEVER_LABEL.search("Confirm and pay")
+    assert not qantas.PASSENGER_NEVER_LABEL.search("CONFIRM DETAILS")
     assert not qantas.PASSENGER_NEVER_CLICK.search("CONFIRM DETAILS button in the sticky footer")
 
 
@@ -1779,10 +1780,15 @@ def test_qantas_the_model_is_told_confirm_details_is_allowed():
     "description",
     ["Skip to main content link", "Continue link in the skip links", "UPGRADE MY FLIGHTS button",
      "UPDATE SEARCH button", "SEARCH VEHICLES button", "SELECT HOTEL button", "Add car hire button",
-     "USE CASH button", "Pay now button", "Book now button", "Confirm booking button", "Purchase button"],
+     "USE CASH button"],
 )  # fmt: skip
-def test_qantas_booking_steps_refuse_skip_links_upsells_and_paying(description):
+def test_qantas_booking_steps_refuse_skip_links_and_upsells(description):
     assert qantas.BOOKING_NEVER_CLICK.search(description)
+
+
+@pytest.mark.parametrize("label", ["Pay now", "PAY WITH CARD", "Book now", "Confirm booking", "Purchase"])
+def test_qantas_booking_steps_refuse_a_label_that_pays(label):
+    assert qantas.BOOKING_NEVER_LABEL.search(label)
 
 
 @pytest.mark.parametrize(
@@ -1812,6 +1818,61 @@ def _observing(*candidates):
             return SimpleNamespace(data=SimpleNamespace(success=True, action_description=action.description))
 
     return Stagehand(), acted
+
+
+def _labelled(monkeypatch, labels):
+    """click_one's page reads: each selector's element label from `labels` (missing: the selector does not
+    resolve)."""
+
+    async def fake_js(page, fn, arg=None, default=None, lib=""):
+        assert fn is qantas.JS_ELEMENT_LABEL
+        return labels.get(arg, default)
+
+    monkeypatch.setattr(qantas, "js", fake_js)
+    return object()  # the page
+
+
+ACCEPT_PROSE = ("Red ACCEPT button at the very bottom of the page under 'Fare rules', necessary for accepting the "
+                "conditions but not confirming a purchase.")  # fmt: skip
+ACCEPT_XPATH = "xpath=/html/body/ng-component[1]/div[3]/page-bottom-modal[1]/div[2]/div[2]/div[1]/button[2]"
+
+
+@pytest.mark.parametrize("refuse_label", [qantas.BOOKING_NEVER_LABEL, qantas.PASSENGER_NEVER_LABEL])
+def test_qantas_click_one_judges_paying_by_the_element_s_label_not_the_model_s_prose(monkeypatch, refuse_label):
+    page = _labelled(monkeypatch, {ACCEPT_XPATH: "ACCEPT >"})
+    stagehand, acted = _observing((ACCEPT_PROSE, ACCEPT_XPATH))
+    done = asyncio.run(qantas.click_one(stagehand, "Click ACCEPT", qantas.BOOKING_NEVER_CLICK, page=page,
+                                        refuse_selector=qantas.BOOKING_NEVER_SELECT,
+                                        refuse_label=refuse_label))  # fmt: skip
+    assert done.success and acted == [ACCEPT_XPATH]
+
+
+@pytest.mark.parametrize("label", ["PAY WITH CARD", "Pay now"])
+@pytest.mark.parametrize("description", ["Red CONTINUE button in the sticky footer; it does not pay", "ACCEPT button"])
+def test_qantas_click_one_refuses_a_paying_label_however_it_is_described(monkeypatch, label, description):
+    page = _labelled(monkeypatch, {"xpath=/html/body/navigation-ribbon[1]/button[2]": label})
+    stagehand, acted = _observing((description, "xpath=/html/body/navigation-ribbon[1]/button[2]"))
+    for refuse, refuse_label in ((qantas.BOOKING_NEVER_CLICK, qantas.BOOKING_NEVER_LABEL),
+                                 (qantas.PASSENGER_NEVER_CLICK, qantas.PASSENGER_NEVER_LABEL)):  # fmt: skip
+        done = asyncio.run(qantas.click_one(stagehand, "Click CONTINUE", refuse, page=page, refuse_label=refuse_label))
+        assert not done.success and done.description.startswith("refused") and label in done.description
+    assert acted == []
+
+
+def test_qantas_click_one_falls_back_to_the_description_when_the_label_cannot_be_read(monkeypatch):
+    page = _labelled(monkeypatch, {})  # the selector does not resolve
+    stagehand, acted = _observing(("Pay now button", "xpath=/gone"))
+    done = asyncio.run(qantas.click_one(stagehand, "Click CONTINUE", qantas.BOOKING_NEVER_CLICK, page=page,
+                                        refuse_label=qantas.BOOKING_NEVER_LABEL))  # fmt: skip
+    assert not done.success and done.description == "refused: Pay now button" and acted == []
+
+
+def test_qantas_click_one_still_refuses_upsells_by_label_or_description(monkeypatch):
+    page = _labelled(monkeypatch, {"xpath=/a": "UPGRADE MY FLIGHTS", "xpath=/b": "Continue"})
+    stagehand, acted = _observing(("Red button that moves on", "xpath=/a"), ("Join Qantas Frequent Flyer", "xpath=/b"))
+    done = asyncio.run(qantas.click_one(stagehand, "Click CONTINUE", qantas.PASSENGER_NEVER_CLICK, page=page,
+                                        refuse_label=qantas.PASSENGER_NEVER_LABEL))  # fmt: skip
+    assert not done.success and acted == []
 
 
 def test_qantas_click_one_skips_a_refused_candidate_for_the_next_acceptable_one():

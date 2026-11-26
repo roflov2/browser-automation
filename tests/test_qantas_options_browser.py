@@ -109,3 +109,28 @@ def test_confirm_details_inside_the_bottom_modal_is_clicked_in_code(monkeypatch)
     assert found == {"text": "CONFIRM DETAILS"}  # the open modal's, over the footer's CONTINUE under it
     assert clicked == "CONFIRM DETAILS"
     assert heading == "Seats"  # neither the footer, the cart panel nor EDIT was clicked
+
+
+@pytest.mark.browser
+def test_the_element_label_is_read_by_the_model_s_selector():
+    async def steps(stagehand, page):
+        modal = "xpath=/html/body/page-bottom-modal[1]/div[1]/div[1]/div[1]/button[2]"
+        return (
+            await qantas.element_label(page, modal),
+            await qantas.element_label(page, "#cookie-accept"),
+            await qantas.element_label(page, "xpath=/html/body/div[9]/button[1]"),  # resolves to nothing
+            await qantas.element_label(page, "xpath=/html/body/[broken"),
+        )
+
+    assert _run(steps, "review.html") == ("ACCEPT >", "Accept", None, None)
+
+
+@pytest.mark.browser
+def test_an_icon_button_s_label_is_its_aria_label():
+    async def steps(stagehand, page):
+        await page.evaluate(
+            "document.body.insertAdjacentHTML('beforeend', '<button id=\"i\" aria-label=\"Pay now\"></button>')"
+        )
+        return await qantas.element_label(page, "xpath=//button[@id='i']")
+
+    assert _run(steps, "review.html") == "Pay now"

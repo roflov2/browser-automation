@@ -1453,6 +1453,37 @@ async def wait_for_check(page: Page, check: Callable[[dict], bool], ms: int) -> 
     return state
 
 
+# The candidate element's own label, read from the page by the selector the model returned: its visible text, or
+# failing that its aria-label or value. Null if the selector does not resolve (or the element has no label).
+JS_ELEMENT_LABEL = r"""selector => {
+    let el = null;
+    try {
+        if (/^xpath=/i.test(selector) || selector.startsWith('/')) {
+            el = document.evaluate(selector.replace(/^xpath=/i, ''), document, null,
+                                   XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue;
+        } else {
+            el = document.querySelector(selector.replace(/^css=/i, ''));
+        }
+    } catch (e) {
+        return null;
+    }
+    if (!el || el.nodeType !== 1) return null;
+    return clean(el.innerText || el.textContent) || clean(el.getAttribute('aria-label'))
+        || clean(typeof el.value === 'string' ? el.value : '') || null;
+}"""
+
+
+async def element_label(page: Page | None, selector: str) -> str | None:
+    """The element's own text (or aria-label, or value) by its selector; None if it cannot be read."""
+    if page is None or not selector:
+        return None
+    try:
+        found = await js(page, JS_ELEMENT_LABEL, selector, default=None)
+    except BROWSER_ERRORS:  # the page went away mid-read: judged by the description instead
+        return None
+    return str(found) if isinstance(found, str) and found.strip() else None
+
+
 async def click_one(
     stagehand: Stagehand,
     instruction: str,
@@ -1461,6 +1492,7 @@ async def click_one(
     *,
     page: Page | None = None,
     refuse_selector: re.Pattern[str] | None = None,
+    refuse_label: re.Pattern[str] | None = None,
     avoid: str | None = None,
 ) -> Acted:
     """Observe and click the element the instruction names, unless the model returned a forbidden control.
@@ -1470,24 +1502,32 @@ async def click_one(
     `refuse_selector`, or whose selector is `avoid` (the click that just changed nothing) is never acted on; the
     first acceptable result is clicked, and if there is none it counts as a miss. With `page`, an act that fails
     after the page changed is reported as done (the click took effect).
+
+    `refuse_label` (anything that pays) is checked against the element's own label read from the page, not the
+    model's prose: a description such as "accepts the conditions, not confirming a purchase" must not refuse an
+    ACCEPT, and "PAY WITH CARD" is refused however it is described. `refuse` is checked against that label too.
+    When the label cannot be read (the selector does not resolve), both are checked against the description.
     """
     found = await stagehand.observe(instruction + " Return nothing if there is no such element.")
     candidates = list(found.data or [])
     if not candidates:
         return Acted(False, "no matching element found")
 
-    def why_not(candidate: object) -> str | None:
+    async def why_not(candidate: object) -> str | None:
         description = str(getattr(candidate, "description", "") or "")
         selector = str(getattr(candidate, "selector", "") or "")
-        if refuse.search(description):
+        label = await element_label(page, selector) if refuse_label is not None else None
+        if refuse.search(description) or (label is not None and refuse.search(label)):
             return description
+        if refuse_label is not None and refuse_label.search(description if label is None else label):
+            return description if label is None else f"{description} (labelled {label!r})"
         if refuse_selector is not None and refuse_selector.search(selector):
             return f"{description} (selector {selector})"
         if avoid and selector == avoid:
             return f"{description} (the same click changed nothing last turn)"
         return None
 
-    reasons = [why_not(candidate) for candidate in candidates]
+    reasons = [await why_not(candidate) for candidate in candidates]
     chosen = next((c for c, reason in zip(candidates, reasons, strict=True) if reason is None), None)
     if chosen is None:
         first = candidates[0]
@@ -2008,20 +2048,27 @@ JS_FOOTER_FORWARD = r"""({ mark, forward, never }) => {
 }"""
 CONTINUE_MARK = "[data-audit-continue]"
 # What the model may never click on the passenger details page: the loyalty sign-up, the travel arranger and
-# phone-number extras, and the "Red Email" marketing box, on top of the controls never clicked anywhere.
+# phone-number extras, and the "Red Email" marketing box, on top of the controls never clicked anywhere. Checked
+# against the model's description and the element's label (click_one); a false refusal costs only a turn.
 PASSENGER_NEVER_CLICK = re.compile(
-    rf"{NEVER_CLICK.pattern}|\bjoin\b|sign ?up|travel arranger|red email|multiple phone|{NEVER_FORWARD.pattern}",
+    rf"{NEVER_CLICK.pattern}|\bjoin\b|sign ?up|travel arranger|red email|multiple phone",
     re.IGNORECASE,
 )
+# Anything that pays, on the passenger details page: checked against the element's own label only (its
+# description when the label cannot be read), so prose such as "does not pay" refuses nothing.
+PASSENGER_NEVER_LABEL = NEVER_FORWARD
 # What the model may never click on any other booking step (the Options page above all): the "skip to" links,
-# the upsells (upgrade, hotel, car hire, Use cash), "Update search", and anything that pays, on top of the
-# controls never clicked anywhere. "Continue to payment" is allowed: the run stops on the payment page.
-BOOKING_PURCHASE = r"\bpay\b|purchase|book now|confirm (and pay|booking)"
+# the upsells (upgrade, hotel, car hire, Use cash) and "Update search", on top of the controls never clicked
+# anywhere. Checked against the description and the label, like PASSENGER_NEVER_CLICK.
 BOOKING_NEVER_CLICK = re.compile(
     rf"{NEVER_CLICK.pattern}|skip (to|links?)\b|upgrade my flights|update search|search vehicles|use cash|select hotel"
-    rf"|add (a )?(hotel|car)|{BOOKING_PURCHASE}",
+    r"|add (a )?(hotel|car)",
     re.IGNORECASE,
 )
+# Anything that pays, on any other booking step, checked against the element's label only (like
+# PASSENGER_NEVER_LABEL). "Continue to payment" is allowed: the run stops on the payment page.
+BOOKING_PURCHASE = r"\bpay\b|purchase|book now|confirm (and pay|booking)"
+BOOKING_NEVER_LABEL = re.compile(BOOKING_PURCHASE, re.IGNORECASE)
 # A selector the model may never click on a booking step: the skip links, and anything in a top-level <nav>
 # (the page header's links; the footer's CONTINUE is clicked in code).
 BOOKING_NEVER_SELECT = re.compile(r"skip-links|/nav\[", re.IGNORECASE)
@@ -2327,7 +2374,14 @@ async def next_booking_action(
     # The sign-up, marketing and upsell controls are refused, not just discouraged.
     refuse = PASSENGER_NEVER_CLICK if passengers else BOOKING_NEVER_CLICK
     step = await click_one(
-        stagehand, instruction, refuse, target=chosen, page=page, refuse_selector=BOOKING_NEVER_SELECT, avoid=avoid
+        stagehand,
+        instruction,
+        refuse,
+        target=chosen,
+        page=page,
+        refuse_selector=BOOKING_NEVER_SELECT,
+        refuse_label=PASSENGER_NEVER_LABEL if passengers else BOOKING_NEVER_LABEL,
+        avoid=avoid,
     )
     log.info(f"    {step.description}")
     await settle(page, SETTLE_MS)
