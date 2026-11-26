@@ -337,9 +337,12 @@ def test_qantas_reuses_the_step_when_the_screen_did_not_change(monkeypatch, tmp_
 class TripWidget:
     """The page's trip-type combobox, faked at the js()/click_at() boundary. None: the page has none."""
 
-    def __init__(self, trip="return", *, ignores_mouse=False):
+    def __init__(self, trip="return", *, ignores_mouse=False, results=False, route=None, points=None):
         self.trip, self.open, self.ignores_mouse = trip, False, ignores_mouse
         self.events = []
+        # results: page_shows_results answers (a bool, or a list read in order, the last repeating);
+        # route: the "<City> to <City>" subheading; points: the Rewards switch (None: no switch, else on/off)
+        self.results, self.route, self.points = results, route, points
 
     async def js(self, page, fn, arg=None, default=None, lib=""):
         if fn is qantas.JS_TRIP_TYPE:
@@ -359,12 +362,28 @@ class TripWidget:
             qantas.JS_SCROLL_DATES,
         ):
             return default  # no date control unless a test fakes it
+        if fn in (qantas.JS_RESULTS_PAGE, qantas.JS_RESULTS_ROUTE, qantas.JS_POINTS_SWITCH):
+            return self.results_page(fn, default)
         if fn is qantas.JS_DOM_CLICK:
             self.events.append(("dom_click", arg))
             if arg == "data-audit-trip-option" and self.open:
                 self.trip, self.open = "one_way", False
             return True
         raise AssertionError(f"unexpected script {fn[:40]!r}")
+
+    def results_page(self, fn, default):
+        if fn is qantas.JS_RESULTS_PAGE:
+            self.events.append("results?")
+            if isinstance(self.results, list):
+                return self.results.pop(0) if len(self.results) > 1 else self.results[0]
+            return self.results
+        if fn is qantas.JS_RESULTS_ROUTE:
+            return self.route or default
+        if self.points is None:  # JS_POINTS_SWITCH
+            return {"found": False, "on": False}
+        was_on, self.points = self.points, False
+        self.events.append(("points_off", was_on))
+        return {"found": True, "on": was_on}
 
     async def click_at(self, page, x, y):
         self.events.append(("click", x, y))
@@ -395,10 +414,16 @@ class SearchPage:
         self.keys.append(f"type:{text}")
 
 
-def _search(monkeypatch, *, states, selectors, widget=None, description="Trip Type combobox", page=None):
+def _search(monkeypatch, *, states, selectors, widget=None, description="Trip Type combobox", page=None, waits=None):
     """Run qantas.search_flights with scripted SearchState reads and the controls the model acts on, in order."""
     reads, picks = iter(states), iter(selectors)
     calls = []
+    waits = [] if waits is None else waits
+
+    async def fake_wait_for_render(page, seconds=20):
+        waits.append(seconds)
+        return True
+
     widget = widget or TripWidget(None)
 
     class Stagehand:
@@ -418,6 +443,7 @@ def _search(monkeypatch, *, states, selectors, widget=None, description="Trip Ty
     monkeypatch.setattr(qantas, "js", widget.js)
     monkeypatch.setattr(qantas, "click_at", widget.click_at)
     monkeypatch.setattr(qantas, "dismiss_popups", nothing)
+    monkeypatch.setattr(qantas, "wait_for_render", fake_wait_for_render)
     trip = qantas.Trip("BNE", "PER", qantas.date(2027, 2, 14))
     return calls, asyncio.run(qantas.search_flights(Stagehand(), page or SearchPage(), trip))
 
@@ -515,6 +541,66 @@ def test_wrong_results():
     assert qantas.wrong_results(shown, BNE_PER, normal) is None
     assert qantas.wrong_results(_form(origin=SYD), BNE_PER, normal) == f"origin shows '{SYD}', not BNE"
     assert "flight-deals page" in qantas.wrong_results(shown, BNE_PER, DEALS_URL)
+    # The results page has no form: the model reads the cities from its heading ("Brisbane to Perth").
+    cities = _form(on_results_page=True, origin="Brisbane", destination="Perth")
+    assert qantas.wrong_results(cities, BNE_PER, normal) is None
+    assert qantas.wrong_results(_form(origin="brisbane (BNE)"), BNE_PER, normal) is None
+    assert qantas.wrong_results(_form(origin="Sydney"), BNE_PER, normal) == "origin shows 'Sydney', not BNE"
+    assert qantas.wrong_results(_form(destination="Perth"), BNE_PER, normal) is None
+    unknown = qantas.Trip("BNE", "MKY", qantas.date(2027, 2, 14))  # Mackay: not in the map, so no city is guessed
+    assert qantas.wrong_results(_form(destination="Mackay"), unknown, normal) == "destination shows 'Mackay', not MKY"
+    assert qantas.wrong_results(_form(destination="Mackay (MKY)"), unknown, normal) is None
+    assert not qantas.shows_airport("Perthshire", "PER")  # whole words only
+
+
+def test_qantas_search_takes_the_results_page_from_the_page_itself(monkeypatch):
+    """The page shows flights: no model action, no restart, even though the model saw neither form nor results."""
+    widget = TripWidget(None, results=True, route={"origin": "Brisbane", "destination": "Perth"})
+    page = SearchPage()
+    nothing = _form(form_visible=False, reason="nothing visible")
+    calls, _ = _search(monkeypatch, states=[nothing], selectors=[], widget=widget, page=page)
+    assert calls == [] and page.visited == []
+
+
+def test_qantas_search_accepts_the_route_the_results_page_shows(monkeypatch):
+    # The model reads "Brisbane" / "Perth" on the results page; that is our search, not a wrong page.
+    page = SearchPage()
+    states = [_form("one_way", on_results_page=True, form_visible=False, origin="Brisbane", destination="Perth")]
+    calls, _ = _search(monkeypatch, states=states, selectors=[], page=page)
+    assert calls == [] and page.visited == []
+
+
+def test_qantas_search_waits_while_the_results_render(monkeypatch):
+    """Nothing visible right after submit is a page still rendering: wait for it, never act on it."""
+    widget = TripWidget(None, results=[False, True])  # loop check, then after the wait
+    waits: list[int] = []
+    nothing = _form("one_way", form_visible=False, reason="nothing visible")
+    calls, _ = _search(monkeypatch, states=[nothing], selectors=[], widget=widget, waits=waits)
+    assert calls == []
+    assert waits == [qantas.RESULTS_RENDER_SECONDS]  # one wait in wait_for_results, then the results showed
+
+
+def test_qantas_search_gives_the_results_a_last_chance_before_failing(monkeypatch):
+    widget = TripWidget(None, results=[False] * 4 + [True])  # loop, three waits, the last look
+    nothing = _form("one_way", form_visible=False, reason="nothing visible")
+    calls, _ = _search(monkeypatch, states=[nothing] * 4, selectors=[], widget=widget)
+    assert calls == []  # waited three times in wait_for_results, then once more before giving up: it showed
+
+
+def test_qantas_search_turns_the_points_switch_off_in_code(monkeypatch):
+    widget = TripWidget(None, points=True)
+    states = [_form("one_way", using_points=True), _form("one_way", on_results_page=True)]
+    calls, _ = _search(monkeypatch, states=states, selectors=["xpath=//button"], widget=widget)
+    assert ("points_off", True) in widget.events
+    assert "using points=False" in calls[0][0]
+    assert "Never touch the Rewards" in calls[0][0]
+    assert "turn it off now" not in calls[0][0]
+
+
+def test_qantas_search_leaves_the_points_switch_to_the_model_when_it_cannot_be_found(monkeypatch):
+    states = [_form("one_way", using_points=True), _form("one_way", on_results_page=True)]
+    calls, _ = _search(monkeypatch, states=states, selectors=["xpath=//button"])
+    assert "The Rewards / points switch is on: turn it off now, and do nothing else." in calls[0][0]
 
 
 def test_qantas_search_goes_back_when_results_show_other_airports(monkeypatch):
