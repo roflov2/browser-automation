@@ -46,6 +46,7 @@ from .core import (
     StepTimeout,
     classify_failure,
     is_timeout,
+    is_transient,
     update_summary,
     write_json,
     write_reports,
@@ -248,9 +249,15 @@ class RecordingStagehand:
             try:
                 result = await attribute(*args, **kwargs)
             except Exception as error:
-                if not schema_rejected(error):
+                if schema_rejected(error):
+                    log.warning("  %s: the model's answer did not fit the schema; asking once more", name)
+                elif name == "observe" and is_transient(error):
+                    # act is not retried here: its element may belong to the dead session, so llm_act
+                    # (actions.act_once_more) observes again before acting again.
+                    log.warning("  observe: browser session hiccup (%s), trying once more", str(error)[:120])
+                    await asyncio.sleep(actions.HICCUP_PAUSE_S)
+                else:
                     raise
-                log.warning("  %s: the model's answer did not fit the schema; asking once more", name)
                 self.llm_calls += 1
                 result = await attribute(*args, **kwargs)
             usage = getattr(getattr(result, "metadata", None), "usage", None)

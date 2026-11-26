@@ -14,28 +14,14 @@ from typing import IO, Any, cast
 from stagehand import Page, Stagehand
 
 from . import actions
-from .core import BROWSER_ERRORS, PageScriptError
+from .core import BROWSER_ERRORS, NOISY_CDP_PHRASES, TRANSIENT_EVALUATE_ERRORS, PageScriptError
 
 log = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Harmless transient CDP frame/context race errors that Stagehand logs loudly
 # ---------------------------------------------------------------------------
-NOISY_CDP_PHRASES = (
-    "CDP response failed",
-    "Frame with the given id was not found",
-    "Cannot find context with specified id",
-    "Session with given id not found",
-)
 NOISY_LOGGERS = ("", "stagehand", "stagehand.cdp_client", "websockets")
-# evaluate() failing for one of these reasons means the page went away under us (a navigation), not a bug.
-TRANSIENT_EVALUATE_ERRORS = (
-    *NOISY_CDP_PHRASES,
-    "Execution context was destroyed",
-    "Inspected target navigated or closed",
-    "Target closed",
-    "No frame for given id",
-)
 
 
 def is_noise(text: str) -> bool:
