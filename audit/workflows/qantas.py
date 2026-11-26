@@ -1377,9 +1377,14 @@ def describe_flight(flight: Flight) -> tuple[str, str]:
 
 # Controls the selection steps must never act on, whatever the model returns for them.
 NEVER_CLICK = re.compile(
-    r"log ?in|sign ?in|start again|change (this flight|search)|rewards?\b|promo|(?<![a-z])pts\b|points",
+    r"log ?in|sign ?in|start again|change (this flight|search)|rewards?\b|promo|(?<![a-z])pts\b|points"
+    r"|use cash|upgrade",
     re.IGNORECASE,
 )
+# After a click, how long a step's check keeps re-reading the page before it counts as failed: the Angular app
+# can take several seconds to swap views (Continue to the Options page did, in the 14:08 run).
+STEP_CHECK_MS = 15_000
+STEP_POLL_MS = 500
 NOT_ECONOMY = re.compile(r"business|premium economy|first class", re.IGNORECASE)
 
 JS_BANNER = r"""() => /about our prices/i.test(document.body ? document.body.innerText : '')"""
@@ -1405,6 +1410,7 @@ JS_SELECTION_PAGE = r"""() => {
         summary_page: /flight subtotal/i.test(text) && /change this flight/i.test(text)
             && /login to skip to payment/i.test(text),
         results: /select your fare|economy cabin/i.test(text),
+        options: /need travel insurance\?/i.test(text) || /^options$/i.test(heading ? clean(heading.innerText) : ''),
     };
 }"""
 
@@ -1424,6 +1430,21 @@ async def selection_page(page: Page) -> dict:
     return await js(page, JS_SELECTION_PAGE, default={}) or {}
 
 
+async def pause(ms: int) -> None:
+    await asyncio.sleep(ms / 1000)
+
+
+async def wait_for_check(page: Page, check: Callable[[dict], bool], ms: int) -> dict:
+    """Re-read the page every STEP_POLL_MS until `check` passes or `ms` runs out; the last reading."""
+    state = await selection_page(page)
+    for _ in range(ms // STEP_POLL_MS):
+        if check(state):
+            break
+        await pause(STEP_POLL_MS)
+        state = await selection_page(page)
+    return state
+
+
 async def click_one(stagehand: Stagehand, instruction: str, refuse: re.Pattern[str] = NEVER_CLICK) -> Acted:
     """Observe and click the element the instruction names, unless the model returned a forbidden control.
 
@@ -1439,7 +1460,10 @@ async def click_one(stagehand: Stagehand, instruction: str, refuse: re.Pattern[s
     if refuse.search(description):
         log.info(f"    Refused to click {description!r} ({first.selector})")
         return Acted(False, f"refused: {description}", str(first.selector or ""))
-    return await act_on(stagehand, first)
+    try:
+        return await act_on(stagehand, first)
+    except BROWSER_ERRORS as error:  # e.g. "Could not find an element for the given xPath": the page re-rendered
+        return Acted(False, f"click failed ({description}): {error}", str(first.selector or ""))
 
 
 async def select_flight(stagehand: Stagehand, page: Page, flight: Flight, out: Path) -> dict:
@@ -1462,10 +1486,17 @@ async def select_flight(stagehand: Stagehand, page: Page, flight: Flight, out: P
     ) -> dict:
         for attempt in (1, 2):
             before = await fingerprint(page)
-            acted = await click_one(stagehand, instruction, refuse)
-            await settle(page, SETTLE_MS)
-            state = await selection_page(page)
-            ok = acted.success and check(state)
+            if attempt == 2 and check(state := await selection_page(page)):
+                # The first click worked after all, only later than the check waited: never click it twice.
+                acted, ok = Acted(False, "no second click: the first one had taken effect"), True
+            else:
+                acted = await click_one(stagehand, instruction, refuse)
+                await settle(page, SETTLE_MS)
+                # A refused or missing element changed nothing; a click (even one that failed because the page
+                # re-rendered under it) may still be taking effect, so its check waits for the page.
+                tried = acted.success or acted.description.startswith("click failed")
+                state = await wait_for_check(page, check, STEP_CHECK_MS if tried else 0)
+                ok = check(state)
             after = await fingerprint(page)
             record = {
                 "step": step,
@@ -1552,10 +1583,12 @@ async def select_flight(stagehand: Stagehand, page: Page, flight: Flight, out: P
     trip_page = await selection_page(page)
 
     def left_trip_summary(state: dict) -> bool:
-        if not state or state.get("summary_page"):
+        """The 'Your trip' page is gone. Not 'Change this flight' or 'Subtotal' alone: the Options sidebar has both."""
+        if not state:
             return False
-        moved = state.get("url") != trip_page.get("url") or state.get("heading") != trip_page.get("heading")
-        return moved or not state.get("results")
+        if state.get("options") or not state.get("summary_page"):
+            return True
+        return bool(state.get("heading")) and state.get("heading") != trip_page.get("heading")
 
     await run_step(
         3,
@@ -1616,6 +1649,120 @@ async def fill_passenger_details(stagehand: Stagehand, page: Page, passenger: Pa
             await settle(page, 400)
 
 
+# The travel insurance question ("Need Travel Insurance?" on the Options page): an insurance card (SELECT, or
+# USE CASH / USE POINTS) and the checkbox "No, I don't want travel insurance". Continue is refused, with the warning
+# "You need to make a travel insurance selection before you can proceed", until one is chosen. Read by the
+# checkbox's text, not the URL: the same question can come on a later step. With `mark`, the control to click
+# (its label if it has one: a mouse click on the label is what an Angular checkbox most reliably takes) is marked
+# with data-audit-insurance, scrolled into view and its centre returned.
+JS_INSURANCE = r"""mark => {
+    const want = /no,?\s*i\s*don.?t\s*want\s*travel\s*insurance/i;
+    const text = document.body ? document.body.innerText : '';
+    const out = { question: /need travel insurance\?/i.test(text),
+                  warning: /you need to make a travel insurance selection/i.test(text),
+                  found: false, checked: false };
+    const labelFor = el => el.id ? document.querySelector(`label[for="${CSS.escape(el.id)}"]`) : null;
+    const labelOf = el => {
+        const parts = [el.getAttribute('aria-label'), el.closest('label') && txt(el.closest('label'))];
+        const own = labelFor(el);
+        if (own) parts.push(txt(own));
+        for (const id of (el.getAttribute('aria-labelledby') || '').split(/\s+/).filter(Boolean)) {
+            const l = document.getElementById(id);
+            if (l) parts.push(txt(l));
+        }
+        if (el.parentElement && txt(el.parentElement).length < 200) parts.push(txt(el.parentElement));
+        if (el.matches('label, [role="checkbox"]')) parts.push(txt(el));
+        return clean(parts.filter(Boolean).join(' '));
+    };
+    const boxOf = el => el.matches('input[type="checkbox"], [role="checkbox"]') ? el
+        : (el.control || el.querySelector('input[type="checkbox"], [role="checkbox"]'));
+    for (const el of document.querySelectorAll('input[type="checkbox"], [role="checkbox"], label')) {
+        if (!want.test(labelOf(el))) continue;
+        const box = boxOf(el);
+        if (!box) continue;
+        const target = [box.closest('label') || labelFor(box), box].find(t => t && vis(t, 4, 4));
+        if (!target) continue;
+        out.found = true;
+        out.checked = box.checked === true || box.getAttribute('aria-checked') === 'true';
+        if (mark) {
+            document.querySelectorAll('[data-audit-insurance]').forEach(e => e.removeAttribute('data-audit-insurance'));
+            target.setAttribute('data-audit-insurance', '1');
+            target.scrollIntoView({ block: 'center' });
+            const r = target.getBoundingClientRect();
+            out.x = r.left + r.width / 2;
+            out.y = r.top + r.height / 2;
+        }
+        return out;
+    }
+    return out;
+}"""
+DECLINE_INSURANCE = (
+    "Tick the checkbox 'No, I don't want travel insurance'. Do not click Select, Use cash, Use points or any upgrade."
+)
+INSURANCE_DONE = " Travel insurance is already declined: click CONTINUE in the sticky footer."
+MAX_INSURANCE_WARNINGS = 2  # the warning after Continue: decline once more, then the run ends
+
+
+async def read_insurance(page: Page, mark: bool = False) -> dict | None:
+    found = await js(page, JS_INSURANCE, mark, default=None)
+    return found if isinstance(found, dict) else None
+
+
+def insurance_declined(seen: dict | None) -> bool:
+    return bool(seen and seen.get("checked") and not seen.get("warning"))
+
+
+async def decline_travel_insurance(stagehand: Stagehand, page: Page) -> bool:
+    """Tick "No, I don't want travel insurance": a mouse click, then a DOM click, then the model. True once ticked.
+
+    Never clicks the insurance card (Select, Use cash, Use points). A box that is already ticked is not clicked
+    again, since a second click would untick it; nor is any fallback run on a ticked box.
+    """
+    seen = await read_insurance(page, mark=True)
+    if seen and seen.get("checked"):
+        return insurance_declined(seen)
+    if seen and seen.get("found") and "x" in seen:
+        await click_at(page, seen["x"], seen["y"])
+        await settle(page, TRIP_SETTLE_MS)
+        seen = await read_insurance(page)
+        if not (seen and seen.get("checked")):
+            await js(page, JS_DOM_CLICK, "data-audit-insurance")
+            await settle(page, TRIP_SETTLE_MS)
+            seen = await read_insurance(page)
+    if not (seen and seen.get("checked")):
+        log.info("  Travel insurance: the checkbox did not take a click in code; asking the model")
+        try:
+            step = await llm_act(stagehand, DECLINE_INSURANCE, page=page)
+            log.info(f"    {step.description}")
+        except BROWSER_ERRORS as error:  # judged by the re-read below
+            log.info(f"  Travel insurance: the model's click failed ({type(error).__name__}: {error})")
+        await settle(page, TRIP_SETTLE_MS)
+        seen = await read_insurance(page)
+    return insurance_declined(seen)
+
+
+async def answer_insurance(stagehand: Stagehand, page: Page, warnings: int = 0) -> tuple[str, bool]:
+    """Decline travel insurance if this page asks; (what to tell the booking action, whether the warning shows).
+
+    `warnings` is how many times the warning has shown already: on the one that ends the run nothing is clicked.
+    """
+    seen = await read_insurance(page)
+    if not seen or not (seen.get("question") or seen.get("warning")):
+        return "", False
+    warning = bool(seen.get("warning"))
+    if warning and warnings + 1 >= MAX_INSURANCE_WARNINGS:
+        return "", True
+    if not seen.get("checked") or warning:
+        declined = await decline_travel_insurance(stagehand, page)
+        log.info(
+            "  Travel insurance: declined"
+            if declined
+            else "  Travel insurance: 'No, I don't want travel insurance' is not ticked; leaving it to the model"
+        )
+        seen = await read_insurance(page) or seen
+    return (INSURANCE_DONE if seen.get("checked") else f" {DECLINE_INSURANCE}"), warning
+
+
 BOOKING_GOAL = (
     "Goal: reach the payment page of this booking with the cheapest fare and NO optional extras (no paid bags, "
     "seats, insurance, carbon offset, upgrades, car hire, hotels or donations), continuing as a guest without "
@@ -1626,7 +1773,7 @@ BOOKING_GOAL = (
 
 
 async def next_booking_action(
-    stagehand: Stagehand, page: Page, passenger: Passenger, state: StepState, step_type: str
+    stagehand: Stagehand, page: Page, passenger: Passenger, state: StepState, step_type: str, extra: str = ""
 ) -> None:
     """Take the one action that moves the booking on from `step_type`, declining every extra."""
     if step_type == "passenger_details":
@@ -1637,7 +1784,7 @@ async def next_booking_action(
             f" The page shows these errors: {'; '.join(state.validation_errors[:3])}. Fix the first one if it is "
             "a missing choice or field (never by adding a paid extra)."
         )
-    step = await llm_act(stagehand, f"{instruction} {NO_RESEARCH}")
+    step = await llm_act(stagehand, f"{instruction}{extra} {NO_RESEARCH}")
     log.info(f"    {step.description}")
     await settle(page, SETTLE_MS)
 
@@ -1646,6 +1793,7 @@ async def walk_to_payment(stagehand: Stagehand, page: Page, passenger: Passenger
     """Step through the booking flow, recording every extra offered, until the payment page. True if reached."""
     out = result.out_dir
     last_signature, repeats = None, 0
+    insurance_warnings = 0
     last_state: StepState | None = None
     last_seen: str | None = None
     for index in range(1, MAX_BOOKING_STEPS + 1):
@@ -1660,12 +1808,20 @@ async def walk_to_payment(stagehand: Stagehand, page: Page, passenger: Passenger
                 errors = "; ".join(last_state.validation_errors) or last_state.summary or "no summary"
                 result.message = f"Stuck on '{last_state.heading or last_state.step_type}': {errors}"
                 return False
+            extra, warning = await answer_insurance(stagehand, page, insurance_warnings)
+            insurance_warnings += warning
+            if insurance_warnings >= MAX_INSURANCE_WARNINGS:
+                result.message = (
+                    f"Stuck on '{last_state.heading or last_state.step_type}': insurance selection not accepted"
+                )
+                return False
             await next_booking_action(
                 stagehand,
                 page,
                 passenger,
                 last_state,
                 "payment" if last_state.is_payment_page else last_state.step_type,
+                extra,
             )
             continue
         state = (
@@ -1715,7 +1871,13 @@ async def walk_to_payment(stagehand: Stagehand, page: Page, passenger: Passenger
         # Remember what the screen looked like when it was read; if the action leaves it exactly so,
         # the next turn knows without asking the model.
         last_state, last_seen = state, seen
-        await next_booking_action(stagehand, page, passenger, state, step_type)
+        # After the step's offers are recorded: the insurance question is answered in code, never by the model.
+        extra, warning = await answer_insurance(stagehand, page, insurance_warnings)
+        insurance_warnings += warning
+        if insurance_warnings >= MAX_INSURANCE_WARNINGS:  # Continue refused twice for want of an insurance answer
+            result.message = f"Stuck on '{state.heading or step_type}': insurance selection not accepted"
+            return False
+        await next_booking_action(stagehand, page, passenger, state, step_type, extra)
 
     result.message = f"Payment page not reached within {MAX_BOOKING_STEPS} steps"
     return False
