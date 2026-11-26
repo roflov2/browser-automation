@@ -308,7 +308,7 @@ def test_qantas_reuses_the_step_when_the_screen_did_not_change(monkeypatch, tmp_
 
     async def fake_llm_act(stagehand, instruction, **options):
         actions.append(instruction)
-        return SimpleNamespace(description="clicked continue", success=True)
+        return Acted(True, "clicked continue", "xpath=//button")
 
     async def nothing(*args, **kwargs):
         return None
@@ -322,7 +322,7 @@ def test_qantas_reuses_the_step_when_the_screen_did_not_change(monkeypatch, tmp_
 
     monkeypatch.setattr(qantas, "fingerprint", fake_fingerprint)
     monkeypatch.setattr(qantas, "llm_act", fake_llm_act)
-    for name in ("wait_for_render", "shot", "settle", "read_insurance"):
+    for name in ("wait_for_render", "shot", "settle", "read_insurance", "read_accept"):
         monkeypatch.setattr(qantas, name, nothing)
     run = SiteResult(site="s", out_dir=tmp_path)
     reached = asyncio.run(qantas.walk_to_payment(Stagehand(), Page(), Passenger(), run))
@@ -331,6 +331,7 @@ def test_qantas_reuses_the_step_when_the_screen_did_not_change(monkeypatch, tmp_
     assert extracts == ["StepState"]  # one read; the three repeats cost no extraction (was four reads)
     assert len(actions) == 3
     assert len(run.steps) == 1
+    assert run.steps[0]["action"] == "clicked continue | then: clicked continue | then: clicked continue"
 
 
 # --- qantas: a custom dropdown that opens but is never chosen from does not eat the whole search ---------
@@ -1185,6 +1186,8 @@ class InsuranceBox:
             self.events.append("dom_click")
             self.checked = self.checked or "dom" in self.takes
             return True
+        if fn is qantas.JS_ACCEPT:
+            return default  # no fare rules on this page
         raise AssertionError(f"unexpected script {fn[:40]!r}")
 
     async def click_at(self, page, x, y):
@@ -1304,3 +1307,133 @@ def test_qantas_walk_gives_up_when_the_insurance_answer_is_not_accepted(monkeypa
     assert reached is False
     assert run.message == "Stuck on 'Options': insurance selection not accepted"
     assert sum(1 for e in box.events if isinstance(e, tuple) and e[0] == "act") == 2  # one model tick, no Continue
+
+
+# --- qantas: the Options page moves on with the fare rules' ACCEPT -------------------------------------
+class FareRulesPage:
+    """The bottom of the Options page: 'Fare rules' and its ACCEPT button, at the js()/click_at() boundary.
+
+    `takes` lists the clicks that move the page on ('mouse', 'dom'); `has` is False for a page without them.
+    """
+
+    def __init__(self, takes=("mouse",), has=True):
+        self.takes, self.has, self.screen = set(takes), has, "options"
+        self.events = []
+
+    async def js(self, page, fn, arg=None, default=None, lib=""):
+        if fn is qantas.JS_ACCEPT:
+            if not self.has or self.screen != "options":
+                return default
+            return {"text": "ACCEPT", **({"x": 1300, "y": 900} if arg else {})}
+        if fn is qantas.JS_SELECTION_PAGE:
+            return {"heading": "Options" if self.screen == "options" else "Passenger details"}
+        if fn is qantas.JS_DOM_CLICK:
+            self.events.append(("dom_click", arg))
+            if "dom" in self.takes:
+                self.screen = "passengers"
+            return True
+        if fn is qantas.JS_INSURANCE:  # the question is answered: the box is ticked, no warning
+            return {"question": self.screen == "options", "warning": False, "found": True, "checked": True}
+        raise AssertionError(f"unexpected script {fn[:40]!r}")
+
+    async def click_at(self, page, x, y):
+        self.events.append(("click", x, y))
+        if "mouse" in self.takes:
+            self.screen = "passengers"
+
+    async def fingerprint(self, page):
+        return self.screen
+
+
+def _accept(monkeypatch, rules):
+    async def nothing(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(qantas, "js", rules.js)
+    monkeypatch.setattr(qantas, "click_at", rules.click_at)
+    monkeypatch.setattr(qantas, "fingerprint", rules.fingerprint)
+    monkeypatch.setattr(qantas, "pause", nothing)
+    return asyncio.run(qantas.accept_fare_rules(object()))
+
+
+def test_qantas_accepts_the_fare_rules_with_a_mouse_click(monkeypatch):
+    rules = FareRulesPage()
+    assert _accept(monkeypatch, rules) is True
+    assert rules.events == [("click", 1300, 900)]  # no DOM click
+
+
+def test_qantas_accepting_the_fare_rules_falls_back_to_a_dom_click(monkeypatch):
+    rules = FareRulesPage(takes=("dom",))
+    assert _accept(monkeypatch, rules) is True
+    assert rules.events == [("click", 1300, 900), ("dom_click", "data-audit-accept")]
+
+
+def test_qantas_accepting_the_fare_rules_gives_up_when_the_page_stays(monkeypatch):
+    rules = FareRulesPage(takes=())
+    assert _accept(monkeypatch, rules) is False
+    assert rules.events == [("click", 1300, 900), ("dom_click", "data-audit-accept")]
+
+
+def test_qantas_does_not_click_accept_without_fare_rules(monkeypatch):
+    rules = FareRulesPage(has=False)
+    assert _accept(monkeypatch, rules) is False
+    assert rules.events == []
+
+
+def test_qantas_accept_is_never_refused_or_forbidden():
+    assert not qantas.NEVER_CLICK.search("ACCEPT button under Fare rules")
+    assert "Accepting fare rules" in qantas.BOOKING_GOAL and "not a purchase" in qantas.BOOKING_GOAL
+    assert "ACCEPT" in qantas.INSURANCE_DONE and "does not pay" in qantas.INSURANCE_DONE
+
+
+def _walk(monkeypatch, tmp_path, rules, steps):
+    events, reads = rules.events, iter(steps)
+
+    class Stagehand:
+        async def extract(self, instruction, schema, **options):
+            events.append("extract")
+            return SimpleNamespace(data=next(reads))
+
+    async def fake_llm_act(stagehand, instruction, **options):
+        events.append(("act", instruction))
+        return Acted(True, "clicked the Continue button", "xpath=/html/body/nav/button")
+
+    async def nothing(*args, **kwargs):
+        return None
+
+    class Page:
+        async def url(self):
+            return "https://book.qantas.test/qf-booking/dyn/air/booking/FDRF"
+
+    monkeypatch.setattr(qantas, "llm_act", fake_llm_act)
+    monkeypatch.setattr(qantas, "js", rules.js)
+    monkeypatch.setattr(qantas, "click_at", rules.click_at)
+    monkeypatch.setattr(qantas, "fingerprint", rules.fingerprint)
+    for name in ("wait_for_render", "shot", "settle", "pause"):
+        monkeypatch.setattr(qantas, name, nothing)
+    run = SiteResult(site="s", out_dir=tmp_path)
+    return run, asyncio.run(qantas.walk_to_payment(Stagehand(), Page(), Passenger(), run))
+
+
+def test_qantas_walk_accepts_the_fare_rules_in_code_instead_of_asking_the_model(monkeypatch, tmp_path):
+    rules = FareRulesPage()
+    steps = [_step("review", "Options", OPTIONS_OFFERS), _step("payment", "Payment", payment=True)]
+    run, reached = _walk(monkeypatch, tmp_path, rules, steps)
+    assert reached is True
+    assert not any(isinstance(e, tuple) and e[0] == "act" for e in rules.events)  # the model never acted
+    assert rules.events.index(("click", 1300, 900)) > rules.events.index("extract")  # after the step was read
+    assert (run.steps[0]["action"], run.steps[0]["selector"]) == (
+        "Fare rules: accepted (ACCEPT clicked in code)", "[data-audit-accept]")  # fmt: skip
+    assert {e["category"] for e in run.extras} == {"fare_upgrade", "travel_insurance"}
+
+
+def test_qantas_walk_tells_the_model_to_click_accept_when_code_could_not(monkeypatch, tmp_path):
+    rules = FareRulesPage(takes=())
+    steps = [_step("review", "Options", OPTIONS_OFFERS)] * 2
+    run, reached = _walk(monkeypatch, tmp_path, rules, steps)
+    assert reached is False
+    acts = [e[1] for e in rules.events if isinstance(e, tuple) and e[0] == "act"]
+    assert acts and all(qantas.ACCEPT_FARE_RULES.strip() in a for a in acts)
+    assert run.steps[0]["action"].startswith("clicked the Continue button")  # what the model clicked is kept
+    assert " | then: " in run.steps[0]["action"]  # each repeat on the same page appended
+    assert run.steps[0]["selector"] == "xpath=/html/body/nav/button"

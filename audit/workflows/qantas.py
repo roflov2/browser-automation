@@ -1699,7 +1699,11 @@ JS_INSURANCE = r"""mark => {
 DECLINE_INSURANCE = (
     "Tick the checkbox 'No, I don't want travel insurance'. Do not click Select, Use cash, Use points or any upgrade."
 )
-INSURANCE_DONE = " Travel insurance is already declined: click CONTINUE in the sticky footer."
+ACCEPT_FARE_RULES = (
+    " Now click the red ACCEPT button at the very bottom of the page, under 'Fare rules': it accepts the fare "
+    "conditions and does not pay."
+)
+INSURANCE_DONE = f" Travel insurance is already declined.{ACCEPT_FARE_RULES}"
 MAX_INSURANCE_WARNINGS = 2  # the warning after Continue: decline once more, then the run ends
 
 
@@ -1741,17 +1745,24 @@ async def decline_travel_insurance(stagehand: Stagehand, page: Page) -> bool:
     return insurance_declined(seen)
 
 
-async def answer_insurance(stagehand: Stagehand, page: Page, warnings: int = 0) -> tuple[str, bool]:
-    """Decline travel insurance if this page asks; (what to tell the booking action, whether the warning shows).
+@dataclass
+class InsuranceAnswer:
+    extra: str = ""  # what to tell the booking action about it
+    warning: bool = False  # the "You need to make a travel insurance selection" warning showed
+    settled: bool = True  # no question on this page, or "No, I don't want travel insurance" is ticked
+
+
+async def answer_insurance(stagehand: Stagehand, page: Page, warnings: int = 0) -> InsuranceAnswer:
+    """Decline travel insurance if this page asks.
 
     `warnings` is how many times the warning has shown already: on the one that ends the run nothing is clicked.
     """
     seen = await read_insurance(page)
     if not seen or not (seen.get("question") or seen.get("warning")):
-        return "", False
+        return InsuranceAnswer()
     warning = bool(seen.get("warning"))
     if warning and warnings + 1 >= MAX_INSURANCE_WARNINGS:
-        return "", True
+        return InsuranceAnswer(warning=True, settled=False)
     if not seen.get("checked") or warning:
         declined = await decline_travel_insurance(stagehand, page)
         log.info(
@@ -1760,21 +1771,85 @@ async def answer_insurance(stagehand: Stagehand, page: Page, warnings: int = 0) 
             else "  Travel insurance: 'No, I don't want travel insurance' is not ticked; leaving it to the model"
         )
         seen = await read_insurance(page) or seen
-    return (INSURANCE_DONE if seen.get("checked") else f" {DECLINE_INSURANCE}"), warning
+    if insurance_declined(seen):
+        return InsuranceAnswer(INSURANCE_DONE, warning)
+    # Ticked but the warning still showing: say so, and never ask for a tick that would untick it.
+    extra = INSURANCE_DONE if seen.get("checked") else f" {DECLINE_INSURANCE}"
+    return InsuranceAnswer(extra, warning, settled=False)
+
+
+# The fare rules' ACCEPT button at the very bottom of the Options / Review page ("Fare rules", "Red e-Deal
+# conditions", then "< Back" and a red "ACCEPT >"). It accepts the fare conditions, which moves the booking on; it
+# does not pay. The page must show fare rules or conditions, and buttons inside a cookie / consent banner or a
+# dialog are skipped, so no other "Accept" is taken. With `mark`, the button is marked with data-audit-accept,
+# scrolled into view and its centre returned. Null if there is no such button.
+JS_ACCEPT = r"""mark => {
+    const text = document.body ? document.body.innerText : '';
+    if (!/fare rules|conditions/i.test(text)) return null;
+    const banner = '[id*="cookie" i], [class*="cookie" i], [id*="consent" i], [class*="consent" i], [role="dialog"]';
+    const buttons = Array.from(document.querySelectorAll('button, a, [role="button"]'))
+        .filter(el => vis(el) && /^accept\b/i.test(clean(el.innerText)) && !el.closest(banner));
+    if (!buttons.length) return null;
+    const el = buttons[buttons.length - 1];  // the one at the bottom of the page
+    const out = { text: clean(el.innerText) };
+    if (mark) {
+        document.querySelectorAll('[data-audit-accept]').forEach(e => e.removeAttribute('data-audit-accept'));
+        el.setAttribute('data-audit-accept', '1');
+        el.scrollIntoView({ block: 'center' });
+        const r = el.getBoundingClientRect();
+        out.x = r.left + r.width / 2;
+        out.y = r.top + r.height / 2;
+    }
+    return out;
+}"""
+
+
+async def read_accept(page: Page, mark: bool = False) -> dict | None:
+    found = await js(page, JS_ACCEPT, mark, default=None)
+    return found if isinstance(found, dict) else None
+
+
+async def moved_on(page: Page, before: str | None, heading: str) -> bool:
+    """Poll up to STEP_CHECK_MS: has the page left the fare rules? A new main heading, or a changed screen
+    without the fare rules' ACCEPT."""
+    for poll_index in range(STEP_CHECK_MS // STEP_POLL_MS + 1):
+        if poll_index:
+            await pause(STEP_POLL_MS)
+        now = (await selection_page(page)).get("heading") or ""
+        if now and now != heading:
+            return True
+        if await fingerprint(page) != before and await read_accept(page) is None:
+            return True
+    return False
+
+
+async def accept_fare_rules(page: Page) -> bool:
+    """Click the fare rules' ACCEPT: a mouse click, then a DOM click. True once the page has moved on."""
+    found = await read_accept(page, mark=True)
+    if not found or "x" not in found:
+        return False
+    before, heading = await fingerprint(page), (await selection_page(page)).get("heading") or ""
+    await click_at(page, found["x"], found["y"])
+    if await moved_on(page, before, heading):
+        return True
+    log.info("  Fare rules: the page did not move on after clicking ACCEPT; trying a DOM click")
+    await js(page, JS_DOM_CLICK, "data-audit-accept")
+    return await moved_on(page, before, heading)
 
 
 BOOKING_GOAL = (
     "Goal: reach the payment page of this booking with the cheapest fare and NO optional extras (no paid bags, "
     "seats, insurance, carbon offset, upgrades, car hire, hotels or donations), continuing as a guest without "
     "logging in or joining a loyalty program. Take the single next action that moves the booking towards the "
-    "payment page. Where the page insists on a choice, choose the free or decline option. Never click a button "
-    "that pays or completes the purchase."
+    "payment page. Where the page insists on a choice, choose the free or decline option. Accepting fare rules or "
+    "fare conditions (an 'Accept' button) is allowed and needed: it is not a purchase. Never click a button that "
+    "pays or completes the purchase (Pay, Purchase, Book now, Confirm booking)."
 )
 
 
 async def next_booking_action(
     stagehand: Stagehand, page: Page, passenger: Passenger, state: StepState, step_type: str, extra: str = ""
-) -> None:
+) -> Acted:
     """Take the one action that moves the booking on from `step_type`, declining every extra."""
     if step_type == "passenger_details":
         await fill_passenger_details(stagehand, page, passenger)
@@ -1787,13 +1862,44 @@ async def next_booking_action(
     step = await llm_act(stagehand, f"{instruction}{extra} {NO_RESEARCH}")
     log.info(f"    {step.description}")
     await settle(page, SETTLE_MS)
+    return step
+
+
+def note_action(step: dict, acted: Acted) -> None:
+    """Record on a step's entry what was clicked on it (a repeat on the same page is appended)."""
+    step["action"] = f"{step['action']} | then: {acted.description}" if step.get("action") else acted.description
+    step["selector"] = acted.selector
+
+
+class InsuranceRefused(Exception):
+    """Continue was refused twice for want of an insurance answer."""
+
+
+async def move_booking_on(
+    stagehand: Stagehand, page: Page, passenger: Passenger, state: StepState, step_type: str, warnings: list[int]
+) -> Acted:
+    """One turn on a booking step: answer the insurance question in code, accept the fare rules in code once it is
+    settled, and only then (if neither moved the page on) ask the model. `warnings` counts the insurance warnings.
+    """
+    answer = await answer_insurance(stagehand, page, warnings[0])
+    warnings[0] += answer.warning
+    if warnings[0] >= MAX_INSURANCE_WARNINGS:
+        raise InsuranceRefused
+    extra = answer.extra
+    if answer.settled:
+        if await accept_fare_rules(page):
+            log.info("  Fare rules: accepted")
+            return Acted(True, "Fare rules: accepted (ACCEPT clicked in code)", "[data-audit-accept]")
+        if not extra and await read_accept(page) is not None:
+            extra = ACCEPT_FARE_RULES
+    return await next_booking_action(stagehand, page, passenger, state, step_type, extra)
 
 
 async def walk_to_payment(stagehand: Stagehand, page: Page, passenger: Passenger, result: SiteResult) -> bool:
     """Step through the booking flow, recording every extra offered, until the payment page. True if reached."""
     out = result.out_dir
     last_signature, repeats = None, 0
-    insurance_warnings = 0
+    insurance_warnings = [0]
     last_state: StepState | None = None
     last_seen: str | None = None
     for index in range(1, MAX_BOOKING_STEPS + 1):
@@ -1808,21 +1914,15 @@ async def walk_to_payment(stagehand: Stagehand, page: Page, passenger: Passenger
                 errors = "; ".join(last_state.validation_errors) or last_state.summary or "no summary"
                 result.message = f"Stuck on '{last_state.heading or last_state.step_type}': {errors}"
                 return False
-            extra, warning = await answer_insurance(stagehand, page, insurance_warnings)
-            insurance_warnings += warning
-            if insurance_warnings >= MAX_INSURANCE_WARNINGS:
+            step_type = "payment" if last_state.is_payment_page else last_state.step_type
+            try:
+                acted = await move_booking_on(stagehand, page, passenger, last_state, step_type, insurance_warnings)
+            except InsuranceRefused:
                 result.message = (
                     f"Stuck on '{last_state.heading or last_state.step_type}': insurance selection not accepted"
                 )
                 return False
-            await next_booking_action(
-                stagehand,
-                page,
-                passenger,
-                last_state,
-                "payment" if last_state.is_payment_page else last_state.step_type,
-                extra,
-            )
+            note_action(result.steps[-1], acted)
             continue
         state = (
             await stagehand.extract(
@@ -1871,13 +1971,13 @@ async def walk_to_payment(stagehand: Stagehand, page: Page, passenger: Passenger
         # Remember what the screen looked like when it was read; if the action leaves it exactly so,
         # the next turn knows without asking the model.
         last_state, last_seen = state, seen
-        # After the step's offers are recorded: the insurance question is answered in code, never by the model.
-        extra, warning = await answer_insurance(stagehand, page, insurance_warnings)
-        insurance_warnings += warning
-        if insurance_warnings >= MAX_INSURANCE_WARNINGS:  # Continue refused twice for want of an insurance answer
+        # After the step's offers are recorded: insurance and fare rules are answered in code, never by the model.
+        try:
+            acted = await move_booking_on(stagehand, page, passenger, state, step_type, insurance_warnings)
+        except InsuranceRefused:  # Continue refused twice for want of an insurance answer
             result.message = f"Stuck on '{state.heading or step_type}': insurance selection not accepted"
             return False
-        await next_booking_action(stagehand, page, passenger, state, step_type, extra)
+        note_action(result.steps[-1], acted)
 
     result.message = f"Payment page not reached within {MAX_BOOKING_STEPS} steps"
     return False
