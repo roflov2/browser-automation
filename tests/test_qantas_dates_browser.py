@@ -63,7 +63,7 @@ def test_an_open_picker_is_finished_and_a_set_date_is_left_alone():
         return opened, read_while_open, done, again, await qantas.page_depart_date(page)
 
     opened, read_while_open, done, again, after = _run(steps)
-    assert opened == {"picked": "Depart BNE Select a date"}
+    assert opened == {"picked": "Depart BNE"}  # the header is two elements, as on the live site: its first line
     assert read_while_open == "29 Nov 2026"
     assert (done, again, after) == (True, True, "2 Mar 2027")
 
@@ -76,3 +76,18 @@ def test_a_disabled_or_missing_day_is_left_to_the_model():
         )
 
     assert _run(steps) == (False, False)
+
+
+@pytest.mark.browser
+def test_an_open_picker_is_confirmed_even_once_the_date_helper_has_failed():
+    async def steps(page):
+        trip = qantas.Trip(origin="BNE", destination="PER", depart=date(2027, 2, 14))
+        form = qantas.SearchForm(stagehand=None, page=page, trip=trip, question="", date_works=False)
+        await qantas.open_date_dialog(page, await qantas.read_date_field(page))
+        await qantas.pick_day(page, trip.depart)  # the day is clicked, as the model does, but not confirmed
+        shown = await form.keep_date(None)
+        return shown, await qantas.date_dialog(page)
+
+    shown, dialog = _run(steps)
+    assert shown == "14 Feb 2027"
+    assert dialog is None  # Continue closed the picker, so the model is never handed it

@@ -29,7 +29,7 @@
     const portal = document.createElement('div');
     portal.id = 'picker';
     let html = '<div><h2>Select travel dates</h2><button type="button" aria-label="Close">✕</button>'
-      + '<p id="picked">Depart BNE Select a date</p></div><div id="months">';
+      + '<div id="picked"><span>Depart BNE</span><br><span id="picked-day">Select a date</span></div></div><div id="months">';
     for (let m = 0; m < 3; m++) {
       html += `<h3>${MONTHS[m]} 2027</h3><div class="grid">`;
       const days = new Date(2027, m + 1, 0).getDate();
@@ -46,7 +46,7 @@
       portal.querySelectorAll('.picked').forEach(p => p.classList.remove('picked'));
       b.classList.add('picked');
       picked = new Date(2027, Number(b.dataset.m), Number(b.dataset.d));
-      document.getElementById('picked').textContent = `Depart BNE ${DAYS[picked.getDay()]}, ${fmt(picked)}`;
+      document.getElementById('picked-day').textContent = `${DAYS[picked.getDay()]}, ${fmt(picked)}`;
     }));
     document.getElementById('continue').addEventListener('click', () => {
       if (picked) {

@@ -913,7 +913,12 @@ async def find_day_cell(page: Page, day: date) -> dict | None:
 
 
 async def pick_day(page: Page, day: date) -> str | None:
-    """Pick `day` in the open modal; None once the modal shows it as picked, else why it could not be."""
+    """Click `day` in the open modal; None once it is clicked, else why it could not be (no cell, or disabled).
+
+    The modal's header is only a hint: on the live site it is two elements ('Depart BNE' / 'Sun, 14 Feb 2027')
+    and reads as its first line. A header that does not show the day is logged, not a failure: Continue, and the
+    form's date field after it, decide whether the date was set.
+    """
     cell = await find_day_cell(page, day)
     if cell is None:
         return f"no {date_text(day)} button in the date picker"
@@ -927,7 +932,7 @@ async def pick_day(page: Page, day: date) -> str | None:
         await settle(page, TRIP_SETTLE_MS)
         dialog = await date_dialog(page)
     if dialog and not shows_date(dialog.get("picked"), day):
-        return f"clicked {date_text(day)} but the picker shows '{dialog.get('picked')}'"
+        log.debug("Clicked %s but the picker's header reads %r", date_text(day), dialog.get("picked"))
     return None
 
 
@@ -1061,6 +1066,11 @@ class SearchForm:
         The model is never handed a page with the picker open: the day it shows there is not set until Continue.
         """
         if not self.date_works:
+            if await date_dialog(self.page) is not None:  # never hand the model the open picker
+                problem = await confirm_dates(self.page)
+                if problem:
+                    log.info(f"  Departure date: {problem}")
+                return await page_depart_date(self.page)
             return depart
         if shows_date(depart, self.trip.depart) and await date_dialog(self.page) is None:
             return depart
