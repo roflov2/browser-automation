@@ -322,7 +322,8 @@ def test_qantas_reuses_the_step_when_the_screen_did_not_change(monkeypatch, tmp_
 
     monkeypatch.setattr(qantas, "fingerprint", fake_fingerprint)
     monkeypatch.setattr(qantas, "llm_act", fake_llm_act)
-    for name in ("wait_for_render", "shot", "settle", "read_insurance", "read_accept"):
+    monkeypatch.setattr(qantas, "click_one", _llm_click_one)  # the model's pick, unchecked here
+    for name in ("wait_for_render", "shot", "settle", "read_insurance", "read_accept", "click_footer_forward"):
         monkeypatch.setattr(qantas, name, nothing)
     run = SiteResult(site="s", out_dir=tmp_path)
     reached = asyncio.run(qantas.walk_to_payment(Stagehand(), Page(), Passenger(), run))
@@ -1231,8 +1232,8 @@ class InsuranceBox:
             self.events.append("dom_click")
             self.checked = self.checked or "dom" in self.takes
             return True
-        if fn is qantas.JS_ACCEPT:
-            return default  # no fare rules on this page
+        if fn in (qantas.JS_ACCEPT, qantas.JS_FOOTER_FORWARD):
+            return default  # no fare rules, no footer CONTINUE on this page
         raise AssertionError(f"unexpected script {fn[:40]!r}")
 
     async def click_at(self, page, x, y):
@@ -1310,6 +1311,7 @@ def _options_step(monkeypatch, tmp_path, *, box, screens, steps):
 
     monkeypatch.setattr(qantas, "fingerprint", fake_fingerprint)
     monkeypatch.setattr(qantas, "llm_act", fake_llm_act)
+    monkeypatch.setattr(qantas, "click_one", _llm_click_one)
     monkeypatch.setattr(qantas, "js", box.js)
     monkeypatch.setattr(qantas, "click_at", box.click_at)
     for name in ("wait_for_render", "shot", "settle"):
@@ -1379,6 +1381,8 @@ class FareRulesPage:
             return True
         if fn is qantas.JS_INSURANCE:  # the question is answered: the box is ticked, no warning
             return {"question": self.screen == "options", "warning": False, "found": True, "checked": True}
+        if fn is qantas.JS_FOOTER_FORWARD:
+            return default  # no footer CONTINUE on this page
         raise AssertionError(f"unexpected script {fn[:40]!r}")
 
     async def click_at(self, page, x, y):
@@ -1451,6 +1455,7 @@ def _walk(monkeypatch, tmp_path, rules, steps):
             return "https://book.qantas.test/qf-booking/dyn/air/booking/FDRF"
 
     monkeypatch.setattr(qantas, "llm_act", fake_llm_act)
+    monkeypatch.setattr(qantas, "click_one", _llm_click_one)
     monkeypatch.setattr(qantas, "js", rules.js)
     monkeypatch.setattr(qantas, "click_at", rules.click_at)
     monkeypatch.setattr(qantas, "fingerprint", rules.fingerprint)
@@ -1726,7 +1731,7 @@ async def _none():
     return None
 
 
-async def _llm_click_one(stagehand, instruction, refuse=qantas.NEVER_CLICK, target=None):
+async def _llm_click_one(stagehand, instruction, refuse=qantas.NEVER_CLICK, target=None, **checks):
     """click_one routed to the (faked) llm_act, so a test can make the act itself raise."""
     return await qantas.llm_act(stagehand, instruction, target=target)
 
@@ -1735,7 +1740,8 @@ async def _llm_click_one(stagehand, instruction, refuse=qantas.NEVER_CLICK, targ
 @pytest.mark.parametrize(
     ("label", "allowed"),
     [("CONFIRM DETAILS", True), ("Confirm details >", True), ("CONTINUE >", True), ("Continue", True),
-     ("Confirm and pay", False), ("Pay now", False), ("Continue to payment", False), ("Confirm booking", False),
+     ("Next", True), ("NEXT >", True), ("Proceed", True), ("Review and continue", True), ("Go to review", True),
+     ("Go to payment", False), ("Proceed to pay", False), ("Confirm and pay", False), ("Pay now", False), ("Continue to payment", False), ("Confirm booking", False),
      ("Book now", False), ("Purchase", False), ("Back", False)],
 )  # fmt: skip
 def test_qantas_footer_forward_labels(label, allowed):
@@ -1766,3 +1772,129 @@ def test_qantas_the_model_is_told_confirm_details_is_allowed():
     assert "does not pay" in qantas.CONFIRM_DETAILS
     assert qantas.PASSENGER_NEVER_CLICK.search("Confirm and pay button")
     assert not qantas.PASSENGER_NEVER_CLICK.search("CONFIRM DETAILS button in the sticky footer")
+
+
+# --- qantas: the Options page moves on with the footer CONTINUE, clicked in code; every model click checked ----
+@pytest.mark.parametrize(
+    "description",
+    ["Skip to main content link", "Continue link in the skip links", "UPGRADE MY FLIGHTS button",
+     "UPDATE SEARCH button", "SEARCH VEHICLES button", "SELECT HOTEL button", "Add car hire button",
+     "USE CASH button", "Pay now button", "Book now button", "Confirm booking button", "Purchase button"],
+)  # fmt: skip
+def test_qantas_booking_steps_refuse_skip_links_upsells_and_paying(description):
+    assert qantas.BOOKING_NEVER_CLICK.search(description)
+
+
+@pytest.mark.parametrize(
+    "description", ["CONTINUE button in the sticky footer", "Continue to payment button", "ACCEPT button",
+                    "No thanks, continue without seats link"],
+)  # fmt: skip
+def test_qantas_booking_steps_still_allow_moving_on(description):
+    assert not qantas.BOOKING_NEVER_CLICK.search(description)
+
+
+def test_qantas_booking_steps_refuse_skip_link_and_header_selectors():
+    assert qantas.BOOKING_NEVER_SELECT.search("xpath=/html/body/div[1]/nav[1]/a[2]")
+    assert qantas.BOOKING_NEVER_SELECT.search("css=nav.skip-links > a")
+    assert not qantas.BOOKING_NEVER_SELECT.search("xpath=/html/body/navigation-ribbon[1]/div[1]/button[2]")
+
+
+def _observing(*candidates):
+    acted = []
+
+    class Stagehand:
+        async def observe(self, instruction, **options):
+            return SimpleNamespace(data=[SimpleNamespace(description=d, selector=sel, method="click", arguments=[])
+                                         for d, sel in candidates])  # fmt: skip
+
+        async def act(self, action, **options):
+            acted.append(action.selector)
+            return SimpleNamespace(data=SimpleNamespace(success=True, action_description=action.description))
+
+    return Stagehand(), acted
+
+
+def test_qantas_click_one_skips_a_refused_candidate_for_the_next_acceptable_one():
+    stagehand, acted = _observing(("Continue link", "xpath=/html/body/nav[1]/a[1]"),
+                                  ("CONTINUE button", "xpath=/html/body/div[2]/button[1]"))  # fmt: skip
+    done = asyncio.run(qantas.click_one(stagehand, "Click Continue", qantas.BOOKING_NEVER_CLICK,
+                                        refuse_selector=qantas.BOOKING_NEVER_SELECT))  # fmt: skip
+    assert done.success and acted == ["xpath=/html/body/div[2]/button[1]"]
+
+
+def test_qantas_click_one_never_repeats_the_click_that_changed_nothing():
+    stagehand, acted = _observing(("CONTINUE button", "xpath=/html/body/div[2]/a[1]"))
+    done = asyncio.run(qantas.click_one(stagehand, "Click Continue", avoid="xpath=/html/body/div[2]/a[1]"))
+    assert not done.success and "changed nothing" in done.description and acted == []
+
+
+class OptionsFooter:
+    """An Options page with its insurance declined, no fare rules, and a footer CONTINUE that moves it on."""
+
+    def __init__(self):
+        self.screen, self.events = "options", []
+
+    async def js(self, page, fn, arg=None, default=None, lib=""):
+        if fn is qantas.JS_INSURANCE:
+            return default
+        if fn is qantas.JS_ACCEPT:
+            return default
+        if fn is qantas.JS_FOOTER_FORWARD:
+            return {"text": "CONTINUE >", **({"x": 1200, "y": 980} if arg["mark"] else {})}
+        if fn is qantas.JS_SELECTION_PAGE:
+            return {"url": f"https://book.qantas.test/{self.screen}", "heading": self.screen.title()}
+        raise AssertionError(f"unexpected script {fn[:40]!r}")
+
+    async def click_at(self, page, x, y):
+        self.events.append(("click", x, y))
+        self.screen = "passengers"
+
+
+def _options_turn(monkeypatch, state, avoid=None):
+    site = OptionsFooter()
+
+    async def model(*args, **kwargs):
+        site.events.append("model")
+        return Acted(False, "the model was asked")
+
+    async def nothing(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(qantas, "js", site.js)
+    monkeypatch.setattr(qantas, "click_at", site.click_at)
+    monkeypatch.setattr(qantas, "click_one", model)
+    for name in ("settle", "pause"):
+        monkeypatch.setattr(qantas, name, nothing)
+    target = {}
+    acted = asyncio.run(qantas.move_booking_on(object(), object(), Passenger(), state, state.step_type, [0], target,
+                                               avoid))  # fmt: skip
+    return site, acted, target
+
+
+def test_qantas_options_page_moves_on_with_continue_clicked_in_code(monkeypatch):
+    site, acted, target = _options_turn(monkeypatch, _step("extras", "Options", OPTIONS_OFFERS))
+    assert site.events == [("click", 1200, 980)]  # never the model
+    assert (acted.success, acted.description, acted.selector) == (True, "code click on CONTINUE >",
+                                                                  qantas.CONTINUE_MARK)  # fmt: skip
+    assert target["selector"] == qantas.CONTINUE_MARK
+
+
+def test_qantas_validation_errors_go_to_the_model_before_continue(monkeypatch):
+    state = _step("extras", "Options").model_copy(update={"validation_errors": ["Choose a seat option"]})
+    site, _, _ = _options_turn(monkeypatch, state)
+    assert site.events == ["model"]
+
+
+def test_qantas_a_continue_that_changed_nothing_is_not_clicked_again_in_code(monkeypatch):
+    site, _, _ = _options_turn(monkeypatch, _step("extras", "Options"), avoid=qantas.CONTINUE_MARK)
+    assert site.events == ["model"]
+
+
+def test_qantas_continue_is_never_clicked_in_code_on_the_payment_page(monkeypatch):
+    site, _, _ = _options_turn(monkeypatch, _step("payment", "Payment", payment=True))
+    assert site.events == ["model"]
+
+
+def test_qantas_the_model_is_told_to_click_continue_and_nothing_else():
+    for words in ("Continue / Next / Proceed", "hotel, car hire, upgrade", "'skip to' links", "page header"):
+        assert words in qantas.CONTINUE_ONLY
