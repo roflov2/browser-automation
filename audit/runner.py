@@ -10,7 +10,7 @@ import logging
 import os
 import re
 import sys
-from collections.abc import AsyncIterator, Callable, Mapping
+from collections.abc import AsyncIterator, Callable, Iterator, Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -38,6 +38,7 @@ from .config import Settings
 from .core import (
     BROWSER_ERRORS,
     OUTPUT_ROOT,
+    WORKFLOW_DATA,
     AuditError,
     ExtractFailed,
     RunUsage,
@@ -136,6 +137,19 @@ class SessionLog:
         record["timestamp"] = datetime.now(UTC).isoformat()
         self.history.append(redact(record, self.secrets))
 
+    def note(self, message: str, *, level: str = "info", **data: Any) -> None:
+        """Keep one of the workflow's own records (category 'workflow') in the history, without secret values.
+
+        `data` is made JSON-safe (anything else becomes its str()).
+        """
+        record = {
+            "level": level,
+            "message": message,
+            "data": {"category": "workflow", **json.loads(json.dumps(data, default=str))},
+            "timestamp": datetime.now(UTC).isoformat(),
+        }
+        self.history.append(redact(record, self.secrets))
+
     def start_site(self) -> None:
         self.history.clear()
         self.extractions = None
@@ -154,6 +168,51 @@ class SessionLog:
         }
         with self.extractions.open("a", encoding="utf-8") as f:
             f.write(json.dumps(redact(entry, self.secrets), ensure_ascii=False) + "\n")
+
+
+# The workflows' own log lines are kept in session.json's history, with any structured data they carry under
+# core.WORKFLOW_DATA.
+WORKFLOW_LOGGER = "audit.workflows"
+
+
+class WorkflowLogHandler(logging.Handler):
+    """Copies INFO+ records of the workflow loggers into a SessionLog's history."""
+
+    def __init__(self, session_log: SessionLog) -> None:
+        super().__init__(logging.INFO)
+        self.session_log = session_log
+
+    def emit(self, record: logging.LogRecord) -> None:
+        try:
+            data = getattr(record, WORKFLOW_DATA, None)
+            self.session_log.note(
+                record.getMessage().strip(),
+                level=record.levelname.lower(),
+                logger=record.name,
+                **(data if isinstance(data, dict) else {}),
+            )
+        except Exception:  # noqa: BLE001 - a record that cannot be kept must never break the run
+            self.handleError(record)
+
+
+@contextlib.contextmanager
+def workflow_records(session_log: SessionLog) -> Iterator[None]:
+    """While one site is audited, keep the workflows' log records in `session_log`.
+
+    INFO records are let through the workflow loggers even under -q, so the record is the same however the run
+    was started; what reaches stdout is still filtered by the console handler's own level (cli.configure_logging).
+    """
+    logger = logging.getLogger(WORKFLOW_LOGGER)
+    handler = WorkflowLogHandler(session_log)
+    old_level = logger.level
+    if logger.getEffectiveLevel() > logging.INFO:
+        logger.setLevel(logging.INFO)
+    logger.addHandler(handler)
+    try:
+        yield
+    finally:
+        logger.removeHandler(handler)
+        logger.setLevel(old_level)
 
 
 # Page furniture that never holds a price we audit: the site footer and the common cookie-consent
@@ -472,7 +531,8 @@ async def audit_and_record(
     calls_before = getattr(stagehand, "llm_calls", None)
     before = await stagehand.metrics()
     async with ResourceMonitor().running() as monitor:
-        result = await audit_site(workflow, stagehand, page, browser, url, interactive)
+        with workflow_records(session_log):
+            result = await audit_site(workflow, stagehand, page, browser, url, interactive)
     try:
         after = await stagehand.metrics()
     except BROWSER_ERRORS as error:  # the audit itself is already saved; say that the usage figures are not
