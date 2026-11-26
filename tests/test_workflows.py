@@ -322,7 +322,7 @@ def test_qantas_reuses_the_step_when_the_screen_did_not_change(monkeypatch, tmp_
 
     monkeypatch.setattr(qantas, "fingerprint", fake_fingerprint)
     monkeypatch.setattr(qantas, "llm_act", fake_llm_act)
-    for name in ("wait_for_render", "shot", "settle"):
+    for name in ("wait_for_render", "shot", "settle", "read_insurance"):
         monkeypatch.setattr(qantas, name, nothing)
     run = SiteResult(site="s", out_dir=tmp_path)
     reached = asyncio.run(qantas.walk_to_payment(Stagehand(), Page(), Passenger(), run))
@@ -1009,13 +1009,19 @@ class SelectionSite:
         "trip": {"url": "https://book.qantas.test/flights", "heading": "Flights", "trip_summary": True,
                  "summary_page": True},
         "passengers": {"url": "https://book.qantas.test/passengers", "heading": "Passenger details"},
+        # The sidebar still says "Change this flight" and "Subtotal", but the trip page's login button is gone.
+        "options": {"url": "https://book.qantas.test/flights", "heading": "Options", "options": True},
     }  # fmt: skip
     NEXT: ClassVar[dict] = {"results": "fares", "fares": "trip", "trip": "passengers"}
     STEP: ClassVar[dict] = {"results": 1, "fares": 2, "trip": 3}
 
-    def __init__(self, broken=(), offers=None):
+    def __init__(self, broken=(), offers=None, after=None, slow=0, fails=()):
+        """`after`: the page Continue leads to; `slow`: page reads before a click shows; `fails`: steps whose
+        click raises (the element re-rendered) although it takes effect."""
         self.screen, self.broken, self.offers = "results", set(broken), offers or {}
-        self.observed, self.clicked, self.extracted = [], [], []
+        self.next = {**self.NEXT, "trip": after or "passengers"}
+        self.slow, self.fails, self.pending = slow, set(fails), None
+        self.observed, self.clicked, self.extracted, self.reads = [], [], [], 0
 
     async def observe(self, instruction, **options):
         step = self.STEP.get(self.screen)
@@ -1028,8 +1034,18 @@ class SelectionSite:
         self.clicked.append(action.description)
         step = self.STEP.get(self.screen)
         if step not in self.broken:
-            self.screen = self.NEXT[self.screen]
+            self.pending = [self.next[self.screen], self.slow]
+            self.swap()
+        if step in self.fails:
+            raise RuntimeError("Could not find an element for the given xPath(s): /html/body/app/nav/button")
         return SimpleNamespace(data=SimpleNamespace(success=True, action_description=action.description))
+
+    def swap(self):
+        """The view changes once `slow` page reads have passed since the click."""
+        if self.pending and self.pending[1] <= 0:
+            self.screen, self.pending = self.pending[0], None
+        elif self.pending:
+            self.pending[1] -= 1
 
     async def extract(self, instruction, schema, **options):
         self.extracted.append(schema.__name__)
@@ -1043,7 +1059,10 @@ class SelectionSite:
 
     async def js(self, page, fn, arg=None, default=None, lib=""):
         if fn is qantas.JS_SELECTION_PAGE:
-            return dict(self.PAGES[self.screen])
+            self.reads += 1
+            page = dict(self.PAGES[self.screen])
+            self.swap()
+            return page
         return default
 
     async def fingerprint(self, page):
@@ -1056,7 +1075,7 @@ def select(monkeypatch, tmp_path, site):
 
     monkeypatch.setattr(qantas, "js", site.js)
     monkeypatch.setattr(qantas, "fingerprint", site.fingerprint)
-    for name in ("settle", "shot", "try_act"):
+    for name in ("settle", "shot", "try_act", "pause"):
         monkeypatch.setattr(qantas, name, nothing)
     flight = qantas.Flight(flight_number="QF2310", departs="12:35", arrives="16:00", stops=0, duration=None,
                            price="$529", sold_out=False, fares=[])  # fmt: skip
@@ -1104,3 +1123,184 @@ def test_qantas_never_clicks_login_to_skip_to_payment(monkeypatch, tmp_path):
         select(monkeypatch, tmp_path, site)
     assert "LOGIN TO SKIP TO PAYMENT button" not in site.clicked
     assert site.screen == "trip"
+
+
+# --- qantas: Continue to the Options page, and the travel insurance question -----------------------------
+def test_qantas_continue_waits_for_the_options_page_and_clicks_once(monkeypatch, tmp_path):
+    site = SelectionSite(after="options", slow=3)  # the trip page still shows for the first reads after the click
+    item = select(monkeypatch, tmp_path, site)
+    assert site.screen == "options"
+    assert site.observed == [1, 2, 3]  # CONTINUE observed (and clicked) once
+    assert [(s["step"], s["attempt"], s["passed"]) for s in item["selection_steps"]][-1] == (3, 1, True)
+
+
+def test_qantas_a_click_that_failed_as_the_page_re_rendered_is_judged_by_the_page(monkeypatch, tmp_path):
+    site = SelectionSite(after="options", fails={3})
+    item = select(monkeypatch, tmp_path, site)
+    assert site.observed == [1, 2, 3]
+    last = item["selection_steps"][-1]
+    assert (last["step"], last["attempt"], last["passed"], last["acted"]) == (3, 1, True, False)
+    assert last["description"].startswith("click failed")
+
+
+def test_qantas_a_retry_rereads_the_page_before_clicking_again(monkeypatch, tmp_path):
+    # Slower than the whole check: the page shows Options only once the first attempt has given up.
+    monkeypatch.setattr(qantas, "STEP_CHECK_MS", qantas.STEP_POLL_MS * 2)
+    site = SelectionSite(after="options", slow=3)
+    item = select(monkeypatch, tmp_path, site)
+    assert site.observed == [1, 2, 3]  # no second CONTINUE
+    assert [(s["attempt"], s["passed"]) for s in item["selection_steps"] if s["step"] == 3] == [(1, False), (2, True)]
+
+
+@pytest.mark.parametrize("label", ["USE CASH button", "USE POINTS button", "UPGRADE MY FLIGHTS button"])
+def test_qantas_click_one_refuses_the_options_page_s_offers(label):
+    offer = SimpleNamespace(description=label, selector="xpath=/offer", method="click", arguments=[])
+
+    class Stagehand:
+        acted = False
+
+        async def observe(self, instruction, **options):
+            return SimpleNamespace(data=[offer])
+
+        async def act(self, action, **options):
+            Stagehand.acted = True
+
+    acted = asyncio.run(qantas.click_one(Stagehand(), "Click the red CONTINUE button"))
+    assert not acted.success and acted.description.startswith("refused") and not Stagehand.acted
+
+
+class InsuranceBox:
+    """The 'No, I don't want travel insurance' checkbox at the js()/click_at() boundary."""
+
+    def __init__(self, checked=False, takes=("mouse",), found=True, warning=False):
+        self.checked, self.takes, self.found, self.warning = checked, set(takes), found, warning
+        self.events = []
+
+    async def js(self, page, fn, arg=None, default=None, lib=""):
+        if fn is qantas.JS_INSURANCE:
+            seen = {"question": True, "warning": self.warning and not self.checked, "found": self.found,
+                    "checked": self.checked}  # fmt: skip
+            return {**seen, "x": 40, "y": 400} if arg and self.found else seen
+        if fn is qantas.JS_DOM_CLICK:
+            self.events.append("dom_click")
+            self.checked = self.checked or "dom" in self.takes
+            return True
+        raise AssertionError(f"unexpected script {fn[:40]!r}")
+
+    async def click_at(self, page, x, y):
+        self.events.append(("click", x, y))
+        self.checked = self.checked or "mouse" in self.takes
+
+
+def _decline(monkeypatch, box):
+    async def nothing(*args, **kwargs):
+        return None
+
+    async def fake_llm_act(stagehand, instruction, **options):
+        box.events.append(("model", instruction))
+        box.checked = box.checked or "model" in box.takes
+        return Acted(True, "ticked the box")
+
+    monkeypatch.setattr(qantas, "js", box.js)
+    monkeypatch.setattr(qantas, "click_at", box.click_at)
+    monkeypatch.setattr(qantas, "llm_act", fake_llm_act)
+    monkeypatch.setattr(qantas, "settle", nothing)
+    return asyncio.run(qantas.decline_travel_insurance(object(), object()))
+
+
+def test_qantas_declines_travel_insurance_with_a_mouse_click(monkeypatch):
+    box = InsuranceBox(warning=True)
+    assert _decline(monkeypatch, box) is True
+    assert box.events == [("click", 40, 400)]  # no DOM click, no model
+
+
+def test_qantas_declining_insurance_falls_back_to_a_dom_click_then_the_model(monkeypatch):
+    box = InsuranceBox(takes=())
+    assert _decline(monkeypatch, box) is False
+    assert box.events[:2] == [("click", 40, 400), "dom_click"]
+    assert box.events[2] == ("model", qantas.DECLINE_INSURANCE)
+    assert "Use cash" in qantas.DECLINE_INSURANCE and "Use points" in qantas.DECLINE_INSURANCE
+    assert _decline(monkeypatch, InsuranceBox(takes=("dom",))) is True
+
+
+def test_qantas_never_unticks_insurance_that_is_already_declined(monkeypatch):
+    box = InsuranceBox(checked=True)
+    assert _decline(monkeypatch, box) is True
+    assert box.events == []
+
+
+def test_qantas_asks_the_model_when_the_insurance_box_cannot_be_found(monkeypatch):
+    box = InsuranceBox(found=False, takes=("model",))
+    assert _decline(monkeypatch, box) is True
+    assert box.events == [("model", qantas.DECLINE_INSURANCE)]
+
+
+def _options_step(monkeypatch, tmp_path, *, box, screens, steps):
+    """walk_to_payment over scripted steps (StepState per read), with the insurance box on the page."""
+    events, reads = box.events, iter(steps)
+
+    class Stagehand:
+        async def extract(self, instruction, schema, **options):
+            events.append("extract")
+            return SimpleNamespace(data=next(reads))
+
+    async def fake_llm_act(stagehand, instruction, **options):
+        events.append(("act", instruction))
+        return Acted(True, "clicked continue")
+
+    async def nothing(*args, **kwargs):
+        return None
+
+    class Page:
+        async def url(self):
+            return "https://book.qantas.test/options"
+
+    screens = iter(screens)
+
+    async def fake_fingerprint(page):
+        return next(screens)
+
+    monkeypatch.setattr(qantas, "fingerprint", fake_fingerprint)
+    monkeypatch.setattr(qantas, "llm_act", fake_llm_act)
+    monkeypatch.setattr(qantas, "js", box.js)
+    monkeypatch.setattr(qantas, "click_at", box.click_at)
+    for name in ("wait_for_render", "shot", "settle"):
+        monkeypatch.setattr(qantas, name, nothing)
+    run = SiteResult(site="s", out_dir=tmp_path)
+    return run, asyncio.run(qantas.walk_to_payment(Stagehand(), Page(), Passenger(), run))
+
+
+def _step(step_type, heading, offers=(), payment=False):
+    return qantas.StepState(step_type=step_type, heading=heading, is_payment_page=payment, blocked_reason=None,
+                            offers=list(offers), price_lines=[], total="$529.00", validation_errors=[],
+                            summary=heading)  # fmt: skip
+
+
+OPTIONS_OFFERS = [
+    qantas.Offer(category="fare_upgrade", label="Upgrade to Business", price="from $720", price_basis=None,
+                 selected=False, mandatory=False),
+    qantas.Offer(category="travel_insurance", label="Australian Comprehensive", price="$40",
+                 price_basis="per adult", selected=False, mandatory=False),
+]  # fmt: skip
+
+
+def test_qantas_walk_declines_insurance_before_continuing(monkeypatch, tmp_path):
+    box = InsuranceBox()
+    steps = [_step("insurance", "Options", OPTIONS_OFFERS), _step("payment", "Payment", payment=True)]
+    run, reached = _options_step(monkeypatch, tmp_path, box=box, screens=["options", "payment"], steps=steps)
+    assert reached is True
+    click = box.events.index(("click", 40, 400))
+    continue_ = next(i for i, e in enumerate(box.events) if isinstance(e, tuple) and e[0] == "act")
+    assert box.events.index("extract") < click < continue_  # read and recorded first, declined before Continue
+    assert qantas.INSURANCE_DONE.strip() in box.events[continue_][1]
+    assert {e["category"] for e in run.extras} == {"fare_upgrade", "travel_insurance"}  # still offered
+    assert not any(e["selected_by_default"] for e in run.extras)
+
+
+def test_qantas_walk_gives_up_when_the_insurance_answer_is_not_accepted(monkeypatch, tmp_path):
+    box = InsuranceBox(takes=(), warning=True)  # the box never ticks; Continue keeps showing the warning
+    steps = [_step("insurance", "Options", OPTIONS_OFFERS)] * 3
+    run, reached = _options_step(monkeypatch, tmp_path, box=box, screens=["a", "b", "c"], steps=steps)
+    assert reached is False
+    assert run.message == "Stuck on 'Options': insurance selection not accepted"
+    assert sum(1 for e in box.events if isinstance(e, tuple) and e[0] == "act") == 2  # one model tick, no Continue
