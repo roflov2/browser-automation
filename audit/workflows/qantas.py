@@ -89,7 +89,8 @@ POPUPS = "cookie banner, promotional/newsletter popup, app-install banner or reg
 SAFETY_PROMPT = (
     "You are auditing an airline booking flow for price transparency. Never enter payment card, voucher, "
     "gift card, travel credit or frequent-flyer points details, and never click a button that pays for, purchases or confirms a booking "
-    "(e.g. 'Pay now', 'Purchase', 'Confirm and pay', 'Book now' on a payment page). Never log in or create an account."
+    "(e.g. 'Pay now', 'Purchase', 'Confirm and pay', 'Book now' on a payment page). Never log in or create an account. "
+    "'Confirm details' (passenger details) and 'Accept' (fare rules) are allowed; they are not purchases."
 )
 
 STEP_TYPES = (
@@ -1928,13 +1929,27 @@ async def fill_passenger_details(stagehand: Stagehand, page: Page, passenger: Pa
     return False
 
 
-# The sticky footer's red "CONTINUE >" (in the navigation-ribbon bar at the bottom of each booking page). Only a
-# button inside that bar (or a bottom nav / footer) counts, so no "Continue" elsewhere on the page is taken. With
-# `mark`, it is marked with data-audit-continue and its centre returned. Null if there is none.
-JS_CONTINUE = r"""mark => {
+# The sticky footer's red forward button (in the navigation-ribbon bar at the bottom of each booking page). It
+# reads "CONTINUE >", and on a filled-in passenger details page "CONFIRM DETAILS", which confirms the passenger
+# details only: payment comes later. Anything that reads like paying never matches, even in the footer.
+FOOTER_FORWARD = re.compile(r"^(continue|confirm details)\b", re.IGNORECASE)
+NEVER_FORWARD = re.compile(r"pay|purchase|book now|confirm (and pay|booking)", re.IGNORECASE)
+
+
+def is_footer_forward(text: str | None) -> bool:
+    """Whether a footer button's text is one the code may click to move on (never a payment)."""
+    label = " ".join(str(text or "").split())
+    return bool(FOOTER_FORWARD.match(label)) and not NEVER_FORWARD.search(label)
+
+
+# Only a button inside the footer bar (or a bottom nav / footer) counts, so no "Continue" elsewhere on the page is
+# taken. The patterns come from FOOTER_FORWARD / NEVER_FORWARD. With `mark`, it is marked with data-audit-continue
+# and its centre returned. Null if there is none.
+JS_FOOTER_FORWARD = r"""({ mark, forward, never }) => {
     const bar = 'navigation-ribbon, nav, footer, [class*="ribbon" i], [class*="footer" i]';
+    const ok = el => new RegExp(forward, 'i').test(clean(el.innerText)) && !new RegExp(never, 'i').test(clean(el.innerText));
     const found = Array.from(document.querySelectorAll('button, a, [role="button"]'))
-        .filter(el => vis(el) && /^continue\b/i.test(clean(el.innerText)) && el.closest(bar));
+        .filter(el => vis(el) && ok(el) && el.closest(bar));
     if (!found.length) return null;
     const el = found[found.length - 1];
     const out = { text: clean(el.innerText) };
@@ -1951,7 +1966,12 @@ CONTINUE_MARK = "[data-audit-continue]"
 # What the model may never click on the passenger details page: the loyalty sign-up, the travel arranger and
 # phone-number extras, and the "Red Email" marketing box, on top of the controls never clicked anywhere.
 PASSENGER_NEVER_CLICK = re.compile(
-    rf"{NEVER_CLICK.pattern}|\bjoin\b|sign ?up|travel arranger|red email|multiple phone", re.IGNORECASE
+    rf"{NEVER_CLICK.pattern}|\bjoin\b|sign ?up|travel arranger|red email|multiple phone|{NEVER_FORWARD.pattern}",
+    re.IGNORECASE,
+)
+CONFIRM_DETAILS = (
+    " The passenger details are filled in. Click the red CONFIRM DETAILS button in the sticky footer. It confirms "
+    "the passenger details only and does not pay."
 )
 
 
@@ -1966,18 +1986,33 @@ async def left_page(page: Page, before: dict) -> bool:
     return False
 
 
-async def click_continue(page: Page) -> bool:
-    """Click the sticky footer's CONTINUE in code: a mouse click, then a DOM click. True once the page moved on."""
-    found = await js(page, JS_CONTINUE, True, default=None)
-    if not isinstance(found, dict) or "x" not in found:
-        return False
+async def find_footer_forward(page: Page, mark: bool = False) -> dict | None:
+    found = await js(
+        page,
+        JS_FOOTER_FORWARD,
+        {"mark": mark, "forward": FOOTER_FORWARD.pattern, "never": NEVER_FORWARD.pattern},
+        default=None,
+    )
+    # Checked here too, so a label that reads like paying is never clicked whatever the page script found.
+    return found if isinstance(found, dict) and is_footer_forward(found.get("text")) else None
+
+
+async def click_footer_forward(page: Page) -> str | None:
+    """Click the sticky footer's CONTINUE / CONFIRM DETAILS in code: a mouse click, then a DOM click.
+
+    The button's text once the page has moved on (the URL or main heading changed); None if not found or the page
+    stayed.
+    """
+    found = await find_footer_forward(page, mark=True)
+    if found is None or "x" not in found:
+        return None
     before = await selection_page(page)
     await click_at(page, found["x"], found["y"])
     if await left_page(page, before):
-        return True
-    log.info("  CONTINUE: the page did not move on after the click; trying a DOM click")
+        return str(found["text"])
+    log.info(f"  {found['text']}: the page did not move on after the click; trying a DOM click")
     await js(page, JS_DOM_CLICK, "data-audit-continue")
-    return await left_page(page, before)
+    return str(found["text"]) if await left_page(page, before) else None
 
 
 # The travel insurance question ("Need Travel Insurance?" on the Options page): an insurance card (SELECT, or
@@ -2173,8 +2208,8 @@ BOOKING_GOAL = (
     "seats, insurance, carbon offset, upgrades, car hire, hotels or donations), continuing as a guest without "
     "logging in or joining a loyalty program. Take the single next action that moves the booking towards the "
     "payment page. Where the page insists on a choice, choose the free or decline option. Accepting fare rules or "
-    "fare conditions (an 'Accept' button) is allowed and needed: it is not a purchase. Never click a button that "
-    "pays or completes the purchase (Pay, Purchase, Book now, Confirm booking)."
+    "fare conditions (an 'Accept' button) is allowed and needed: it is not a purchase. 'Confirm details' (passenger details) and 'Accept' (fare rules) are allowed; they are not purchases. Never click a "
+    "button that pays or completes the purchase (Pay, Purchase, Book now, Confirm booking)."
 )
 
 
@@ -2189,16 +2224,20 @@ async def next_booking_action(
 ) -> Acted:
     """Take the one action that moves the booking on from `step_type`, declining every extra.
 
-    A completed passenger form moves on with the footer's CONTINUE, clicked in code. `target` is filled with the
-    element the model chose before it is acted on, so a caller can record it even if the act raises.
+    A completed passenger form moves on with the footer's CONFIRM DETAILS (or CONTINUE), clicked in code. `target`
+    is filled with the element the model chose before it is acted on, so a caller can record it even if the act
+    raises.
     """
     target = {} if target is None else target
     passengers = step_type == "passenger_details"
-    if passengers and await fill_passenger_details(stagehand, page, passenger) and await click_continue(page):
-        log.info("  Passenger details: CONTINUE clicked in code")
-        target.update(description="CONTINUE in the sticky footer", selector=CONTINUE_MARK)
-        return Acted(True, "code click on CONTINUE", CONTINUE_MARK)
+    complete = passengers and await fill_passenger_details(stagehand, page, passenger)
+    if complete and (clicked := await click_footer_forward(page)):
+        log.info(f"  Passenger details: confirmed ({clicked} clicked in code)")
+        target.update(description=f"{clicked} in the sticky footer", selector=CONTINUE_MARK)
+        return Acted(True, f"code click on {clicked}", CONTINUE_MARK)
     instruction = f"{BOOKING_GOAL} The current screen looks like: {state.heading or step_type}."
+    if complete:
+        instruction += CONFIRM_DETAILS
     if state.validation_errors:
         instruction += (
             f" The page shows these errors: {'; '.join(state.validation_errors[:3])}. Fix the first one if it is "
