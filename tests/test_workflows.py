@@ -1991,3 +1991,32 @@ def test_qantas_continue_is_never_clicked_in_code_on_the_payment_page(monkeypatc
 def test_qantas_the_model_is_told_to_click_continue_and_nothing_else():
     for words in ("Continue / Next / Proceed", "hotel, car hire, upgrade", "'skip to' links", "page header"):
         assert words in qantas.CONTINUE_ONLY
+
+
+# --- qantas: a declined extra on the payment page is not counted as in the total ----
+def _checkout(subtotal, total, extras):
+    return qantas.CheckoutDetails(
+        is_checkout_page=True, blocked_reason=None, items=[], subtotal=subtotal,
+        extras=[qantas.Fee(label=label, amount=amount) for label, amount in extras], other_fees=[],
+        payment_surcharges=[], tax_amount=None, tax_included=True, total=total, currency="AUD", summary=None,
+    )  # fmt: skip
+
+
+def test_qantas_drops_extras_that_cannot_be_in_a_total_equal_to_the_subtotal(caplog):
+    checkout = _checkout("$529.00", "$529.00", [("Voluntary Carbon Program", "$14.60")])
+    with caplog.at_level("WARNING", logger=qantas.log.name):
+        kept = qantas.drop_unpaid_extras(checkout)
+    assert kept.extras == [] and kept.total == "$529.00"
+    assert "Voluntary Carbon Program $14.60" in caplog.text
+    assert qantas.compare_prices(SiteResult(site="s", out_dir=Path()), kept)["extras_in_total"] == []
+
+
+@pytest.mark.parametrize(
+    ("subtotal", "total", "extras"),
+    [("$529.00", "$543.60", [("Voluntary Carbon Program", "$14.60")]),  # really in the total
+     ("$529.00", "$529.00", [("Seat", "$0.00")]),  # nothing paid for
+     (None, "$529.00", [("Voluntary Carbon Program", "$14.60")])],  # no subtotal to compare with
+)  # fmt: skip
+def test_qantas_keeps_extras_the_total_can_hold(subtotal, total, extras):
+    checkout = _checkout(subtotal, total, extras)
+    assert qantas.drop_unpaid_extras(checkout) == checkout

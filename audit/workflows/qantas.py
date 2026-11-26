@@ -294,7 +294,9 @@ class CheckoutDetails(BaseModel):
     items: list[LineItem]
     subtotal: str | None = Field(description="Flight/fare total before optional extras and payment fees, as displayed")
     extras: list[Fee] = Field(
-        description="Optional extras currently included in the total (bags, seats, insurance, carbon offset, ...)"
+        description="Optional extras the customer has **selected** and that are included in the total (bags, seats, "
+        "insurance, carbon offset, ...). Do not list extras that are only offered, or where a decline option ('No "
+        "thanks', 'No, I don't want…') is selected; list those nowhere."
     )
     other_fees: list[Fee] = Field(
         description="Any compulsory charge added on top of the fare that is NOT a government tax and NOT an optional extra, "
@@ -2641,6 +2643,20 @@ def compare_prices(result: SiteResult, checkout: CheckoutDetails | None) -> Repo
     }
 
 
+def drop_unpaid_extras(checkout: CheckoutDetails) -> CheckoutDetails:
+    """Backstop for the extraction listing a declined extra (the 'Voluntary Carbon Program $14.60' with 'No thanks,
+    not for this trip' selected): extras worth more than zero while the total equals the subtotal cannot be in the
+    total, so they are dropped, with a warning."""
+    extras = money_sum(parse_amount(f.amount) for f in checkout.extras)
+    if positive(extras) and diff(parse_price(checkout.total), parse_price(checkout.subtotal)) == 0:
+        listed = ", ".join(f"{f.label} {f.amount}" for f in checkout.extras)
+        log.warning(
+            f"  Payment page: total equals subtotal ({checkout.total}), so these extras are not in it: {listed}"
+        )
+        return checkout.model_copy(update={"extras": []})
+    return checkout
+
+
 async def read_payment_page(stagehand: Stagehand, page: Page, result: SiteResult) -> CheckoutDetails:
     await shot(page, result.out_dir / "checkout.png")
     checkout = (
@@ -2652,6 +2668,7 @@ async def read_payment_page(stagehand: Stagehand, page: Page, result: SiteResult
             CheckoutDetails,
         )
     ).data
+    checkout = drop_unpaid_extras(checkout)
     if checkout.payment_surcharges:  # replace the payment step's own offers with the per-method list
         result.extras = [
             e for e in result.extras if not (e["step_type"] == "payment" and e["category"] == "payment_surcharge")
