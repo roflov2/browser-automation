@@ -1612,7 +1612,7 @@ class PassengerPage:
 
     def __init__(self, has_continue=True, takes=True, label="CONFIRM DETAILS"):
         self.has_continue, self.takes, self.screen, self.label = has_continue, takes, "passengers", label
-        self.events = []
+        self.events, self.instructions = [], []
 
     async def js(self, page, fn, arg=None, default=None, lib=""):
         if fn is qantas.JS_FOOTER_FORWARD:
@@ -1654,6 +1654,7 @@ def _passengers(monkeypatch, tmp_path, site, *, acts=(), observed=()):
 
         async def observe(self, instruction, **options):
             events.append("observe")
+            site.instructions.append(instruction)
             description = observed.pop(0) if observed else "CONTINUE button"
             return SimpleNamespace(data=[SimpleNamespace(description=description, selector="xpath=/x", method="click",
                                                          arguments=[])])  # fmt: skip
@@ -1867,12 +1868,43 @@ def test_qantas_click_one_falls_back_to_the_description_when_the_label_cannot_be
     assert not done.success and done.description == "refused: Pay now button" and acted == []
 
 
-def test_qantas_click_one_still_refuses_upsells_by_label_or_description(monkeypatch):
-    page = _labelled(monkeypatch, {"xpath=/a": "UPGRADE MY FLIGHTS", "xpath=/b": "Continue"})
-    stagehand, acted = _observing(("Red button that moves on", "xpath=/a"), ("Join Qantas Frequent Flyer", "xpath=/b"))
+def test_qantas_click_one_checks_upsells_against_the_description_only(monkeypatch):
+    page = _labelled(monkeypatch, {"xpath=/a": "Continue", "xpath=/b": "Seat preference"})
+    stagehand, acted = _observing(("Join Qantas Frequent Flyer", "xpath=/a"), ("Seat preference dropdown", "xpath=/b"))
     done = asyncio.run(qantas.click_one(stagehand, "Click CONTINUE", qantas.PASSENGER_NEVER_CLICK, page=page,
                                         refuse_label=qantas.PASSENGER_NEVER_LABEL))  # fmt: skip
-    assert not done.success and acted == []
+    assert done.success and acted == ["xpath=/b"]  # the join refused by its description; a form field is fine
+
+
+CART_SEATS = ("xpath=/html/body/app-root[1]/shopping-cart[1]/shopping-cart-panel[1]/div[1]/cart-collapsible-card[3]"
+              "/div[1]/div[1]/button[1]")  # fmt: skip
+
+
+def test_qantas_passenger_step_refuses_the_cart_panel_s_seats_button(monkeypatch):
+    page = _labelled(monkeypatch, {CART_SEATS: "Seats"})
+    stagehand, acted = _observing(("Button to proceed to the next step", CART_SEATS))
+    done = asyncio.run(qantas.click_one(stagehand, "Click CONFIRM DETAILS", qantas.PASSENGER_NEVER_CLICK, page=page,
+                                        refuse_selector=qantas.PASSENGER_NEVER_SELECT,
+                                        refuse_label=qantas.PASSENGER_NEVER_LABEL))  # fmt: skip
+    assert not done.success and "shopping-cart" in done.description and acted == []
+    assert qantas.BOOKING_NEVER_SELECT.search(CART_SEATS)  # on every other booking step too
+
+
+@pytest.mark.parametrize(
+    ("description", "refused"),
+    [("Proceed to the seats selection step", True), ("Select seats button", True), ("Choose seats link", True),
+     ("Seat map button", True), ("Seats and bags step", False), ("Seats & bags", False),
+     ("Seats dropdown in the passenger form", False), ("Seat preference field", False),
+     ("CONFIRM DETAILS button in the sticky footer", False)],
+)  # fmt: skip
+def test_qantas_passenger_step_refuses_a_jump_to_seats_but_not_a_form_field(description, refused):
+    assert bool(qantas.PASSENGER_NEVER_CLICK.search(description)) is refused
+
+
+def test_qantas_passenger_step_tells_the_model_to_keep_off_the_cart_panel(monkeypatch, tmp_path):
+    site = PassengerPage(has_continue=False)
+    _passengers(monkeypatch, tmp_path, site)
+    assert site.instructions and all(qantas.NO_CART in i for i in site.instructions)
 
 
 def test_qantas_click_one_skips_a_refused_candidate_for_the_next_acceptable_one():

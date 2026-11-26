@@ -1505,8 +1505,8 @@ async def click_one(
 
     `refuse_label` (anything that pays) is checked against the element's own label read from the page, not the
     model's prose: a description such as "accepts the conditions, not confirming a purchase" must not refuse an
-    ACCEPT, and "PAY WITH CARD" is refused however it is described. `refuse` is checked against that label too.
-    When the label cannot be read (the selector does not resolve), both are checked against the description.
+    ACCEPT, and "PAY WITH CARD" is refused however it is described. When the label cannot be read (the selector
+    does not resolve), `refuse_label` is checked against the description instead.
     """
     found = await stagehand.observe(instruction + " Return nothing if there is no such element.")
     candidates = list(found.data or [])
@@ -1517,7 +1517,7 @@ async def click_one(
         description = str(getattr(candidate, "description", "") or "")
         selector = str(getattr(candidate, "selector", "") or "")
         label = await element_label(page, selector) if refuse_label is not None else None
-        if refuse.search(description) or (label is not None and refuse.search(label)):
+        if refuse.search(description):
             return description
         if refuse_label is not None and refuse_label.search(description if label is None else label):
             return description if label is None else f"{description} (labelled {label!r})"
@@ -2047,11 +2047,18 @@ JS_FOOTER_FORWARD = r"""({ mark, forward, never }) => {
     return out;
 }"""
 CONTINUE_MARK = "[data-audit-continue]"
+# A move to the seat selection (the cart panel's "Proceed to the seats selection step"), unless the description is
+# of a form field (a "Seats" dropdown the form requires) or the "Seats and bags" step. Only what the model would
+# click is screened: the form is filled by fill_passenger_details, which never checks this.
+SEAT_STEP = (
+    r"^(?!.*\b(field|dropdown|input|checkbox|radio|combobox|textbox)\b)"
+    r".*?(\bseats?\b(?! *(and|&) *bags)|select seats|choose seats)"
+)
 # What the model may never click on the passenger details page: the loyalty sign-up, the travel arranger and
-# phone-number extras, and the "Red Email" marketing box, on top of the controls never clicked anywhere. Checked
-# against the model's description and the element's label (click_one); a false refusal costs only a turn.
+# phone-number extras, the "Red Email" marketing box and a jump to seat selection, on top of the controls never
+# clicked anywhere. Checked against the model's description (click_one); a false refusal costs only a turn.
 PASSENGER_NEVER_CLICK = re.compile(
-    rf"{NEVER_CLICK.pattern}|\bjoin\b|sign ?up|travel arranger|red email|multiple phone",
+    rf"{NEVER_CLICK.pattern}|\bjoin\b|sign ?up|travel arranger|red email|multiple phone|{SEAT_STEP}",
     re.IGNORECASE,
 )
 # Anything that pays, on the passenger details page: checked against the element's own label only (its
@@ -2059,7 +2066,7 @@ PASSENGER_NEVER_CLICK = re.compile(
 PASSENGER_NEVER_LABEL = NEVER_FORWARD
 # What the model may never click on any other booking step (the Options page above all): the "skip to" links,
 # the upsells (upgrade, hotel, car hire, Use cash) and "Update search", on top of the controls never clicked
-# anywhere. Checked against the description and the label, like PASSENGER_NEVER_CLICK.
+# anywhere. Checked against the description, like PASSENGER_NEVER_CLICK.
 BOOKING_NEVER_CLICK = re.compile(
     rf"{NEVER_CLICK.pattern}|skip (to|links?)\b|upgrade my flights|update search|search vehicles|use cash|select hotel"
     r"|add (a )?(hotel|car)",
@@ -2069,9 +2076,12 @@ BOOKING_NEVER_CLICK = re.compile(
 # PASSENGER_NEVER_LABEL). "Continue to payment" is allowed: the run stops on the payment page.
 BOOKING_PURCHASE = r"\bpay\b|purchase|book now|confirm (and pay|booking)"
 BOOKING_NEVER_LABEL = re.compile(BOOKING_PURCHASE, re.IGNORECASE)
-# A selector the model may never click on a booking step: the skip links, and anything in a top-level <nav>
-# (the page header's links; the footer's CONTINUE is clicked in code).
-BOOKING_NEVER_SELECT = re.compile(r"skip-links|/nav\[", re.IGNORECASE)
+# A selector the model may never click on a booking step: the skip links, anything in a top-level <nav> (the page
+# header's links; the footer's CONTINUE is clicked in code), and the right-hand trip summary / cart panel
+# (shopping-cart > shopping-cart-panel > cart-collapsible-card), whose buttons jump to other steps such as seats.
+BOOKING_NEVER_SELECT = re.compile(r"shopping-cart|cart-collapsible-card|skip-links|/nav\[", re.IGNORECASE)
+PASSENGER_NEVER_SELECT = BOOKING_NEVER_SELECT
+NO_CART = " Do not click anything in the trip summary / cart panel on the right."
 CONTINUE_ONLY = (
     " If there is a Continue / Next / Proceed button, click it. Do not click hotel, car hire, upgrade or insurance "
     "offer buttons, 'skip to' links, or anything in the page header."
@@ -2359,6 +2369,8 @@ async def next_booking_action(
         instruction += CONFIRM_DETAILS
     elif not passengers:
         instruction += CONTINUE_ONLY
+    if passengers:
+        instruction += NO_CART
     if avoid:
         instruction += f" Do not choose {avoid} again: clicking it last time changed nothing."
     if state.validation_errors:
@@ -2379,7 +2391,7 @@ async def next_booking_action(
         refuse,
         target=chosen,
         page=page,
-        refuse_selector=BOOKING_NEVER_SELECT,
+        refuse_selector=PASSENGER_NEVER_SELECT if passengers else BOOKING_NEVER_SELECT,
         refuse_label=PASSENGER_NEVER_LABEL if passengers else BOOKING_NEVER_LABEL,
         avoid=avoid,
     )
