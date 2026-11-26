@@ -1,0 +1,48 @@
+# Optional per-domain hints: DATA, never code paths.
+#
+# The navigator runs the same loop and helpers on every site. A few sites are slow or noisy in ways no
+# generic heuristic sees, so the timings and extra guard words harvested from the legacy `audit/workflows/`
+# scripts are kept here. A key matches the page's host and every subdomain of it ("qantas.com" also covers
+# "book.qantas.com"). Every key is optional; anything not listed falls back to `default`.
+#
+#   hydration_wait_s   seconds to wait for a client-side app to render (spinners gone, text present) after a navigation
+#   settle_ms          upper bound on the post-action quiet wait (the wait ends early once the DOM stops changing)
+#   queue_wait_s       how long to sit in a virtual waiting room / on-sale queue before giving up
+#   dismiss_selectors  CSS selectors clicked, in order, when an overlay blocks the page (before asking the model)
+#   never_click        extra regex (case-insensitive) of labels the navigator must refuse to click on this site
+#   overlay_hint       extra words appended to the generic "dismiss the overlay" instruction
+
+default:
+  hydration_wait_s: 10
+  settle_ms: 1500
+  queue_wait_s: 300
+  dismiss_selectors:
+    # Consent-management vendors seen across the legacy runs (OneTrust, Cookiebot, Didomi, TrustArc, Klaviyo).
+    - "#onetrust-accept-btn-handler"
+    - "#CybotCookiebotDialogBodyLevelButtonLevelOptinAllowAll"
+    - "#didomi-notice-agree-button"
+    - "#truste-consent-button"
+    - "button.klaviyo-close-form"
+  never_click: "create (an )?account|start (your )?(free )?trial|join now|subscribe"
+
+# From audit/workflows/qantas.py: a slow Angular SPA; results show a blank page for up to ~30 s; reward/points
+# and upgrade controls sit beside the cash path and must never be taken.
+qantas.com:
+  hydration_wait_s: 30
+  settle_ms: 2500
+  never_click: "log ?in|sign ?in|start again|change (this flight|search)|rewards?\\b|(?<![a-z])pts\\b|points|use cash|upgrade|travel arranger|red email"
+
+# From audit/workflows/ubereats/: the store and cart are a React SPA; Uber One trials are offered mid-flow; the
+# building-type prompt after an address is set accepts "Skip" / "Not now".
+ubereats.com:
+  hydration_wait_s: 15
+  settle_ms: 2000
+  never_click: "uber one|try .*free|start .*trial"
+  overlay_hint: "For a building-type / dropoff-details prompt, 'Skip', 'Not now' or 'Save' are fine; never edit or delete a saved address."
+
+# From audit/workflows/ticketek/: slow ASP.NET pages and an on-sale queue that can last 15 minutes.
+ticketek.com.au:
+  hydration_wait_s: 20
+  settle_ms: 2500
+  queue_wait_s: 900
+  never_click: "sign ?up|membership"
