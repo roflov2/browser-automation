@@ -1605,15 +1605,16 @@ class PassengerPage:
     `has_continue`: the footer's CONTINUE is found in code; `takes`: whether clicking it moves the page on.
     """
 
-    def __init__(self, has_continue=True, takes=True):
-        self.has_continue, self.takes, self.screen = has_continue, takes, "passengers"
+    def __init__(self, has_continue=True, takes=True, label="CONFIRM DETAILS"):
+        self.has_continue, self.takes, self.screen, self.label = has_continue, takes, "passengers", label
         self.events = []
 
     async def js(self, page, fn, arg=None, default=None, lib=""):
-        if fn is qantas.JS_CONTINUE:
+        if fn is qantas.JS_FOOTER_FORWARD:
             if not self.has_continue or self.screen != "passengers":
                 return default
-            return {"text": "CONTINUE", **({"x": 1300, "y": 960} if arg else {})}
+            self.events.append(("patterns", arg["forward"], arg["never"]))
+            return {"text": self.label, **({"x": 1300, "y": 960} if arg["mark"] else {})}
         if fn is qantas.JS_SELECTION_PAGE:
             return {"url": f"https://book.qantas.test/{self.screen}", "heading": self.screen.title()}
         if fn in (qantas.JS_INSURANCE, qantas.JS_ACCEPT):
@@ -1690,7 +1691,7 @@ def test_qantas_clicks_continue_in_code_on_a_completed_passenger_form(monkeypatc
     assert reached is True
     assert ("click", 1300, 960) in site.events
     assert "llm_act" not in site.events and "observe" not in site.events  # the model was not asked
-    assert (run.steps[0]["action"], run.steps[0]["selector"]) == ("code click on CONTINUE", qantas.CONTINUE_MARK)
+    assert (run.steps[0]["action"], run.steps[0]["selector"]) == ("code click on CONFIRM DETAILS", qantas.CONTINUE_MARK)
 
 
 def test_qantas_passenger_details_never_lets_the_model_click_join(monkeypatch, tmp_path):
@@ -1703,7 +1704,7 @@ def test_qantas_passenger_details_never_lets_the_model_click_join(monkeypatch, t
 
 
 def test_qantas_a_browser_hiccup_on_a_booking_step_does_not_end_the_run(monkeypatch, tmp_path):
-    monkeypatch.setattr(qantas, "click_continue", lambda page: _false())  # leave the move to the model
+    monkeypatch.setattr(qantas, "click_footer_forward", lambda page: _none())  # leave the move to the model
     site = PassengerPage(has_continue=False)
     monkeypatch.setattr(qantas, "click_one", _llm_click_one)
     run, reached = _passengers(monkeypatch, tmp_path, site, acts=[HICCUP])
@@ -1721,10 +1722,47 @@ def test_qantas_a_real_error_on_a_booking_step_still_ends_the_run_but_says_what_
         _passengers(monkeypatch, tmp_path, site, acts=[RuntimeError("model returned no content")])
 
 
-async def _false():
-    return False
+async def _none():
+    return None
 
 
 async def _llm_click_one(stagehand, instruction, refuse=qantas.NEVER_CLICK, target=None):
     """click_one routed to the (faked) llm_act, so a test can make the act itself raise."""
     return await qantas.llm_act(stagehand, instruction, target=target)
+
+
+# --- qantas: CONFIRM DETAILS (the footer's button once the passenger form is filled) is clicked in code ----
+@pytest.mark.parametrize(
+    ("label", "allowed"),
+    [("CONFIRM DETAILS", True), ("Confirm details >", True), ("CONTINUE >", True), ("Continue", True),
+     ("Confirm and pay", False), ("Pay now", False), ("Continue to payment", False), ("Confirm booking", False),
+     ("Book now", False), ("Purchase", False), ("Back", False)],
+)  # fmt: skip
+def test_qantas_footer_forward_labels(label, allowed):
+    assert qantas.is_footer_forward(label) is allowed
+
+
+def test_qantas_clicks_continue_on_a_completed_form_too(monkeypatch, tmp_path):
+    site = PassengerPage(label="CONTINUE >")
+    run, reached = _passengers(monkeypatch, tmp_path, site)
+    assert reached is True and "llm_act" not in site.events and "observe" not in site.events
+    assert run.steps[0]["action"] == "code click on CONTINUE >"
+
+
+def test_qantas_never_clicks_a_footer_button_that_pays(monkeypatch, tmp_path):
+    # Whatever the page script returned, a paying label is refused in code: the model is asked instead, and
+    # told the details are filled and to click CONFIRM DETAILS, which does not pay.
+    site = PassengerPage(label="Confirm and pay")
+    run, reached = _passengers(monkeypatch, tmp_path, site)
+    assert reached is True
+    assert not any(e[0] == "click" for e in site.events if isinstance(e, tuple))
+    assert "observe" in site.events
+    assert run.steps[0]["action"] == "CONTINUE button"
+
+
+def test_qantas_the_model_is_told_confirm_details_is_allowed():
+    for prompt in (qantas.SAFETY_PROMPT, qantas.BOOKING_GOAL):
+        assert "'Confirm details' (passenger details) and 'Accept' (fare rules) are allowed" in prompt
+    assert "does not pay" in qantas.CONFIRM_DETAILS
+    assert qantas.PASSENGER_NEVER_CLICK.search("Confirm and pay button")
+    assert not qantas.PASSENGER_NEVER_CLICK.search("CONFIRM DETAILS button in the sticky footer")
