@@ -95,6 +95,7 @@ def test_write_reports_files_and_keys(output_root):
     assert list(report)[:5] == ["site", "shop_url", "checkout_url", "status", "message"]
     assert {"items", "extras", "steps", "drip_detected", "expected_subtotal"} <= set(report)
     assert "search" not in report  # only present for workflows that search
+    assert "warnings" not in report  # only present when there are any
     assert list(read_csv(result.out_dir / "price_comparison.csv")[0]) == ITEM_COLUMNS
 
 
@@ -107,6 +108,14 @@ def test_write_reports_extras_csv(output_root):
     assert json.loads((result.out_dir / "price_comparison.json").read_text(encoding="utf-8"))["search"] == {
         "query": "pizza"
     }
+
+
+def test_write_reports_warnings(output_root):
+    result = make_result(output_root)
+    result.warnings.append("bot signal on payment: Could not connect to the reCAPTCHA service.")
+    write_reports(result)
+    report = json.loads((result.out_dir / "price_comparison.json").read_text(encoding="utf-8"))
+    assert report["warnings"] == ["bot signal on payment: Could not connect to the reCAPTCHA service."]
 
 
 def test_summary_keeps_its_columns_and_the_latest_run_per_target(output_root):

@@ -16,7 +16,7 @@ import contextlib
 import itertools
 import logging
 import re
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterable
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -2555,6 +2555,7 @@ async def walk_to_payment(stagehand: Stagehand, page: Page, passenger: Passenger
         )
         if index == 1:
             await shot(page, out / "cart.png")  # first view of the selected trip and its running total
+        note_bot_signals(result, step_type, [*state.validation_errors, state.blocked_reason])
 
         if state.blocked_reason:
             raise Blocked(state.blocked_reason)
@@ -2643,6 +2644,27 @@ def compare_prices(result: SiteResult, checkout: CheckoutDetails | None) -> Repo
     }
 
 
+# A bot-detection signal ("Could not connect to the reCAPTCHA service...", "Verify you are human"). It does not
+# change the run's status; it is kept in result.warnings. The "This site is protected by reCAPTCHA" notice many
+# pages carry is no signal.
+BOT_SIGNAL = re.compile(r"recaptcha|captcha|verify you are human", re.IGNORECASE)
+NOT_BOT_SIGNAL = re.compile(r"protected by recaptcha|recaptcha.{0,40}privacy policy", re.IGNORECASE)
+JS_PAGE_TEXT = r"""() => document.body ? document.body.innerText : ''"""
+
+
+def note_bot_signals(result: SiteResult, where: str, texts: Iterable[str | None]) -> None:
+    """Add each line of `texts` that reads like a bot check to result.warnings, once each."""
+    for text in texts:
+        for raw in str(text or "").splitlines():
+            line = " ".join(raw.split())[:300]
+            if not BOT_SIGNAL.search(line) or NOT_BOT_SIGNAL.search(line):
+                continue
+            warning = f"bot signal on {where}: {line}"
+            if warning not in result.warnings:
+                log.warning(f"  {warning}")
+                result.warnings.append(warning)
+
+
 def drop_unpaid_extras(checkout: CheckoutDetails) -> CheckoutDetails:
     """Backstop for the extraction listing a declined extra (the 'Voluntary Carbon Program $14.60' with 'No thanks,
     not for this trip' selected): extras worth more than zero while the total equals the subtotal cannot be in the
@@ -2669,6 +2691,10 @@ async def read_payment_page(stagehand: Stagehand, page: Page, result: SiteResult
         )
     ).data
     checkout = drop_unpaid_extras(checkout)
+    page_text = ""
+    with contextlib.suppress(*BROWSER_ERRORS):  # a nicety: never let it fail the read
+        page_text = await js(page, JS_PAGE_TEXT, default="")
+    note_bot_signals(result, "payment", [checkout.blocked_reason, checkout.summary, page_text])
     if checkout.payment_surcharges:  # replace the payment step's own offers with the per-method list
         result.extras = [
             e for e in result.extras if not (e["step_type"] == "payment" and e["category"] == "payment_surcharge")

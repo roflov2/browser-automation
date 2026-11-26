@@ -489,6 +489,7 @@ async def audit_and_record(
         "status": result.status,
         "message": result.message,
         "failure_reason": result.failure_reason,
+        **({"warnings": result.warnings} if result.warnings else {}),
         "execution_time_ms": usage.duration_ms,
         "tokens_used": token_total(after) - token_total(before) if after else None,
         "usage": usage.row(),

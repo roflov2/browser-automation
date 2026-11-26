@@ -2020,3 +2020,33 @@ def test_qantas_drops_extras_that_cannot_be_in_a_total_equal_to_the_subtotal(cap
 def test_qantas_keeps_extras_the_total_can_hold(subtotal, total, extras):
     checkout = _checkout(subtotal, total, extras)
     assert qantas.drop_unpaid_extras(checkout) == checkout
+
+
+# --- qantas: a reCAPTCHA failure is recorded as a warning, not a status ----
+RECAPTCHA = ("Could not connect to the reCAPTCHA service. Please check your internet connection and reload to get a "
+             "reCAPTCHA challenge.")  # fmt: skip
+
+
+def test_qantas_records_a_recaptcha_error_as_a_bot_signal_once():
+    run = SiteResult(site="s", out_dir=Path(), status=Status.OK)
+    qantas.note_bot_signals(run, "payment", [RECAPTCHA, None])
+    qantas.note_bot_signals(run, "payment", [f"Total $529.00\n{RECAPTCHA}\nPAY WITH CARD"])
+    assert run.warnings == [f"bot signal on payment: {RECAPTCHA}"]
+    assert run.status == Status.OK
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["This site is protected by reCAPTCHA and the Google Privacy Policy and Terms of Service apply.",
+     "Please enter a valid card number", None, ""],
+)  # fmt: skip
+def test_qantas_a_recaptcha_notice_or_other_error_is_no_bot_signal(text):
+    run = SiteResult(site="s", out_dir=Path())
+    qantas.note_bot_signals(run, "payment", [text])
+    assert run.warnings == []
+
+
+def test_qantas_verify_you_are_human_is_a_bot_signal():
+    run = SiteResult(site="s", out_dir=Path())
+    qantas.note_bot_signals(run, "passenger_details", ["Please verify you are human"])
+    assert run.warnings == ["bot signal on passenger_details: Please verify you are human"]
