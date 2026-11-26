@@ -16,7 +16,7 @@ import contextlib
 import itertools
 import logging
 import re
-from collections.abc import Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -1347,11 +1347,16 @@ def cash_price(price: str | None) -> float | None:
     return parse_price(price)
 
 
-def choose_flight(flights: list[Flight]) -> Flight | None:
-    """Cheapest available flight on a cash fare, preferring direct services. Award-only flights never count."""
+def rank_flights(flights: list[Flight]) -> list[Flight]:
+    """Available flights on a cash fare, cheapest first: the direct ones if there are any. Award-only never count."""
     available = [f for f in flights if not f.sold_out and not f.award_only and cash_price(f.price) is not None]
     direct = [f for f in available if f.stops == 0]
-    return min(direct or available, key=lambda f: cash_price(f.price) or 0.0, default=None)
+    return sorted(direct or available, key=lambda f: cash_price(f.price) or 0.0)
+
+
+def choose_flight(flights: list[Flight]) -> Flight | None:
+    """Cheapest available flight on a cash fare, preferring direct services."""
+    return next(iter(rank_flights(flights)), None)
 
 
 def choose_fare(fares: list[FareOption]) -> FareOption | None:
@@ -1466,6 +1471,216 @@ async def click_one(stagehand: Stagehand, instruction: str, refuse: re.Pattern[s
         return Acted(False, f"click failed ({description}): {error}", str(first.selector or ""))
 
 
+# The fare columns' SELECT buttons, for the code to choose from (pick_fare_select). Every button whose text says
+# "select" (so "LOG IN TO SELECT" too) is listed with the text of its fare column: the largest ancestor holding no
+# other visible such button. The first visible SELECT is scrolled to the middle of the screen first, so each
+# button's box, whether its centre is in view, and whether elementFromPoint there lands on it (not on a sticky
+# footer, a banner or a hidden duplicate) are read as the mouse click will meet them. Each is marked with
+# data-audit-fare-candidate.
+JS_FARE_BUTTONS = r"""() => {
+    const selectish = el => /select/i.test(clean(el.innerText));
+    const all = () => Array.from(document.querySelectorAll('button, a, [role="button"]')).filter(selectish);
+    const buttons = all();
+    document.querySelectorAll('[data-audit-fare-candidate]').forEach(e => e.removeAttribute('data-audit-fare-candidate'));
+    const first = buttons.find(b => vis(b, 4, 4) && /^select$/i.test(clean(b.innerText)));
+    if (first) first.scrollIntoView({ block: 'center' });
+    return buttons.map((b, i) => {
+        b.setAttribute('data-audit-fare-candidate', String(i));
+        let column = b;
+        for (let up = b.parentElement; up && up !== document.body; up = up.parentElement) {
+            const others = Array.from(up.querySelectorAll('button, a, [role="button"]'))
+                .filter(el => selectish(el) && vis(el, 4, 4));
+            if (others.length > 1) break;
+            column = up;
+        }
+        const r = b.getBoundingClientRect();
+        const cx = r.left + r.width / 2, cy = r.top + r.height / 2;
+        const inView = r.width > 0 && r.height > 0 && cx >= 0 && cy >= 0 && cx <= innerWidth && cy <= innerHeight;
+        const hit = inView ? document.elementFromPoint(cx, cy) : null;
+        return { i, text: clean(b.innerText), column: clean(txt(column)).slice(0, 300), visible: vis(b, 4, 4),
+                 box: [Math.round(r.left), Math.round(r.top), Math.round(r.width), Math.round(r.height)],
+                 in_view: inView, hit: !!hit && (hit === b || b.contains(hit)) };
+    });
+}"""
+# Mark the chosen candidate as the SELECT to click (data-audit-fare-select) and return its centre.
+JS_MARK_FARE_SELECT = r"""i => {
+    const el = document.querySelector(`[data-audit-fare-candidate="${i}"]`);
+    if (!el) return null;
+    document.querySelectorAll('[data-audit-fare-select]').forEach(e => e.removeAttribute('data-audit-fare-select'));
+    el.setAttribute('data-audit-fare-select', '1');
+    const r = el.getBoundingClientRect();
+    return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+}"""
+FARE_SELECT_MARK = "[data-audit-fare-select]"
+STEP2_CHECK_MS = 20_000  # adding the fare to the trip is a server round trip
+# What the page says when it will not add a fare, for step2_diagnostics: alerts and live regions, and short texts
+# that read like an error.
+JS_DIAGNOSTICS = r"""() => {
+    const says = /sorry|unavailable|error|try again|no longer/i;
+    const own = '[role="alert"], [aria-live], [role="status"]';
+    const seen = new Set(), messages = [];
+    for (const el of document.querySelectorAll(`${own}, p, div, span, li`)) {
+        if (messages.length >= 15) break;
+        if (!vis(el, 2, 2)) continue;
+        const t = clean(txt(el));
+        if (!t || t.length > 300 || seen.has(t)) continue;
+        if (!el.matches(own) && (!says.test(t) || Array.from(el.children).some(c => clean(txt(c)) === t))) continue;
+        seen.add(t);
+        messages.push(t);
+    }
+    return { url: location.href, messages };
+}"""
+
+
+def fare_brand(fare_name: str) -> re.Pattern[str]:
+    """The fare's brand words as a pattern: 'ECONOMY RED E-DEAL' -> red, e, deal (the cabin word is dropped)."""
+    words = [w for w in re.findall(r"[a-z0-9]+", fare_name.lower()) if w != "economy"] or ["economy"]
+    return re.compile(r"\W*".join(map(re.escape, words)), re.IGNORECASE)
+
+
+def pick_fare_select(candidates: list[dict], fare_name: str) -> dict | None:
+    """The SELECT button to click for `fare_name`: text exactly 'SELECT' (never 'LOG IN TO SELECT'), in the column
+    naming that fare, visible, in view, and the element a click at its centre would land on."""
+    brand = fare_brand(fare_name)
+    for candidate in candidates:
+        box = candidate.get("box") or [0, 0, 0, 0]
+        if (
+            re.fullmatch(r"select", str(candidate.get("text") or "").strip(), re.IGNORECASE)
+            and candidate.get("visible")
+            and box[2] > 0
+            and box[3] > 0
+            and candidate.get("in_view")
+            and candidate.get("hit")
+            and brand.search(str(candidate.get("column") or ""))
+        ):
+            return candidate
+    return None
+
+
+async def find_fare_select(page: Page, fare_name: str) -> dict | None:
+    """Find and mark the SELECT button of `fare_name` in the open fare panel; its candidate entry and centre."""
+    candidates = await js(page, JS_FARE_BUTTONS, default=[]) or []
+    chosen = pick_fare_select(candidates if isinstance(candidates, list) else [], fare_name)
+    if chosen is None:
+        return None
+    centre = await js(page, JS_MARK_FARE_SELECT, chosen["i"], default=None)
+    return {**chosen, **centre} if isinstance(centre, dict) else None
+
+
+def console_text(event: object) -> str:
+    """One console message from Stagehand's Runtime.consoleAPICalled event, e.g. 'error: Failed to add fare'."""
+    params = getattr(event, "params", None)
+    raw = getattr(params, "root", params)
+    root = raw if isinstance(raw, dict) else {}
+    args = root.get("args")
+    parts = [
+        str(a.get("value", a.get("description", "")))
+        for a in (args if isinstance(args, list) else [])
+        if isinstance(a, dict)
+    ]
+    return f"{root.get('type', 'log')}: {' '.join(parts)}"[:300]
+
+
+@contextlib.asynccontextmanager
+async def console_messages(page: Page) -> AsyncIterator[list[str]]:
+    """Collect the page's console messages while the block runs; empty if the page cannot report them."""
+    messages: list[str] = []
+    subscription = None
+    on = getattr(page, "on", None)
+    if on is not None:
+        try:
+            subscription = await on("console", lambda event: messages.append(console_text(event)))
+        except BROWSER_ERRORS as error:  # diagnostics only
+            log.debug("Could not listen to the console: %s", error)
+    try:
+        yield messages
+    finally:
+        if subscription is not None:
+            with contextlib.suppress(*BROWSER_ERRORS):
+                await subscription.unsubscribe()
+
+
+def fare_panel_open(state: dict) -> bool:
+    return bool(state.get("fare_panel"))
+
+
+def fare_added(state: dict) -> bool:
+    return bool(state.get("trip_summary"))
+
+
+async def step2_diagnostics(page: Page, console: list[str]) -> dict:
+    """Why the site may have ignored SELECT: the URL, any alert or error text shown, the console messages."""
+    seen = await js(page, JS_DIAGNOSTICS, default={}) or {}
+    return {
+        "url": seen.get("url") or await page.url(),
+        "messages": seen.get("messages") or [],
+        "console": console[-30:],
+    }
+
+
+@dataclass
+class FareSelectClick:
+    """Step 2's click: the chosen fare's SELECT, found and clicked in code (a mouse click, then a DOM click); the
+    model's choice of element only if no such button is found. What it did goes into `details`.
+
+    A retry starts clean: Escape, the fare panel reopened if that closed it, then the same column's SELECT found
+    again (never a different element).
+    """
+
+    stagehand: Stagehand
+    page: Page
+    fare_name: str | None
+    open_fares: str
+    economy_only: re.Pattern[str]
+    select_instruction: str
+    details: dict
+
+    async def __call__(self, attempt: int) -> Acted:
+        if attempt == 2:
+            await self.start_clean()
+        found = await find_fare_select(self.page, self.fare_name) if self.fare_name else None
+        if found is None:
+            self.details["code_click"] = False
+            log.info("    No SELECT button found in code for the chosen fare; asking the model")
+            return await click_one(self.stagehand, self.select_instruction)
+        self.details.update(
+            code_click=True, button_text=found["text"], box=found["box"], element_from_point=found["hit"]
+        )
+        log.info(
+            f"    Clicking SELECT of '{self.fare_name}' in code: '{found['text']}' at box {found['box']} "
+            f"(elementFromPoint matches: {found['hit']})"
+        )
+        await click_at(self.page, found["x"], found["y"])
+        await settle(self.page, SETTLE_MS)
+        if fare_added(await wait_for_check(self.page, fare_added, STEP2_CHECK_MS)):
+            return Acted(True, "code click on SELECT (mouse)", FARE_SELECT_MARK)
+        log.info("    The mouse click on SELECT did not add the fare; trying a DOM click")
+        self.details["dom_click"] = bool(await js(self.page, JS_DOM_CLICK, "data-audit-fare-select", default=False))
+        return Acted(True, "code click on SELECT (mouse, then DOM)", FARE_SELECT_MARK)
+
+    async def start_clean(self) -> None:
+        if fare_panel_open(await selection_page(self.page)):
+            with contextlib.suppress(*BROWSER_ERRORS):
+                await self.page.key_press("Escape")
+            await settle(self.page, TRIP_SETTLE_MS)
+            self.details["escape"] = True
+        if not fare_panel_open(await selection_page(self.page)):
+            log.info("    The fare panel is closed; opening it again")
+            reopened = await click_one(self.stagehand, self.open_fares, self.economy_only)
+            await settle(self.page, SETTLE_MS)
+            self.details["reopened"] = fare_panel_open(await wait_for_check(self.page, fare_panel_open, STEP_CHECK_MS))
+            self.details["reopen_click"] = reopened.description
+
+
+async def bring_flight_into_view(stagehand: Stagehand, page: Page, flight: Flight) -> None:
+    """Before step 1: get the info banner off the first rows, and bring the flight's card on screen."""
+    if await js(page, JS_BANNER, default=False):
+        await try_act(stagehand, "Click the close 'x' button of the teal 'About our prices' banner.")
+    words = [w for w in (flight.departs, flight.arrives) if w]
+    if words:
+        await js(page, JS_SCROLL_TO_FLIGHT, words, default=False)
+
+
 async def select_flight(stagehand: Stagehand, page: Page, flight: Flight, out: Path) -> dict:
     """Open the flight's fares, select the cheapest, then click Continue: three fixed steps, each checked.
 
@@ -1483,19 +1698,23 @@ async def select_flight(stagehand: Stagehand, page: Page, flight: Flight, out: P
         check: Callable[[dict], bool],
         failure: str,
         refuse: re.Pattern[str] = NEVER_CLICK,
+        click: Callable[[int], Awaitable[Acted]] | None = None,
+        wait_ms: int = STEP_CHECK_MS,
+        details: dict | None = None,
     ) -> dict:
+        """`click(attempt)` replaces the model's click; whatever it puts in `details` is saved with the attempt."""
         for attempt in (1, 2):
             before = await fingerprint(page)
             if attempt == 2 and check(state := await selection_page(page)):
                 # The first click worked after all, only later than the check waited: never click it twice.
                 acted, ok = Acted(False, "no second click: the first one had taken effect"), True
             else:
-                acted = await click_one(stagehand, instruction, refuse)
+                acted = await (click(attempt) if click else click_one(stagehand, instruction, refuse))
                 await settle(page, SETTLE_MS)
                 # A refused or missing element changed nothing; a click (even one that failed because the page
                 # re-rendered under it) may still be taking effect, so its check waits for the page.
                 tried = acted.success or acted.description.startswith("click failed")
-                state = await wait_for_check(page, check, STEP_CHECK_MS if tried else 0)
+                state = await wait_for_check(page, check, wait_ms if tried else 0)
                 ok = check(state)
             after = await fingerprint(page)
             record = {
@@ -1507,7 +1726,10 @@ async def select_flight(stagehand: Stagehand, page: Page, flight: Flight, out: P
                 "acted": acted.success,
                 "page_changed": before != after,
                 "passed": ok,
+                **(details or {}),
             }
+            if details:
+                details.clear()
             item["selection_steps"].append(record)
             log.info(
                 f"    Selection step {step} ({label}), attempt {attempt}: {acted.description} [{acted.selector}] "
@@ -1520,24 +1742,23 @@ async def select_flight(stagehand: Stagehand, page: Page, flight: Flight, out: P
             item["status"] = "add_failed"
         raise SelectionFailed(step, failure, item)
 
-    # Before step 1: get the info banner off the first rows, and bring the flight's card on screen.
-    if await js(page, JS_BANNER, default=False):
-        await try_act(stagehand, "Click the close 'x' button of the teal 'About our prices' banner.")
-    words = [w for w in (flight.departs, flight.arrives) if w]
-    if words:
-        await js(page, JS_SCROLL_TO_FLIGHT, words, default=False)
+    await bring_flight_into_view(stagehand, page, flight)
 
     # Step 1: open the flight's fares from its Economy price.
     price = f" (e.g. '{flight.price}')" if flight.price else ""
+    open_fares = (
+        f"Click the Economy Cabin price link{price} in the card of {described}. Not the Business Cabin price, "
+        "not the date strip at the top, not the Rewards toggle and not a points (PTS) price."
+    )
+    economy_only = re.compile(f"{NEVER_CLICK.pattern}|{NOT_ECONOMY.pattern}", re.IGNORECASE)
     await run_step(
         1,
         "fares",
-        f"Click the Economy Cabin price link{price} in the card of {described}. Not the Business Cabin price, "
-        "not the date strip at the top, not the Rewards toggle and not a points (PTS) price.",
-        lambda state: bool(state.get("fare_panel")),
+        open_fares,
+        fare_panel_open,
         "Fare panel never opened: no 'Select your fare' panel with a SELECT button appeared after clicking the "
         f"Economy price of {name}",
-        re.compile(f"{NEVER_CLICK.pattern}|{NOT_ECONOMY.pattern}", re.IGNORECASE),
+        economy_only,
     )
 
     # Step 2: read the fare columns, pick the cheapest cash fare in code, click its SELECT.
@@ -1555,13 +1776,28 @@ async def select_flight(stagehand: Stagehand, page: Page, flight: Flight, out: P
         if fare
         else "the SELECT button under the cheapest cash fare"
     )
-    await run_step(
-        2,
-        "trip",
-        f"Click {target} in the open 'Select your fare' panel.",
-        lambda state: bool(state.get("trip_summary")),
-        "Fare not added to trip: no 'Your trip' summary with a flight subtotal appeared after clicking SELECT",
+    select_instruction = f"Click {target} in the open 'Select your fare' panel."
+    details: dict = {}
+    click_fare_select = FareSelectClick(
+        stagehand, page, fare.fare_name if fare else None, open_fares, economy_only, select_instruction, details
     )
+
+    async with console_messages(page) as console:
+        try:
+            await run_step(
+                2,
+                "trip",
+                select_instruction,
+                fare_added,
+                "Fare not added to trip: no 'Your trip' summary with a flight subtotal appeared after clicking SELECT",
+                click=click_fare_select,
+                wait_ms=STEP2_CHECK_MS,
+                details=details,
+            )
+        except SelectionFailed:
+            item["step2_diagnostics"] = await step2_diagnostics(page, console)
+            log.info(f"    Step 2 diagnostics: {item['step2_diagnostics']}")
+            raise
     selected = (
         await stagehand.extract(
             f"We selected {described}. Read the 'Your trip' summary: the flight, fare brand, fare price, the flight "
@@ -1599,6 +1835,35 @@ async def select_flight(stagehand: Stagehand, page: Page, flight: Flight, out: P
         "Continue did not advance: the 'Your trip' summary was still showing after clicking CONTINUE",
     )
     return item
+
+
+MAX_FLIGHTS_TRIED = 2  # the cheapest, and once the next-cheapest if the first one's fare cannot be added
+
+
+async def select_a_flight(
+    stagehand: Stagehand, page: Page, flights: list[Flight], result: SiteResult, price_basis: str | None
+) -> dict:
+    """Select the cheapest flight's fare; if the site will not add it (step 2), the next-cheapest once.
+
+    Every attempt is kept in result.items, so the report shows a fare that could not be selected.
+    """
+    for index, flight in enumerate(flights[:MAX_FLIGHTS_TRIED]):
+        log.info(
+            f"  Selecting: {flight.flight_number or ''} {flight.departs or ''}-{flight.arrives or ''} ({flight.price})"
+        )
+        try:
+            item = await select_flight(stagehand, page, flight, result.out_dir)
+        except SelectionFailed as failed:  # keep what was clicked; the runner records the step's message
+            failed.item["price_basis"] = price_basis
+            result.items.append(failed.item)
+            if failed.step == 2 and index + 1 < min(len(flights), MAX_FLIGHTS_TRIED):
+                log.info(f"  {failed}; trying the next-cheapest flight")
+                continue
+            raise
+        item["price_basis"] = price_basis
+        result.items.append(item)
+        return item
+    raise AssertionError("unreachable: the loop returns or raises")  # pragma: no cover
 
 
 def passenger_field_instruction(entry: FieldToFill, passenger: Passenger) -> tuple[str, dict[str, str]] | None:
@@ -2160,22 +2425,11 @@ class QantasWorkflow(Workflow):
                     f"{listing.route or 'route not shown'}"
                 )
 
-            flight = choose_flight(listing.flights)
-            if flight is None:
+            flights = rank_flights(listing.flights)
+            if not flights:
                 result.fail(Status.NO_FLIGHTS_FOUND, "No available flights with a price on the results page")
                 return
-
-            log.info(
-                f"  Selecting: {flight.flight_number or ''} {flight.departs or ''}-{flight.arrives or ''} ({flight.price})"
-            )
-            try:
-                item = await select_flight(stagehand, page, flight, out)
-            except SelectionFailed as failed:  # keep what was clicked; the runner records the step's message
-                failed.item["price_basis"] = listing.price_basis
-                result.items.append(failed.item)
-                raise
-            item["price_basis"] = listing.price_basis
-            result.items.append(item)
+            await select_a_flight(stagehand, page, flights, result, listing.price_basis)
 
             if not await walk_to_payment(stagehand, page, Passenger.from_settings(self.settings), result):
                 result.fail(Status.NO_CHECKOUT, result.message)
