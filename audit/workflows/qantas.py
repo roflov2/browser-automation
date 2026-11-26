@@ -25,7 +25,7 @@ from typing import Any
 from pydantic import BaseModel, Field
 from stagehand import Page, Stagehand
 
-from ..actions import Acted, act_on, click_at, llm_act, try_act
+from ..actions import Acted, act_on, click_at, llm_act, page_state, try_act
 from ..config import Settings
 from ..core import (
     BROWSER_ERRORS,
@@ -1458,27 +1458,54 @@ async def click_one(
     instruction: str,
     refuse: re.Pattern[str] = NEVER_CLICK,
     target: Callable[[object], None] | None = None,
+    *,
+    page: Page | None = None,
+    refuse_selector: re.Pattern[str] | None = None,
+    avoid: str | None = None,
 ) -> Acted:
     """Observe and click the element the instruction names, unless the model returned a forbidden control.
 
-    The step itself is fixed in code: the model only picks which element. A result that looks like a login,
-    'Start again', 'Change this flight', Rewards or points control is never acted on and counts as a miss.
+    The step itself is fixed in code: the model only picks which element. A result whose description matches
+    `refuse` (a login, 'Start again', 'Change this flight', Rewards or points control, ...), whose selector matches
+    `refuse_selector`, or whose selector is `avoid` (the click that just changed nothing) is never acted on; the
+    first acceptable result is clicked, and if there is none it counts as a miss. With `page`, an act that fails
+    after the page changed is reported as done (the click took effect).
     """
     found = await stagehand.observe(instruction + " Return nothing if there is no such element.")
     candidates = list(found.data or [])
     if not candidates:
         return Acted(False, "no matching element found")
-    first = candidates[0]
+
+    def why_not(candidate: object) -> str | None:
+        description = str(getattr(candidate, "description", "") or "")
+        selector = str(getattr(candidate, "selector", "") or "")
+        if refuse.search(description):
+            return description
+        if refuse_selector is not None and refuse_selector.search(selector):
+            return f"{description} (selector {selector})"
+        if avoid and selector == avoid:
+            return f"{description} (the same click changed nothing last turn)"
+        return None
+
+    reasons = [why_not(candidate) for candidate in candidates]
+    chosen = next((c for c, reason in zip(candidates, reasons, strict=True) if reason is None), None)
+    if chosen is None:
+        first = candidates[0]
+        if target is not None:
+            target(first)
+        log.info(f"    Refused to click {reasons[0]!r} ({first.selector})")
+        return Acted(False, f"refused: {reasons[0]}", str(first.selector or ""))
     if target is not None:
-        target(first)
-    description = str(first.description or "")
-    if refuse.search(description):
-        log.info(f"    Refused to click {description!r} ({first.selector})")
-        return Acted(False, f"refused: {description}", str(first.selector or ""))
+        target(chosen)
+    description = str(chosen.description or "")
+    before = await page_state(page)
     try:
-        return await act_on(stagehand, first)
+        return await act_on(stagehand, chosen)
     except BROWSER_ERRORS as error:  # e.g. "Could not find an element for the given xPath": the page re-rendered
-        return Acted(False, f"click failed ({description}): {error}", str(first.selector or ""))
+        after = await page_state(page)
+        if before is not None and after is not None and after != before:
+            return Acted(True, f"{description} (the page changed despite: {error})", str(chosen.selector or ""))
+        return Acted(False, f"click failed ({description}): {error}", str(chosen.selector or ""))
 
 
 # The fare columns' SELECT buttons, for the code to choose from (pick_fare_select). Every button whose text says
@@ -1931,8 +1958,12 @@ async def fill_passenger_details(stagehand: Stagehand, page: Page, passenger: Pa
 
 # The sticky footer's red forward button (in the navigation-ribbon bar at the bottom of each booking page). It
 # reads "CONTINUE >", and on a filled-in passenger details page "CONFIRM DETAILS", which confirms the passenger
-# details only: payment comes later. Anything that reads like paying never matches, even in the footer.
-FOOTER_FORWARD = re.compile(r"^(continue|confirm details)\b", re.IGNORECASE)
+# details only: payment comes later. Next / Proceed / "Review and continue" / "Go to review" are the same move on
+# other steps. Anything that reads like paying never matches, even in the footer: NEVER_FORWARD has the last word
+# (so "Go to payment" or "Continue to payment" is left to the model, whose click is checked by click_one).
+FOOTER_FORWARD = re.compile(
+    r"^(continue|next|proceed|confirm details|review (and|&) continue|go to review)\b", re.IGNORECASE
+)
 NEVER_FORWARD = re.compile(r"pay|purchase|book now|confirm (and pay|booking)", re.IGNORECASE)
 
 
@@ -1942,16 +1973,27 @@ def is_footer_forward(text: str | None) -> bool:
     return bool(FOOTER_FORWARD.match(label)) and not NEVER_FORWARD.search(label)
 
 
-# Only a button inside the footer bar (or a bottom nav / footer) counts, so no "Continue" elsewhere on the page is
-# taken. The patterns come from FOOTER_FORWARD / NEVER_FORWARD. With `mark`, it is marked with data-audit-continue
-# and its centre returned. Null if there is none.
+# Only a visible button inside the footer bar (or a bottom nav / footer) counts, so no "Continue" elsewhere on the
+# page is taken. The "skip to" links (a <nav class="skip-links"> of in-page anchors, hidden until focused) never
+# count, nor does any in-page anchor (href="#..."). A button in a fixed or sticky bar is preferred over one in a
+# plain nav. The patterns come from FOOTER_FORWARD / NEVER_FORWARD. With `mark`, it is marked with
+# data-audit-continue and its centre returned. Null if there is none.
 JS_FOOTER_FORWARD = r"""({ mark, forward, never }) => {
     const bar = 'navigation-ribbon, nav, footer, [class*="ribbon" i], [class*="footer" i]';
+    const skip = 'skip-links, [class*="skip" i], [id*="skip" i]';
     const ok = el => new RegExp(forward, 'i').test(clean(el.innerText)) && !new RegExp(never, 'i').test(clean(el.innerText));
+    const pinned = el => {
+        for (let up = el; up && up !== document.documentElement; up = up.parentElement) {
+            if (/^(fixed|sticky)$/.test(getComputedStyle(up).position)) return true;
+        }
+        return false;
+    };
     const found = Array.from(document.querySelectorAll('button, a, [role="button"]'))
-        .filter(el => vis(el) && ok(el) && el.closest(bar));
+        .filter(el => vis(el) && ok(el) && el.closest(bar) && !el.closest(skip) && !el.matches('a[href^="#"]'));
     if (!found.length) return null;
-    const el = found[found.length - 1];
+    const inBar = found.filter(pinned);
+    const pool = inBar.length ? inBar : found;
+    const el = pool[pool.length - 1];
     const out = { text: clean(el.innerText) };
     if (mark) {
         document.querySelectorAll('[data-audit-continue]').forEach(e => e.removeAttribute('data-audit-continue'));
@@ -1968,6 +2010,22 @@ CONTINUE_MARK = "[data-audit-continue]"
 PASSENGER_NEVER_CLICK = re.compile(
     rf"{NEVER_CLICK.pattern}|\bjoin\b|sign ?up|travel arranger|red email|multiple phone|{NEVER_FORWARD.pattern}",
     re.IGNORECASE,
+)
+# What the model may never click on any other booking step (the Options page above all): the "skip to" links,
+# the upsells (upgrade, hotel, car hire, Use cash), "Update search", and anything that pays, on top of the
+# controls never clicked anywhere. "Continue to payment" is allowed: the run stops on the payment page.
+BOOKING_PURCHASE = r"\bpay\b|purchase|book now|confirm (and pay|booking)"
+BOOKING_NEVER_CLICK = re.compile(
+    rf"{NEVER_CLICK.pattern}|skip (to|links?)\b|upgrade my flights|update search|search vehicles|use cash|select hotel"
+    rf"|add (a )?(hotel|car)|{BOOKING_PURCHASE}",
+    re.IGNORECASE,
+)
+# A selector the model may never click on a booking step: the skip links, and anything in a top-level <nav>
+# (the page header's links; the footer's CONTINUE is clicked in code).
+BOOKING_NEVER_SELECT = re.compile(r"skip-links|/nav\[", re.IGNORECASE)
+CONTINUE_ONLY = (
+    " If there is a Continue / Next / Proceed button, click it. Do not click hotel, car hire, upgrade or insurance "
+    "offer buttons, 'skip to' links, or anything in the page header."
 )
 CONFIRM_DETAILS = (
     " The passenger details are filled in. Click the red CONFIRM DETAILS button in the sticky footer. It confirms "
@@ -2146,15 +2204,17 @@ async def answer_insurance(stagehand: Stagehand, page: Page, warnings: int = 0) 
 
 # The fare rules' ACCEPT button at the very bottom of the Options / Review page ("Fare rules", "Red e-Deal
 # conditions", then "< Back" and a red "ACCEPT >"). It accepts the fare conditions, which moves the booking on; it
-# does not pay. The page must show fare rules or conditions, and buttons inside a cookie / consent banner or a
-# dialog are skipped, so no other "Accept" is taken. With `mark`, the button is marked with data-audit-accept,
+# does not pay. The page must show fare rules or conditions, and buttons inside a cookie / consent banner, a
+# dialog or the "skip to" links (and in-page anchors) are skipped, so no other "Accept" is taken. With `mark`, the button is marked with data-audit-accept,
 # scrolled into view and its centre returned. Null if there is no such button.
 JS_ACCEPT = r"""mark => {
     const text = document.body ? document.body.innerText : '';
     if (!/fare rules|conditions/i.test(text)) return null;
     const banner = '[id*="cookie" i], [class*="cookie" i], [id*="consent" i], [class*="consent" i], [role="dialog"]';
+    const skip = 'skip-links, [class*="skip" i], [id*="skip" i]';
     const buttons = Array.from(document.querySelectorAll('button, a, [role="button"]'))
-        .filter(el => vis(el) && /^accept\b/i.test(clean(el.innerText)) && !el.closest(banner));
+        .filter(el => vis(el) && /^accept\b/i.test(clean(el.innerText)) && !el.closest(banner)
+            && !el.closest(skip) && !el.matches('a[href^="#"]'));
     if (!buttons.length) return null;
     const el = buttons[buttons.length - 1];  // the one at the bottom of the page
     const out = { text: clean(el.innerText) };
@@ -2221,12 +2281,14 @@ async def next_booking_action(
     step_type: str,
     extra: str = "",
     target: dict | None = None,
+    avoid: str | None = None,
 ) -> Acted:
     """Take the one action that moves the booking on from `step_type`, declining every extra.
 
     A completed passenger form moves on with the footer's CONFIRM DETAILS (or CONTINUE), clicked in code. `target`
     is filled with the element the model chose before it is acted on, so a caller can record it even if the act
-    raises.
+    raises. The model's choice is checked on every step (click_one): `avoid` is a selector it may not choose again
+    because clicking it last turn changed nothing.
     """
     target = {} if target is None else target
     passengers = step_type == "passenger_details"
@@ -2238,6 +2300,10 @@ async def next_booking_action(
     instruction = f"{BOOKING_GOAL} The current screen looks like: {state.heading or step_type}."
     if complete:
         instruction += CONFIRM_DETAILS
+    elif not passengers:
+        instruction += CONTINUE_ONLY
+    if avoid:
+        instruction += f" Do not choose {avoid} again: clicking it last time changed nothing."
     if state.validation_errors:
         instruction += (
             f" The page shows these errors: {'; '.join(state.validation_errors[:3])}. Fix the first one if it is "
@@ -2248,10 +2314,11 @@ async def next_booking_action(
     def chosen(action: object) -> None:
         target.update(description=getattr(action, "description", ""), selector=getattr(action, "selector", ""))
 
-    if passengers:  # the sign-up and marketing controls are refused, not just discouraged
-        step = await click_one(stagehand, instruction, PASSENGER_NEVER_CLICK, target=chosen)
-    else:
-        step = await llm_act(stagehand, instruction, page=page, target=chosen)
+    # The sign-up, marketing and upsell controls are refused, not just discouraged.
+    refuse = PASSENGER_NEVER_CLICK if passengers else BOOKING_NEVER_CLICK
+    step = await click_one(
+        stagehand, instruction, refuse, target=chosen, page=page, refuse_selector=BOOKING_NEVER_SELECT, avoid=avoid
+    )
     log.info(f"    {step.description}")
     await settle(page, SETTLE_MS)
     return step
@@ -2261,6 +2328,7 @@ def note_action(step: dict, acted: Acted) -> None:
     """Record on a step's entry what was clicked on it (a repeat on the same page is appended)."""
     step["action"] = f"{step['action']} | then: {acted.description}" if step.get("action") else acted.description
     step["selector"] = acted.selector
+    step["clicked"] = acted.success  # False for a refusal or a failed click: nothing was clicked
 
 
 class InsuranceRefused(Exception):
@@ -2275,9 +2343,16 @@ async def move_booking_on(
     step_type: str,
     warnings: list[int],
     target: dict | None = None,
+    avoid: str | None = None,
 ) -> Acted:
     """One turn on a booking step: answer the insurance question in code, accept the fare rules in code once it is
-    settled, and only then (if neither moved the page on) ask the model. `warnings` counts the insurance warnings.
+    settled, then click the footer's CONTINUE in code, and only if none of that moved the page on ask the model.
+
+    `warnings` counts the insurance warnings. The code click is skipped on the payment and confirmation steps, on
+    passenger details (next_booking_action clicks it once the form is filled), while the page shows validation
+    errors (the model fixes the first one, and the next turn clicks CONTINUE), while the insurance question or a
+    fare rules ACCEPT is still open, and when the last turn's click was that same CONTINUE and changed nothing.
+    `avoid` is that last selector.
     """
     answer = await answer_insurance(stagehand, page, warnings[0])
     warnings[0] += answer.warning
@@ -2288,9 +2363,21 @@ async def move_booking_on(
         if await accept_fare_rules(page):
             log.info("  Fare rules: accepted")
             return Acted(True, "Fare rules: accepted (ACCEPT clicked in code)", "[data-audit-accept]")
-        if not extra and await read_accept(page) is not None:
+        accept_open = await read_accept(page) is not None
+        if not extra and accept_open:
             extra = ACCEPT_FARE_RULES
-    return await next_booking_action(stagehand, page, passenger, state, step_type, extra, target)
+        if (
+            not accept_open
+            and step_type not in ("payment", "confirmation", "passenger_details")
+            and not state.validation_errors
+            and avoid != CONTINUE_MARK
+            and (clicked := await click_footer_forward(page))
+        ):
+            log.info(f"  {state.heading or step_type}: moved on ({clicked} clicked in code)")
+            if target is not None:
+                target.update(description=f"{clicked} in the sticky footer", selector=CONTINUE_MARK)
+            return Acted(True, f"code click on {clicked}", CONTINUE_MARK)
+    return await next_booking_action(stagehand, page, passenger, state, step_type, extra, target, avoid)
 
 
 async def take_turn(
@@ -2301,8 +2388,11 @@ async def take_turn(
     step_type: str,
     warnings: list[int],
     entry: dict,
+    avoid: str | None = None,
 ) -> bool:
     """move_booking_on, recording on the step's `entry` what was clicked (or being clicked when an error struck).
+
+    `avoid`: the selector clicked last turn, when that click left the screen unchanged.
 
     A browser session hiccup that survives the retries is logged and the turn ends: the loop reads the page
     again, and a step that keeps failing ends the run through the stuck check. False if the insurance answer was
@@ -2310,7 +2400,7 @@ async def take_turn(
     """
     target: dict = {}
     try:
-        acted = await move_booking_on(stagehand, page, passenger, state, step_type, warnings, target)
+        acted = await move_booking_on(stagehand, page, passenger, state, step_type, warnings, target, avoid)
     except InsuranceRefused:
         return False
     except BROWSER_ERRORS as error:
@@ -2347,8 +2437,11 @@ async def walk_to_payment(stagehand: Stagehand, page: Page, passenger: Passenger
                 result.message = f"Stuck on '{last_state.heading or last_state.step_type}': {errors}"
                 return False
             step_type = "payment" if last_state.is_payment_page else last_state.step_type
+            # Not the same click again: the model is told so, and click_one refuses that selector.
+            last = result.steps[-1]
+            avoid = (str(last.get("selector") or "") or None) if last.get("clicked") else None
             if not await take_turn(
-                stagehand, page, passenger, last_state, step_type, insurance_warnings, result.steps[-1]
+                stagehand, page, passenger, last_state, step_type, insurance_warnings, result.steps[-1], avoid
             ):
                 result.message = (
                     f"Stuck on '{last_state.heading or last_state.step_type}': insurance selection not accepted"
