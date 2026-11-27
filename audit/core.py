@@ -41,7 +41,8 @@ SUMMARY_FIELDS = [
     "duration_seconds", "llm_time_seconds", "llm_calls", "prompt_tokens", "completion_tokens", "total_tokens",
 ]  # fmt: skip
 USAGE_FIELDS = SUMMARY_FIELDS[SUMMARY_FIELDS.index("duration_seconds") :]  # filled from RunUsage
-RUN_FIELDS = [*SUMMARY_FIELDS, "workflow", "target", "failure_reason"]  # runs.csv: the summary columns plus the key
+# runs.csv: the summary columns plus the key, then columns added later (appended, so older rows stay valid).
+RUN_FIELDS = [*SUMMARY_FIELDS, "workflow", "target", "failure_reason", "card_window_status"]
 
 
 @dataclass
@@ -456,6 +457,10 @@ class SiteResult:
     # Things worth knowing that did not change the status, e.g. a bot-detection signal such as a reCAPTCHA error.
     # Written to price_comparison.json and session.json as "warnings" only when there are any.
     warnings: list[str] = field(default_factory=list)
+    # What the final card-payment screen showed (qantas: the window PAY WITH CARD opens), with whether it was
+    # reached, skipped or not reached and why. Written to price_comparison.json and session.json as
+    # "card_window" only when the workflow looked for it.
+    card_window: dict[str, Any] | None = None
 
     @property
     def added(self) -> list[Item]:
@@ -631,6 +636,7 @@ def write_reports(result: SiteResult, item_fields: Sequence[str] = ITEM_FIELDS) 
         "failure_reason": result.failure_reason,
         **({"search": result.search} if result.search else {}),
         **({"warnings": result.warnings} if result.warnings else {}),
+        **({"card_window": result.card_window} if result.card_window is not None else {}),
         "items": result.items,
         **result.comparison,
         "extras": result.extras,
@@ -694,6 +700,7 @@ def update_summary(
         "workflow": workflow,
         "target": target or result.site,
         "failure_reason": result.failure_reason or "",
+        "card_window_status": (result.card_window or {}).get("status", ""),
         **(usage.row() if usage else {}),
     }
     OUTPUT_ROOT.mkdir(parents=True, exist_ok=True)

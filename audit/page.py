@@ -202,6 +202,22 @@ async def fingerprint(page: Page) -> str | None:
     return value if isinstance(value, str) else None
 
 
+async def open_tabs(stagehand: Any) -> list[Page]:
+    """Every tab and popup open in the browser context, the one being worked in included.
+
+    `stagehand` is a Stagehand or a wrapper of one that passes `.browser` through.
+
+    Stagehand 4.4 has no "new page" event for Python; `browser.context.pages()` lists a popup a click opened
+    (`window.open`, `target="_blank"`) as soon as it exists, and Stagehand makes it the active page. Compare
+    `page_id`s with an earlier list to find a new one. An empty list if the context cannot be read.
+    """
+    try:
+        return list(await stagehand.browser.context.pages())
+    except BROWSER_ERRORS as error:  # the browser is going away: there are no tabs to read
+        log.debug("Could not list the open tabs: %s", error)
+        return []
+
+
 async def try_goto(page: Page, url: str) -> bool:
     """Navigate where a failure is survivable (slow sites can time out yet still render). False if it failed."""
     try:
