@@ -30,6 +30,7 @@ from urllib.parse import urlparse
 from stagehand import LLMGenerateCallback, Stagehand, local_browser
 
 from checkout_navigator.config import SITE_HINTS_PATH, NavigatorConfig
+from checkout_navigator.engine.progress import is_skip_link
 
 log = logging.getLogger(__name__)
 
@@ -437,7 +438,10 @@ JS_SCAN = r"""(() => {
         return clean(parts.filter(Boolean).join(' | ')).slice(0, 160);
     };
     const out = { url: location.href, title: document.title, iframes: [], controls: [], dialogs: 0, overlay: false,
-                  headings: [], text_len: 0 };
+                  overlay_matches: [], overlay_rejected: 0, headings: [], text_len: 0 };
+    // "Skip to main content" style accessibility links: in-page anchors that never move a funnel forward.
+    const skipLink = el => el.tagName === 'A' && (el.getAttribute('href') || '').startsWith('#')
+        && /^skip (to|navigation)\b/i.test(clean(el.innerText || el.getAttribute('aria-label') || ''));
     const docs = [document];
     for (const f of document.querySelectorAll('iframe, frame')) {
         out.iframes.push({ src: f.src || f.getAttribute('src') || '', name: f.name || '', title: f.title || '',
@@ -449,7 +453,7 @@ JS_SCAN = r"""(() => {
             + '[role="checkbox"], [role="combobox"], input:not([type="hidden"]), select, textarea';
         for (const el of doc.querySelectorAll(sel)) {
             if (out.controls.length >= 200) break;
-            if (!vis(el)) continue;
+            if (!vis(el) || skipLink(el)) continue;
             const tag = el.tagName.toLowerCase();
             const text = clean(el.innerText || el.value || '').slice(0, 100);
             const control = { tag, role: el.getAttribute('role') || '', type: el.getAttribute('type') || '',
@@ -463,12 +467,58 @@ JS_SCAN = r"""(() => {
             out.controls.push(control);
         }
     }
-    const overlaySel = '[role="dialog"], [aria-modal="true"], [class*="popup" i], [class*="modal" i], '
-        + '[class*="newsletter" i], [id*="klaviyo" i], [class*="cookie" i], [id*="cookie" i], [id*="consent" i], '
-        + '[class*="consent" i], [class*="age-gate" i], [id*="onetrust" i]';
-    for (const el of document.querySelectorAll(overlaySel)) {
-        const r = el.getBoundingClientRect();
-        if (vis(el) && r.width > 120 && r.height > 50) { out.overlay = true; if (el.matches('[role="dialog"], [aria-modal="true"]')) out.dialogs++; }
+    // Overlay = something that BLOCKS the page, not any element whose class happens to say popup/modal/cookie
+    // (design systems name date-picker triggers "popup-field", links "cookie-policy-link", and so on).
+    const vw = window.innerWidth || document.documentElement.clientWidth || 1;
+    const vh = window.innerHeight || document.documentElement.clientHeight || 1;
+    const NOT_OVERLAY = 'button, a, input, select, textarea, label, option, [role="button"], [role="link"], '
+        + '[role="combobox"], [role="option"], [role="alert"], [role="status"], [role="tooltip"]';
+    const LANDMARK = 'header, nav, footer, main, [role="banner"], [role="navigation"], [role="contentinfo"], [role="main"]';
+    // 'fixed' or 'sticky' when the element or an ancestor is pinned to the viewport, else ''.
+    const pinned = el => { let found = ''; for (let n = el; n && n.nodeType === 1; n = n.parentElement) {
+        const p = getComputedStyle(n).position; if (p === 'fixed') return 'fixed'; if (p === 'sticky') found = 'sticky'; }
+        return found; };
+    const clip = r => ({ l: Math.max(0, r.left), t: Math.max(0, r.top), r: Math.min(vw, r.right), b: Math.min(vh, r.bottom) });
+    const onTop = (el, c) => { let hits = 0;
+        for (const [fx, fy] of [[0.5, 0.5], [0.15, 0.2], [0.85, 0.2], [0.15, 0.8], [0.85, 0.8]]) {
+            const hit = document.elementFromPoint(c.l + (c.r - c.l) * fx, c.t + (c.b - c.t) * fy);
+            if (hit && (hit === el || el.contains(hit))) hits++;
+        }
+        return hits >= 2; };
+    const describeEl = el => { const cls = typeof el.className === 'string' ? el.className.trim().split(/\s+/)[0] : '';
+        return clean(el.tagName.toLowerCase() + (el.id ? '#' + el.id : cls ? '.' + cls : '') + ' "'
+            + clean(el.innerText || el.getAttribute('aria-label') || '').slice(0, 70) + '"'); };
+    const modalSel = '[role="dialog"], [role="alertdialog"], [aria-modal="true"], dialog[open]';
+    const nameSel = '[class*="popup" i], [class*="modal" i], [class*="newsletter" i], [id*="klaviyo" i], '
+        + '[class*="cookie" i], [id*="cookie" i], [id*="consent" i], [class*="consent" i], [class*="age-gate" i], '
+        + '[id*="onetrust" i], [class*="overlay" i], [class*="backdrop" i], [class*="lightbox" i], '
+        + '[class*="interstitial" i], [id*="popup" i], [id*="modal" i]';
+    const seen = new Set();
+    for (const el of document.querySelectorAll(modalSel + ', ' + nameSel)) {
+        if (seen.has(el)) continue; seen.add(el);
+        if (!vis(el)) continue;
+        if (el.matches(NOT_OVERLAY) || el.matches(LANDMARK) || el.closest('[role="alert"], [role="status"]')) {
+            out.overlay_rejected++; continue; }
+        const c = clip(el.getBoundingClientRect());
+        const w = c.r - c.l, h = c.b - c.t;
+        if (w < 40 || h < 20) { out.overlay_rejected++; continue; }  // off-screen or a sliver
+        let why = '';
+        if (el.matches(modalSel)) {
+            let modal = el.getAttribute('aria-modal') === 'true';
+            try { modal = modal || el.matches(':modal'); } catch (e) {}
+            if (modal || onTop(el, c)) why = 'dialog';
+        } else {
+            // Pinned and on top, and either covering a quarter of the viewport or a full-width fixed bar at the
+            // top/bottom edge (cookie bars are 'fixed'; a 'sticky' full-width bar is usually the site header).
+            const pin = pinned(el);
+            const big = (w * h) / (vw * vh) >= 0.25;
+            const bar = pin === 'fixed' && w >= vw * 0.9 && h >= 40 && (c.t <= 2 || c.b >= vh - 2);
+            if (pin && (big || bar) && onTop(el, c)) why = big ? 'covers the page' : 'edge bar';
+        }
+        if (!why) { out.overlay_rejected++; continue; }
+        out.overlay = true;
+        if (why === 'dialog') out.dialogs++;
+        if (out.overlay_matches.length < 3) out.overlay_matches.push(describeEl(el) + ' (' + why + ')');
     }
     out.headings = Array.from(document.querySelectorAll('h1, h2, [role="heading"]')).filter(vis)
         .map(h => clean(h.innerText).slice(0, 80)).filter(Boolean).slice(0, 8);
@@ -518,7 +568,7 @@ async def cdp_observe(stagehand: Any, page: Any, instruction: str = OBSERVE_INST
     options.setdefault("timeout", 90_000)
     try:
         result = await with_frame_retry(lambda: stagehand.observe(instruction, **options), "observe")
-        actions = list(result.data or [])
+        actions = [a for a in result.data or [] if not is_skip_link(str(getattr(a, "description", "") or ""))]
     except BROWSER_ERRORS as error:
         log.warning("  observe failed (%s); deciding from the DOM scan alone", str(error)[:160])
         actions = []

@@ -37,7 +37,11 @@ JS_CLICK_SELECTOR = r"""selectors => {
 
 
 async def dismiss_overlay(stagehand: Any, page: Any, hints: dict[str, Any] | None = None) -> bool:
-    """Try to clear whatever overlay blocks the page. True if something was clicked or the overlay is gone."""
+    """Try to clear whatever overlay blocks the page. True if something was clicked or the overlay is gone.
+
+    False means nothing was found to close and the DOM scan still flags an overlay after Escape: the loop treats
+    that page state as a false alarm (see `progress.Progress.mark_false_overlay`).
+    """
     hints = hints or {}
     selectors = list(hints.get("dismiss_selectors") or [])
     if selectors and (clicked := await dom_click(page, JS_CLICK_SELECTOR, selectors, hints)):

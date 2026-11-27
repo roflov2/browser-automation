@@ -17,6 +17,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field
 
 from checkout_navigator.engine.cdp_guard import Observation, safe_evaluate, with_frame_retry
+from checkout_navigator.engine.progress import action_key, is_skip_link
 
 log = logging.getLogger(__name__)
 
@@ -178,38 +179,169 @@ DECISION_PROMPT = (
     "We stop as soon as the payment step shows, so never choose to pay, place, submit or confirm the order.\n"
     "If the store or listing page shows products, pick the first available reasonably priced item and add one "
     "to the cart; then go to the cart and checkout. On a search results page pick the first/cheapest bookable "
-    "result.\n"
+    "result. If a search or booking form is already filled in, click its submit button (Search, Find, Continue) "
+    "rather than refilling it. Inline error or info messages are not overlays. Ignore 'Skip to ...' links.\n"
     "Choose the single next step. Prefer a helper route whenever its widget is what blocks progress; use DO_ACT "
     "only for one plain click.\n\n"
     "Current URL: {url}\nPage headings: {headings}\nOverlay visible: {overlay}\n"
+    "Form fields on the page:\n{fields}\nVisible buttons: {buttons}\n"
     "Observed elements (use their [index] as target_index):\n{elements}\n\n"
-    "Recent steps (do not repeat one that changed nothing):\n{history}"
+    "Recent steps (do not repeat one that changed nothing):\n{history}{avoid}"
 )
 
+# Fields whose value is shopper data: shown as "(filled)", never sent to the model.
+PERSONAL_FIELD = re.compile(
+    r"e-?mail|phone|mobile|\btel\b|password|passcode|\bname\b|first|last|surname|given|family|birth|\bdob\b"
+    r"|card|cvv|cvc|expir|postcode|post code|zip|address|street|passport",
+    re.IGNORECASE,
+)
+DATE_OR_PICKER = re.compile(
+    r"\bdates?\b|calendar|picker|depart|return|check-?in|check-?out|when\b|travel"
+    r"|\b\d{1,2}\s+(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\b"
+    r"|\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\s+\d{1,2}\b|\d{1,2}/\d{1,2}(/\d{2,4})?",
+    re.IGNORECASE,
+)
+FIELD_TYPES_SKIPPED = frozenset({"checkbox", "radio", "submit", "button", "reset", "image", "file", "hidden"})
+BUTTON_TYPES = frozenset({"submit", "button"})
 
-def _decision_prompt(observed: Observation, history: Sequence[str]) -> str:
+
+def _field_line(control: dict[str, Any]) -> str | None:
+    tag, role, kind = control.get("tag", ""), control.get("role", ""), (control.get("type") or "").lower()
+    label = str(control.get("label") or "").split(" | ")[0][:50] or str(control.get("text") or "")[:50]
+    if (tag in ("input", "textarea") and kind not in FIELD_TYPES_SKIPPED) or tag == "select" or role == "combobox":
+        value = str(control.get("value") or control.get("text") or "")
+        if value and (kind in ("email", "tel", "password") or PERSONAL_FIELD.search(str(control.get("label") or ""))):
+            value = "(filled)"
+        kind_name = role or (tag if tag != "input" else kind or "text")
+    elif tag == "button" or role == "button":
+        text = str(control.get("text") or "")
+        if not DATE_OR_PICKER.search(f"{text} {control.get('label', '')}"):
+            return None
+        value, kind_name = text, "picker button"
+    else:
+        return None
+    flags = " *required" if control.get("required") else ""
+    flags += " (disabled)" if control.get("disabled") else ""
+    return f"- {label or '(unlabelled)'} [{kind_name}] = {value[:40] or '(empty)'}{flags}"
+
+
+def form_summary(controls: Sequence[dict[str, Any]], max_chars: int = 900) -> str:
+    """Visible inputs, comboboxes, selects and date/picker buttons as 'label [kind] = value', capped in length."""
+    lines: list[str] = []
+    seen: set[str] = set()
+    for control in controls:
+        line = _field_line(control)
+        if line is None or line in seen:
+            continue
+        seen.add(line)
+        if sum(len(x) + 1 for x in lines) + len(line) > max_chars:
+            lines.append("- ...")
+            break
+        lines.append(line)
+    return "\n".join(lines) or "(none)"
+
+
+def button_summary(controls: Sequence[dict[str, Any]], limit: int = 12, max_chars: int = 400) -> str:
+    """The visible, enabled buttons' texts, de-duplicated, in page order."""
+    names: list[str] = []
+    for control in controls:
+        is_button = (
+            control.get("tag") == "button"
+            or control.get("role") == "button"
+            or (control.get("tag") == "input" and (control.get("type") or "").lower() in BUTTON_TYPES)
+        )
+        text = str(control.get("text") or control.get("value") or control.get("label") or "").split(" | ")[0][:40]
+        if not is_button or control.get("disabled") or not text or is_skip_link(text) or text in names:
+            continue
+        names.append(text)
+        if len(names) >= limit:
+            break
+    out = "; ".join(f"'{n}'" for n in names)
+    return (out[:max_chars] + " ...") if len(out) > max_chars else (out or "(none)")
+
+
+def _decision_prompt(
+    observed: Observation, history: Sequence[str], avoid: Sequence[str] = (), overlay_false_alarm: bool = False
+) -> str:
+    overlay = bool(observed.dom.get("overlay")) and not overlay_false_alarm
+    overlay_text = "False"
+    if overlay:
+        matches = [str(m) for m in observed.dom.get("overlay_matches") or []][:2]
+        overlay_text = "True" + (f" ({'; '.join(matches)})" if matches else "")
+    avoid_text = ""
+    if avoid:
+        avoid_text = "\nAvoid (already tried on this exact screen with no effect): " + "; ".join(avoid)
     return DECISION_PROMPT.format(
         url=observed.url,
         headings="; ".join(observed.dom.get("headings") or []) or "(none)",
-        overlay=bool(observed.dom.get("overlay")),
+        overlay=overlay_text,
+        fields=form_summary(observed.controls),
+        buttons=button_summary(observed.controls),
         elements=observed.describe(),
         history="\n".join(f"- {h}" for h in history[-6:]) or "(none yet)",
+        avoid=avoid_text,
     )
 
 
+async def _ask(stagehand: Any, prompt: str, timeout_ms: int) -> NextActionModel:
+    result = await with_frame_retry(
+        lambda: stagehand.extract(prompt, NextActionModel, timeout=timeout_ms), "decide next step"
+    )
+    decision: NextActionModel = result.data
+    return decision
+
+
+def _key(decision: NextActionModel, observed: Observation) -> str:
+    instruction = decision.instruction
+    index = decision.target_index if decision.target_index is not None else -1
+    if decision.route == "DO_ACT" and not instruction and 0 <= index < len(observed.actions):
+        instruction = f"Click {getattr(observed.actions[index], 'description', '')}"
+    return action_key(decision.route, instruction)
+
+
+def _unwanted(decision: NextActionModel, observed: Observation, avoid: Sequence[str], no_overlay: bool) -> str | None:
+    """Why a decision must not run as given (a banned action, a known false overlay, a skip link), else None."""
+    if decision.blocked_reason:
+        return None
+    if _key(decision, observed) in avoid:
+        return f"{_key(decision, observed)} already had no effect on this screen"
+    if no_overlay and decision.route == "DO_DISMISS_OVERLAY":
+        return "the overlay helper already found nothing to close on this screen; it is unobstructed"
+    if decision.route == "DO_ACT" and is_skip_link(decision.instruction):
+        return "'Skip to ...' links do not move the flow forward"
+    return None
+
+
 async def determine_next_step(
-    stagehand: Any, observed_elements: Observation, history: Sequence[str] = (), timeout_ms: int = 90_000
+    stagehand: Any,
+    observed_elements: Observation,
+    history: Sequence[str] = (),
+    timeout_ms: int = 90_000,
+    *,
+    avoid: Sequence[str] = (),
+    overlay_false_alarm: bool = False,
 ) -> NextAction:
-    """One extract() call that returns the route (and, for DO_ACT, the exact instruction and target)."""
-    prompt = _decision_prompt(observed_elements, history)
+    """One extract() call that returns the route (and, for DO_ACT, the exact instruction and target).
+
+    `avoid` lists action keys (see `progress.action_key`) that already had no effect on this screen; with
+    `overlay_false_alarm` the overlay flag is known to be wrong here. A decision that picks one of those anyway is
+    re-asked once, then replaced by the fallback.
+    """
+    avoid = list(avoid)
+    no_overlay = overlay_false_alarm or "DO_DISMISS_OVERLAY" in avoid
+    prompt = _decision_prompt(observed_elements, history, avoid, overlay_false_alarm)
     try:
-        result = await with_frame_retry(
-            lambda: stagehand.extract(prompt, NextActionModel, timeout=timeout_ms), "decide next step"
-        )
-        decision: NextActionModel = result.data
+        decision = await _ask(stagehand, prompt, timeout_ms)
+        if (why := _unwanted(decision, observed_elements, avoid, no_overlay)) is not None:
+            log.info("  Decision %s rejected (%s); asking again", decision.route, why)
+            decision = await _ask(
+                stagehand, f"{prompt}\nYour previous answer was rejected: {why}. Choose a different step.", timeout_ms
+            )
+            if (why := _unwanted(decision, observed_elements, avoid, no_overlay)) is not None:
+                return _fallback(observed_elements, f"model kept choosing a rejected step: {why}", avoid, no_overlay)
     except Exception as error:  # noqa: BLE001 - any failed decision falls back to a safe default step
         log.warning("  Decision call failed (%s); falling back to the first observed element", str(error)[:160])
-        return _fallback(observed_elements, f"decision failed: {error}")
+        return _fallback(observed_elements, f"decision failed: {error}", avoid, no_overlay)
 
     target = None
     if decision.route == "DO_ACT":
@@ -218,7 +350,7 @@ async def determine_next_step(
             target = observed_elements.actions[index]
         if not decision.instruction:
             if target is None:
-                return _fallback(observed_elements, decision.reason)
+                return _fallback(observed_elements, decision.reason, avoid, no_overlay)
             decision.instruction = f"Click {getattr(target, 'description', 'the element')}"
     return NextAction(
         route=decision.route,
@@ -229,16 +361,18 @@ async def determine_next_step(
     )
 
 
-def _fallback(observed: Observation, reason: str) -> NextAction:
-    """Without a decision: dismiss an overlay if one is up, else act on the first observed element."""
-    if observed.dom.get("overlay"):
+def _fallback(
+    observed: Observation, reason: str, avoid: Sequence[str] = (), overlay_false_alarm: bool = False
+) -> NextAction:
+    """Without a usable decision: dismiss a (real) overlay if one is up, else act on the first observed element
+    that has not already failed on this screen."""
+    if observed.dom.get("overlay") and not overlay_false_alarm and "DO_DISMISS_OVERLAY" not in avoid:
         return NextAction(route="DO_DISMISS_OVERLAY", reason=reason)
-    if observed.actions:
-        first = observed.actions[0]
-        return NextAction(
-            route="DO_ACT", instruction=f"Click {getattr(first, 'description', 'the element')}", target=first,
-            reason=reason,
-        )  # fmt: skip
+    for action in observed.actions:
+        instruction = f"Click {getattr(action, 'description', 'the element')}"
+        if action_key("DO_ACT", instruction) in avoid or is_skip_link(instruction):
+            continue
+        return NextAction(route="DO_ACT", instruction=instruction, target=action, reason=reason)
     return NextAction(
         route="DO_ACT", instruction="Click the primary button that continues to the next step", reason=reason
     )

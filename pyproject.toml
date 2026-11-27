@@ -16,7 +16,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["ruff==0.17.5", "mypy==2.4.1", "types-PyYAML"]
+dev = ["ruff==0.17.5", "mypy==2.4.1", "types-PyYAML", "pytest>=8"]
 # Azure OpenAI with Microsoft Entra ID sign-in (AZURE_OPENAI_* settings, checkout_navigator/engine/azure_llm.py)
 azure = ["openai==3.55.1", "azure-identity==1.27.0", "jsonschema==4.26.0"]
 

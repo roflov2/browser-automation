@@ -3,7 +3,7 @@
     python -m checkout_navigator.run --url https://example-shop.com.au
     python checkout_navigator/run.py --url https://example-shop.com.au --max-steps 20 --headless
 
-Prints the terminal status dictionary as JSON (status DONE, BLOCKED or MAX_STEPS_EXCEEDED) and exits 0 for DONE,
+Prints the terminal status dictionary as JSON (status DONE, BLOCKED, STUCK or MAX_STEPS_EXCEEDED) and exits 0 for DONE,
 1 for anything else. It never fills payment details and never submits an order.
 """
 

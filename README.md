@@ -41,6 +41,7 @@ It prints one JSON status dictionary and exits with 0 for `DONE` and 1 for anyth
 | --- | --- |
 | `DONE` | The payment page was detected, or the safety brake refused a final-purchase action (`"stopped_by": "safety_brake"`) |
 | `BLOCKED` | A CAPTCHA or bot check, a virtual queue that never let it through, or a sign-in with no guest path when the run cannot pause for one |
+| `STUCK` | Several steps in a row (4, `STUCK_STEPS`) brought no new URL and no new page state. The result adds `last_decisions` and `overlay` (what the overlay check matched, how many candidates it rejected, and whether this state is a known false alarm) |
 | `MAX_STEPS_EXCEEDED` | The step budget ran out |
 | `ERROR` | The browser or the model failed outright (the message is in `error`) |
 
@@ -50,7 +51,10 @@ It prints one JSON status dictionary and exits with 0 for `DONE` and 1 for anyth
 observe ─► Are we at checkout? ── yes ─► DONE
                │ no
                ▼
-     same URL and same page controls as last step? ── yes ─► scroll, dismiss any overlay, loop
+     no new URL or page state for 4 steps? ── yes ─► STUCK
+               │ no
+               ▼
+     same URL and same page controls as last step? ── yes ─► scroll, dismiss any real overlay, loop
                │ no
                ▼
      determine_next_step (one model call) ─► route
@@ -63,10 +67,11 @@ observe ─► Are we at checkout? ── yes ─► DONE
 
 On each step:
 
-1. **Observe.** Stagehand's `observe()` lists the elements that matter (buttons, empty fields, pickers, popups), and one in-page script reads every visible control.
+1. **Observe.** Stagehand's `observe()` lists the elements that matter (buttons, empty fields, pickers, popups), and one in-page script reads every visible control. "Skip to …" accessibility links are dropped from both. The same script decides whether an overlay blocks the page (see [Overlays](#overlays)).
 2. **Are we at checkout?** This check needs no model call. It counts as checkout when there is a payment-provider frame (Stripe, PayPal, Adyen, Braintree, Afterpay, Klarna and others) alongside a payment button. It also counts when at least two signals are present: card number, expiry, CVV or billing-postcode fields, or "Place order", "Pay now", "Complete purchase", "Pay with card" or "Submit payment" buttons. Frames are read from the parent page, so cross-origin payment frames count.
-3. **Stuck?** If the URL and the page's controls (text, values, checked states, open dialogs) are both unchanged since the last step, the last action did nothing. The navigator scrolls to reveal off-screen buttons and sticky footers, clears any overlay, and loops.
-4. **What next?** One structured `extract()` call picks a route. For a plain action it also gives the exact atomic instruction and, where it can, the observed element to act on, so the act needs no second model call.
+3. **Stuck?** If the URL and the page's controls (text, values, checked states, open dialogs) are both unchanged since the last step, the last action did nothing. The navigator scrolls to reveal off-screen buttons and sticky footers, clears any overlay that is not a known false alarm, and loops. After 4 steps in a row that bring no URL or page state not already seen on this URL, it ends with `STUCK` instead of spending the rest of the budget.
+4. **What next?** One structured `extract()` call picks a route. The prompt carries the observed elements, the headings, the overlay flag (and what matched), a short summary of the form fields (`label [kind] = value` or `(empty)`, required ones marked, shopper details shown only as `(filled)`) and the visible buttons. For a plain action the model also gives the exact atomic instruction and, where it can, the observed element to act on, so the act needs no second model call.
+   An action that had no effect twice on the same screen (a helper route, or `DO_ACT` with the same instruction) is listed under "Avoid" for that screen. If the model picks it anyway, or picks the overlay route on a known false alarm, or a "Skip to …" link, it is asked once more, then the fallback picks the first observed element that has not failed there.
 5. **Do it**, then loop.
 
 | Route | When | What the helper does |
@@ -77,6 +82,17 @@ On each step:
 | `DO_OPTIONS` | A required size, side, variant, fare, ticket tier or quantity | Picks the free, default or cheapest option (quantity 1), declines optional extras and insurance, and clicks the confirm button |
 | `DO_AUTH_OR_DETAILS` | A sign-in wall, a guest choice, or a contact, passenger or guest form | Takes "Continue as guest" if offered. Otherwise fills the placeholder shopper and submits. With no guest path, a headed interactive run pauses so you can sign in by hand |
 | `DO_ACT` | Nothing special blocks the page | One safety-checked action, e.g. "Click the 'Continue to seat selection' button" |
+
+### Overlays
+
+The overlay flag means "something blocks the page", not "some element's class says popup". It is set by:
+
+- a visible `[role=dialog]`, `[role=alertdialog]`, `[aria-modal=true]` or modal `<dialog>` in the viewport (a non-modal dialog must also be on top at its sample points);
+- an element whose class or id says popup, modal, cookie, consent, newsletter, overlay, backdrop, lightbox, interstitial, age-gate, OneTrust or Klaviyo, **and** that is `fixed` or `sticky` (itself or an ancestor), **and** covers at least 25% of the viewport or is a full-width `fixed` bar on the top or bottom edge, **and** `document.elementFromPoint` hits it at two or more of five points inside it.
+
+Never an overlay: buttons, links, inputs, selects, labels, comboboxes, `role=alert`, `role=status` (and anything inside them), and page landmarks (`header`, `nav`, `footer`, `main`). So a date-picker trigger styled `…popup-field__button`, a `cookie-policy-link` or an inline "Something went wrong" alert does not count.
+
+If `DO_DISMISS_OVERLAY` finds nothing to click and the flag is still set after Escape, that page state (URL + DOM hash, and URL + matched element) is remembered as a false alarm. For it, the model is told `Overlay visible: False`, the fallback and stagnation recovery skip the overlay helper, and the history says "overlay dismissal found nothing to close; treat the page as unobstructed".
 
 ## Safety
 
@@ -98,6 +114,8 @@ Defaults live in `checkout_navigator/config.py`. Every one can be overridden in 
 | Setting | Default | Variables |
 | --- | --- | --- |
 | Step budget | 15 | `MAX_STEPS` |
+| Steps with nothing new before `STUCK` | 4 | `STUCK_STEPS` |
+| Screenshot per step to `output/<host>/<timestamp>/step-NN.jpg` (path in the result's `screenshots`) | on | `STEP_SCREENSHOTS` |
 | Delivery address | `240 City Walk, Canberra ACT 2601` | `DEFAULT_ADDRESS` |
 | Search defaults | `CBR → SYD`, city `Sydney`, 1 guest | `SEARCH_ORIGIN`, `SEARCH_DESTINATION`, `SEARCH_CITY`, `SEARCH_GUESTS` |
 | Placeholder shopper | Alex Testbooking, `alex.testbooking@example.com`, `0491 570 156` (ACMA fictional range) | `PERSONA_<FIELD>` |
@@ -136,7 +154,8 @@ Requirements:
 ## Code layout
 
 ```
-main.py                     # entry point: python main.py --url ...
+main.py                     # entry point
+tests/                      # pure-function tests (no browser, no model): python main.py --url ...
 checkout_navigator/
 ├── config.py               # defaults, env/.env loading, Azure settings, system prompt
 ├── site_hints.yaml         # optional per-domain timing / never-click data
@@ -144,6 +163,7 @@ checkout_navigator/
 ├── engine/
 │   ├── navigator.py        # the loop: Are we at checkout? -> what next? -> do
 │   ├── classifier.py       # is_at_checkout (no model call) and determine_next_step (one model call)
+│   ├── progress.py         # per-run memory: false overlay alarms, routes banned per screen, stuck detection
 │   ├── cdp_guard.py        # frame retries, waits, profile-lock cleanup, DOM hashing, cdp_act and the payment brake
 │   └── azure_llm.py        # Azure OpenAI as Stagehand's LLM callback
 └── helpers/
@@ -160,9 +180,10 @@ checkout_navigator/
 pip install -e ".[dev]"
 ruff check . && ruff format --check .
 mypy
+pytest
 ```
 
-There is no test suite. The navigator is validated by running it against real sites.
+The tests cover only the Python-side bookkeeping and prompt building (route bans, false-overlay memory, stuck detection, form summaries). The navigator itself is validated by running it against real sites.
 
 ## Limits
 

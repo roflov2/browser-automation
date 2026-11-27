@@ -124,6 +124,8 @@ class BrowserConfig:
 @dataclass(frozen=True)
 class NavigatorConfig:
     max_steps: int = 15
+    stuck_steps: int = 4  # end with STUCK after this many steps in a row with no new URL or page state
+    screenshots: bool = True  # save a screenshot per step to output/<host>/<timestamp>/
     default_address: str = "240 City Walk, Canberra ACT 2601"
     search_defaults: dict[str, Any] = field(default_factory=lambda: dict(DEFAULT_SEARCH))
     persona: dict[str, str] = field(default_factory=lambda: dict(DEFAULT_PERSONA))
@@ -146,6 +148,8 @@ class NavigatorConfig:
         """The plain dict the control loop and helpers read."""
         return {
             "max_steps": self.max_steps,
+            "stuck_steps": self.stuck_steps,
+            "screenshots": self.screenshots,
             "default_address": self.default_address,
             "search_defaults": dict(self.search_defaults),
             "persona": dict(self.persona),
@@ -196,6 +200,8 @@ def load_config(**overrides: Any) -> NavigatorConfig:
 
     values: dict[str, Any] = {
         "max_steps": int(_env("MAX_STEPS", "15") or 15),
+        "stuck_steps": int(_env("STUCK_STEPS", "4") or 4),
+        "screenshots": _env_bool("STEP_SCREENSHOTS", True),
         "default_address": _env("DEFAULT_ADDRESS", NavigatorConfig.default_address),
         "search_defaults": search,
         "persona": persona,
