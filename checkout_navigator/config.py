@@ -41,7 +41,7 @@ CHOSEN_PERSONA_FIELDS = frozenset({"title", "gender", "country"})
 
 DEFAULT_SEARCH: dict[str, Any] = {"origin": "CBR", "destination": "SYD", "city": "Sydney", "guests": 1}
 
-# Merged from the legacy workflows' safety prompts (coffee, qantas, ubereats, ticketek).
+# Sent to Stagehand as its system prompt on every model call.
 SYSTEM_PROMPT = (
     "You are navigating an online purchase or booking flow on behalf of a tester. The goal is only to REACH the "
     "payment step, never to complete it. Never enter payment card, gift card, voucher, promo code, travel credit or "

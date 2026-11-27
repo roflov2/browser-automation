@@ -3,39 +3,34 @@ requires = ["setuptools>=75"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "drip-audit"
-version = "0.2.0"
-description = "Stagehand workflows that walk real checkouts and record the gap between advertised and checkout prices"
+name = "checkout-navigator"
+version = "0.3.0"
+description = "Site-agnostic Stagehand navigator that walks any purchase or booking funnel to the payment wall and stops"
 readme = "README.md"
 requires-python = ">=3.11"
-# Keep requirements.txt in sync (tests/test_packaging.py checks it).
+# Keep requirements.txt and requirements-azure.txt in sync with these.
 dependencies = [
     "stagehand==4.4.0",
     "pydantic>=2.12,<3",
-    "pydantic-settings==2.16.3",
-    "psutil==7.2.2",
+    "pyyaml>=6.0",
 ]
 
 [project.optional-dependencies]
-dev = ["pytest==9.2.0", "ruff==0.17.5", "mypy==2.4.1"]
-# Azure OpenAI with Microsoft Entra ID sign-in (AZURE_OPENAI_* settings, audit/azure.py)
+dev = ["ruff==0.17.5", "mypy==2.4.1", "types-PyYAML"]
+# Azure OpenAI with Microsoft Entra ID sign-in (AZURE_OPENAI_* settings, checkout_navigator/engine/azure_llm.py)
 azure = ["openai==3.55.1", "azure-identity==1.27.0", "jsonschema==4.26.0"]
-# Evidence reviewer web app (streamlit run reviewer/app.py)
-review = ["streamlit==1.67.0", "pandas==3.0.5"]
 
 [project.scripts]
-drip-audit = "audit.cli:main"
+checkout-navigator = "checkout_navigator.run:main"
 
 [tool.setuptools]
 py-modules = ["main"]
 
 [tool.setuptools.packages.find]
-include = ["audit*", "reviewer*"]
+include = ["checkout_navigator*"]
 
-[tool.pytest.ini_options]
-testpaths = ["tests"]
-addopts = "-ra"
-markers = ["browser: needs a local Chrome/Chromium (skipped when none is found)"]
+[tool.setuptools.package-data]
+checkout_navigator = ["site_hints.yaml"]
 
 [tool.ruff]
 line-length = 120
@@ -52,23 +47,13 @@ ignore = ["E501", "ANN401", "RUF001"]
 max-complexity = 12
 
 [tool.ruff.lint.per-file-ignores]
-"tests/**" = ["ANN", "PLC0415"]
-"scripts/**" = ["T201", "PLC0206"]  # command-line scripts print their results
+"checkout_navigator/run.py" = ["T201"]  # the CLI prints its result
 
 [tool.mypy]
 python_version = "3.11"
 strict = true
-files = ["audit", "main.py"]
+files = ["checkout_navigator", "main.py"]
 
 [[tool.mypy.overrides]]
-module = ["psutil", "jsonschema"]
+module = ["jsonschema", "openai", "azure.*"]
 ignore_missing_imports = true
-
-[[tool.mypy.overrides]]
-# The site workflows pass LLM-shaped dicts around; they are checked, but not held to --strict.
-module = ["audit.workflows.*"]
-disallow_untyped_defs = false
-disallow_incomplete_defs = false
-disallow_any_generics = false
-disallow_untyped_calls = false
-warn_return_any = false

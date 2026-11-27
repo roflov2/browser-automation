@@ -4,9 +4,8 @@ Stagehand 4.4's model settings only accept OpenAI, Anthropic, Google, Groq and C
 endpoint, so an Azure deployment is reached through Stagehand's LLM callback instead: Stagehand hands every model
 request to `AzureLLM`, which sends it to the deployment as a chat completion and returns the reply in Stagehand's shape.
 
-Carried over from the legacy `audit/azure.py` unchanged except for its configuration, which now comes from
-`checkout_navigator.config.AzureConfig` (the same AZURE_OPENAI_* environment variables). Needs the Azure extras
-(`pip install -r checkout_navigator/requirements-azure.txt`); the imports are deferred so a Gemini-only install
+Configured by `checkout_navigator.config.AzureConfig` (the AZURE_OPENAI_* environment variables). Needs the Azure extras
+(`pip install -r requirements-azure.txt`); the imports are deferred so a Gemini-only install
 still works.
 """
 
@@ -479,9 +478,7 @@ async def open_azure_llm(azure: AzureConfig) -> AsyncIterator[AzureLLM]:
         from azure.identity import DefaultAzureCredential  # noqa: PLC0415 - optional extra
         from openai import AsyncAzureOpenAI  # noqa: PLC0415 - optional extra
     except ImportError as error:
-        raise ConfigError(
-            f"Azure OpenAI needs its extras: pip install -r checkout_navigator/requirements-azure.txt ({error})"
-        ) from error
+        raise ConfigError(f"Azure OpenAI needs its extras: pip install -r requirements-azure.txt ({error})") from error
 
     endpoint, deployment = azure.endpoint, azure.deployment
     credential = DefaultAzureCredential(exclude_managed_identity_credential=not azure.managed_identity)

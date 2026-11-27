@@ -4,7 +4,7 @@
    code when the DOM shows one, else by the model when its reading names one.
 2. Otherwise the required details fields are listed (one extraction) and filled from the dummy `persona`. Typed
    details go in as Stagehand `%name%` variables, substituted after the model has answered, so names, email and
-   phone never reach a prompt (the legacy Qantas passenger-form technique). Only list choices (title, gender,
+   phone never reach a prompt. Only list choices (title, gender,
    country) are named to the model, and none of them identifies anyone.
 3. A filled form is submitted with its own continue button (never a payment button: cdp_act brakes on those).
 4. A sign-in wall with no guest path pauses a headed, interactive run so the operator can sign in by hand (the

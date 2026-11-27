@@ -1,4 +1,0 @@
-# checkout_navigator runtime dependencies (Python 3.11+)
-stagehand==4.4.0
-pydantic>=2.12,<3
-pyyaml>=6.0

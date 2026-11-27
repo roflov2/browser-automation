@@ -1,7 +1,7 @@
 """DO_DISMISS_OVERLAY: cookie banners, promo/newsletter popups, app banners, region selectors and age gates.
 
 Order of attempts (cheapest first): known consent-vendor buttons from `site_hints.yaml` (no model call), then one
-safety-checked act() with the dismiss prompt merged from the legacy workflows, then the Escape key.
+safety-checked act() with a generic dismiss prompt, then the Escape key.
 """
 
 from __future__ import annotations
@@ -13,7 +13,6 @@ from checkout_navigator.engine.cdp_guard import dom_click, press_key, scan_dom, 
 
 log = logging.getLogger(__name__)
 
-# Merged from audit/page.py dismiss_popups() and the per-site popup lists (coffee, ubereats, ticketek, qantas).
 DISMISS_INSTRUCTION = (
     "Close the visible cookie banner, promotional / newsletter / discount popup, app-install banner, region or "
     "currency selector, or age-verification gate that covers the page. Click its 'Accept', 'Accept all', 'Close', "

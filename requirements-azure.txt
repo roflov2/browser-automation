@@ -1,0 +1,5 @@
+# Optional: Azure OpenAI with Microsoft Entra ID sign-in (checkout_navigator/engine/azure_llm.py).
+-r requirements.txt
+openai==3.55.1
+azure-identity==1.27.0
+jsonschema==4.26.0

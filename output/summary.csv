@@ -1,4 +1,0 @@
-run_at,site,status,message,items_added,expected_subtotal,checkout_subtotal,checkout_total,currency,other_fees_total,shipping,drip_detected,output_dir
-2026-11-17T22:52:07+00:00,https://onacoffee.com.au,ok,,3,59.0,59.0,59.0,AUD,0.0,not calculated (address required),False,output/onacoffee.com.au/20261118-094848
-2026-11-18T01:09:13+00:00,https://www.ubereats.com/au,ok,,1,25.0,70.65,84.12,AUD,8.48,$4.99,True,output/ubereats.com/20261118-120410
-2026-11-18T04:34:09+00:00,https://premier.ticketek.com.au/,ok,,1,291.3,291.3,300.2,AUD,8.9,0.0,True,output/premier.ticketek.com.au/20261118-152629

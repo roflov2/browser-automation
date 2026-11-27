@@ -1,9 +1,9 @@
 """DO_LOCATION: delivery-address modals and landing-page search bars (origin/destination, city, suburb).
 
 Values come from the config (`default_address`, `search_defaults`). Each field is typed through a Stagehand
-`%variable%` act; React/Angular type-aheads that ignore a programmatic fill get real key presses instead (the
-technique from the legacy Qantas airport fields). The first matching autocomplete suggestion is then clicked,
-found in the DOM first and by the model only if the DOM finds none.
+`%variable%` act; React/Angular type-aheads that ignore a programmatic fill get real, key-by-key presses instead.
+The first matching autocomplete suggestion is then clicked, found in the DOM first and by the model only if the DOM
+finds none.
 """
 
 from __future__ import annotations

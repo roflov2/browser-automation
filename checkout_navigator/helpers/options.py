@@ -1,9 +1,8 @@
 """DO_OPTIONS: required selections (sizes, sides, variants, fare bundles, ticket tiers, quantities) and add-ons.
 
-1. In code, no model call: every radio group with nothing chosen gets its free / default / cheapest option (the
-   legacy Uber Eats `JS_SELECT_REQUIRED`, generalised: a 'No' / 'No thanks' / '$0' / 'Included' / 'Standard' label
-   wins, else the first option without a '+$' surcharge), and every empty required native <select> its first real
-   option. Payment-method groups are never touched.
+1. In code, no model call: every radio group with nothing chosen gets its free / default / cheapest option (a 'No',
+   'No thanks', '$0', 'Included' or 'Standard' label wins, else the first option without a '+$' surcharge), and every
+   empty required native <select> its first real option. Payment-method groups are never touched.
 2. One extraction finds what is still unmet, the optional extras to decline, and the confirm button.
 3. Safety-checked acts choose each unmet option, decline each extra, then click the confirm button.
 """

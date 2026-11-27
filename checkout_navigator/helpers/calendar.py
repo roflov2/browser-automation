@@ -4,8 +4,8 @@ Targets come from the config (`today + 14` to depart / check in, `today + 17` to
 `<input type="date">` fields are filled directly. A custom picker is opened, its visible month header read, and it is
 paged forward month by month until the target day is enabled; the day is clicked, then the return / check-out day
 when the form asks for one, then the picker is confirmed or closed. The day-cell finder (ISO attribute, aria-label
-naming the date, or a day number under its month heading) and the scroll-the-months fallback are harvested from the
-legacy Qantas date modal; every element is located in the DOM by role and text, never by position. The model is
+naming the date, or a day number under its month heading) handles both paged and vertically scrolling month layouts;
+every element is located in the DOM by role and text, never by position. The model is
 only used to open the picker, or as a last resort when the DOM cannot find the day or the next-month control.
 """
 

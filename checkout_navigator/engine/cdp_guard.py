@@ -7,10 +7,6 @@ Everything that touches Stagehand's observe()/act() goes through `cdp_observe` a
 * no click or keystroke can reach a final-purchase control: `cdp_act` checks the instruction, the model's chosen
   element and the element's live text against final-purchase keywords, and raises `CheckoutReachedInterrupt`
   instead of acting. The loop treats that as "we are at the payment wall" and stops.
-
-Harvested from the legacy `audit/` package: the CDP noise filter, transient-error list and act-retry logic
-(`audit/core.py`, `audit/actions.py`), the quiet/hydration waits (`audit/page.py`), and the root-sandbox and
-loopback-proxy fixes (`audit/runner.py`, `audit/config.py`). Profile lock cleanup is new.
 """
 
 from __future__ import annotations
@@ -174,7 +170,7 @@ def load_site_hints(url: str, path: Path = SITE_HINTS_PATH) -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
-# CDP noise (harvested from audit/page.py)
+# CDP noise
 # ---------------------------------------------------------------------------
 NOISY_LOGGERS = ("", "stagehand", "stagehand.cdp_client", "websockets")
 
@@ -331,7 +327,7 @@ async def _fresh_tab(browser: Any) -> Any:
 
 
 # ---------------------------------------------------------------------------
-# Waits (harvested from audit/page.py)
+# Waits
 # ---------------------------------------------------------------------------
 LOAD_TIMEOUT_MS = 15_000
 POLL_MS = 250

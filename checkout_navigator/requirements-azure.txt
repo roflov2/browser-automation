@@ -1,5 +1,0 @@
-# Optional: Azure OpenAI with Microsoft Entra ID sign-in (engine/azure_llm.py). Same pins as the audit package's `azure` extra.
--r requirements.txt
-openai==3.55.1
-azure-identity==1.27.0
-jsonschema==4.26.0

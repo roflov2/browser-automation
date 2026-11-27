@@ -65,7 +65,7 @@ def main(argv: list[str] | None = None) -> None:
     except Exception as error:
         logging.getLogger(__name__).debug("Run failed", exc_info=error)
         result = {"status": "ERROR", "url": args.url, "error": f"{type(error).__name__}: {error}"}
-    print(json.dumps(result, indent=2, default=str))  # noqa: T201 - the CLI's output
+    print(json.dumps(result, indent=2, default=str))
     sys.exit(0 if result.get("status") == "DONE" else 1)
 
 
