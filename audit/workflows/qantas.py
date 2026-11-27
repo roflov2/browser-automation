@@ -7,9 +7,7 @@ moves the booking on, so a redesigned page or a reordered booking chain does not
 Every optional extra and fee offered along the way (baggage, seats, insurance, carbon offset, service
 and card fees, ...) is recorded, and the advertised fare is compared with the total at checkout.
 
-The model's part of the run stops on the payment page. From there the code alone clicks PAY WITH CARD, once every
-guard holds (open_card_payment), to read the card-payment window it opens, then stops: no payment details are ever
-entered, nothing is clicked on that window, and nothing is purchased.
+The run always stops on the payment page: no payment details are entered and nothing is purchased.
 """
 
 import argparse
@@ -22,7 +20,7 @@ from collections.abc import AsyncIterator, Awaitable, Callable, Iterable
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 
 from pydantic import BaseModel, Field
 from stagehand import Page, Stagehand
@@ -55,7 +53,7 @@ from ..core import (
     summarise_extras,
     write_csv,
 )
-from ..page import dismiss_popups, fingerprint, js, open_tabs, settle, shot, wait_for_render
+from ..page import dismiss_popups, fingerprint, js, settle, shot, wait_for_render
 from ..workflow import Workflow
 
 log = logging.getLogger(__name__)
@@ -2695,31 +2693,6 @@ async def walk_to_payment(stagehand: Stagehand, page: Page, passenger: Passenger
     return False
 
 
-def card_window_evidence(card_window: dict | None, payment_total: float | None) -> dict[str, Any]:
-    """What the card-payment window adds to the payment page's total: a higher amount due, and any card fee shown.
-
-    `payment_total` is the payment page's total (None if it was not read). Each reason comes as (reason, True), for
-    compare_prices' drip_reasons; a window not reached adds nothing.
-    """
-    card = card_window or {}
-    reached = card.get("status") == "reached"
-    amount = parse_price(card.get("amount_due")) if reached else None
-    gap = diff(amount, payment_total)
-    fees = [
-        {"label": f.get("label"), "amount": f.get("amount")}
-        for f in (card.get("card_fees") or [] if reached else [])
-        if positive(parse_price(f.get("amount")))
-    ]
-    reasons = []
-    if positive(gap):
-        reasons.append((f"card payment window adds ${gap:.2f}", True))
-    if fees:
-        reasons.append(
-            ("card payment window shows a card fee: " + ", ".join(f"{f['label']} {f['amount']}" for f in fees), True)
-        )
-    return {"amount_due": card.get("amount_due") if reached else None, "diff": gap, "fees": fees, "reasons": reasons}
-
-
 def compare_prices(result: SiteResult, checkout: CheckoutDetails | None) -> Report:
     """Advertised fare against the payment page. `checkout` is None if the payment page was never read."""
     added = result.added
@@ -2737,7 +2710,6 @@ def compare_prices(result: SiteResult, checkout: CheckoutDetails | None) -> Repo
     chargeable = [s for s in surcharges if positive(parse_price(s["fee"]))]
     extras = summarise_extras(result.extras)
     preselected = extras["extras_preselected"]
-    card = card_window_evidence(result.card_window, total if final_read else None)
 
     reasons = [
         reason
@@ -2754,7 +2726,6 @@ def compare_prices(result: SiteResult, checkout: CheckoutDetails | None) -> Repo
                 "payment surcharge applies: " + ", ".join(f"{s['payment_method']} {s['fee']}" for s in chargeable),
                 bool(chargeable),
             ),
-            *card["reasons"],
         )
         if hit
     ]
@@ -2777,9 +2748,6 @@ def compare_prices(result: SiteResult, checkout: CheckoutDetails | None) -> Repo
         "checkout_total_display": checkout.total if checkout else None,
         "checkout_total": total,
         "currency": checkout.currency if checkout else None,
-        "card_window_amount_due": card["amount_due"],
-        "card_window_vs_checkout_diff": card["diff"],
-        "card_window_fees": card["fees"],
         **drip_outcome(reasons, final_read),
         "checkout_summary": checkout.summary if checkout else None,
     }
@@ -2892,507 +2860,6 @@ async def read_payment_page(stagehand: Stagehand, page: Page, result: SiteResult
 
 
 # ---------------------------------------------------------------------------
-# PAY WITH CARD: open the final card-payment screen ("pay.cart"), read it, touch nothing on it
-# ---------------------------------------------------------------------------
-# The payment page's sticky footer reads "< Start over", the cart total and a red "PAY WITH CARD >" where earlier
-# steps had CONTINUE. The model never clicks it: NEVER_FORWARD, BOOKING_NEVER_LABEL and PASSENGER_NEVER_LABEL go on
-# refusing anything that says "pay". Only open_card_payment clicks it, in code, once every guard in card_guards holds,
-# and only this exact label: not "Pay now", "Pay with PayPal", "PayID" or "Pay with points".
-PAY_WITH_CARD = re.compile(r"^pay with card\b", re.IGNORECASE)
-PAY_CARD_MARK = "data-audit-pay-card"
-CARD_METHOD_MARK = "data-audit-card-method"
-PAYMENT_HOST = "book.qantas.com"  # the payment page's host; the button is clicked nowhere else
-PAYMENT_HEADING = re.compile(r"^payment\b", re.IGNORECASE)
-PAY_WINDOW_WAIT_MS = 20_000  # how long the click has to show where it went
-PAY_WINDOW_POLL_MS = 500
-CARD_METHOD_SETTLE_MS = 1500
-PAY_WINDOW_SETTLE_MS = 4000  # the card window (often a payment provider's page or iframe) loads its own scripts
-# An iframe, new tab or URL that looks like a payment provider's card screen.
-PAYMENT_FRAME = re.compile(r"pay|cart|card|checkout|adyen|cybersource|stripe|braintree|worldpay", re.IGNORECASE)
-# A message that says the click was refused for want of card details (shown on the same page, near the inputs).
-CARD_REFUSAL = re.compile(
-    r"\brequired\b|\binvalid\b|enter (your|a valid|the) card|card (number|details) (is|are) (required|missing|incomplete)"
-    r"|is incomplete|please (enter|complete|check)",
-    re.IGNORECASE,
-)
-CARD_WINDOW_KINDS = ("new_tab", "same_tab", "overlay", "none")
-
-# The sticky footer's PAY WITH CARD: a visible button, link or role=button inside the footer bar (the same bars as
-# JS_FOOTER_FORWARD), never in the skip links or an in-page anchor, whose own text (whitespace collapsed) matches
-# PAY_WITH_CARD. A pinned (fixed/sticky) bar's is preferred. It is marked with data-audit-pay-card, scrolled into view
-# if it is off screen, and its text, centre and what elementFromPoint finds there are returned. Null if none.
-JS_PAY_WITH_CARD = r"""({ pattern, mark }) => {
-    const bar = 'page-bottom-modal, navigation-ribbon, nav, footer, [class*="ribbon" i], [class*="footer" i]';
-    const skip = 'skip-links, [class*="skip" i], [id*="skip" i]';
-    const wanted = new RegExp(pattern, 'i');
-    const pinned = el => {
-        for (let up = el; up && up !== document.documentElement; up = up.parentElement) {
-            if (/^(fixed|sticky)$/.test(getComputedStyle(up).position)) return true;
-        }
-        return false;
-    };
-    document.querySelectorAll(`[${mark}]`).forEach(e => e.removeAttribute(mark));
-    const found = Array.from(document.querySelectorAll('button, a, [role="button"]'))
-        .filter(el => vis(el) && wanted.test(clean(el.innerText)) && el.closest(bar) && !el.closest(skip)
-                      && !el.matches('a[href^="#"]'));
-    if (!found.length) return null;
-    const inBar = found.filter(pinned);
-    const el = (inBar.length ? inBar : found).slice(-1)[0];
-    el.setAttribute(mark, '1');
-    let r = el.getBoundingClientRect();
-    if (r.top < 0 || r.bottom > innerHeight || r.left < 0 || r.right > innerWidth) {
-        el.scrollIntoView({ block: 'center', inline: 'center' });
-        r = el.getBoundingClientRect();
-    }
-    const x = r.left + r.width / 2, y = r.top + r.height / 2;
-    const hit = document.elementFromPoint(x, y);
-    return { text: clean(el.innerText), x, y, matches: found.length, pinned: pinned(el),
-             hit_is_target: !!(hit && (hit === el || el.contains(hit))),
-             hit: hit ? hit.tagName.toLowerCase() + (hit.id ? '#' + hit.id : '') : null };
-}"""
-
-# What the guards need from the payment page, read in code: the main heading and host; the Card payment method
-# (an element of the method list whose own text is "Card" / "Credit card" / "Credit or debit card") and whether it
-# is the selected one; and every input asking for card data (by its label, aria-label, placeholder, name, id or
-# autocomplete) with whether it holds a value. The values themselves are never returned. Inputs inside same-origin
-# iframes are read too; a cross-origin iframe that looks like a payment provider's hosted field is listed as
-# unreadable. With `mark`, the Card method is marked with data-audit-card-method and its centre returned.
-JS_CARD_PAYMENT_STATE = r"""({ method, frame, mark }) => {
-    const methodText = new RegExp(method, 'i');
-    const frameLike = new RegExp(frame, 'i');
-    const CARD_INPUT = /card ?number|cc-?number|name on card|card ?holder|cc-?name|expiry|expiration|mm ?\/ ?yy|cc-?exp|security code|cvv|cvc|cc-?csc/i;
-    const kind = l => /number/i.test(l) ? 'card_number' : /name|holder/i.test(l) ? 'name_on_card'
-        : /exp|mm/i.test(l) ? 'expiry' : 'security_code';
-    const labelOf = (el, doc) => {
-        const parts = [el.getAttribute('aria-label'), el.placeholder, el.name, el.id, el.getAttribute('autocomplete')];
-        for (const l of el.labels || []) parts.push(l.innerText);
-        for (const id of (el.getAttribute('aria-labelledby') || '').split(/\s+/).filter(Boolean)) {
-            const ref = doc.getElementById(id);
-            if (ref) parts.push(ref.innerText);
-        }
-        return clean(parts.filter(Boolean).join(' '));
-    };
-    const inputsOf = (doc, where) => Array.from(doc.querySelectorAll('input, textarea'))
-        .filter(el => !/^(hidden|radio|checkbox|submit|button)$/i.test(el.type || ''))
-        .map(el => ({ el, label: labelOf(el, doc) }))
-        .filter(x => CARD_INPUT.test(x.label))
-        .map(({ el, label }) => ({ label: label.slice(0, 80), kind: kind(label), filled: (el.value || '').length > 0,
-                                   visible: vis(el, 2, 2), where }));
-    const card_inputs = inputsOf(document, 'page');
-    const payment_frames = [];
-    for (const f of document.querySelectorAll('iframe')) {
-        let doc = null;
-        try { doc = f.contentDocument; } catch (e) { doc = null; }
-        const about = [f.src, f.name, f.title, f.id].filter(Boolean).join(' ');
-        if (doc && doc.body) card_inputs.push(...inputsOf(doc, 'iframe'));
-        else if (frameLike.test(about) && !/recaptcha/i.test(about)) {
-            payment_frames.push({ src: (f.src || '').slice(0, 200), title: f.title || null, visible: vis(f, 20, 10) });
-        }
-    }
-    const selected = el => {
-        for (let up = el, depth = 0; up && depth < 3; up = up.parentElement, depth++) {
-            if (up.matches('input[type="radio"]')) return up.checked;
-            if (up.matches('label') && up.control && up.control.type === 'radio') return up.control.checked;
-            for (const a of ['aria-selected', 'aria-checked', 'aria-pressed', 'aria-current']) {
-                if (up.getAttribute(a) === 'true') return true;
-            }
-            if (/(^|[\s_-])(selected|active|checked)($|[\s_-])/i.test(typeof up.className === 'string' ? up.className : '')) return true;
-            const radio = depth === 0 && up.querySelector && up.querySelector('input[type="radio"]');
-            if (radio) return radio.checked;
-        }
-        return false;
-    };
-    const ownText = el => clean(el.matches('input') ? Array.from(el.labels || []).map(l => l.innerText).join(' ') : el.innerText);
-    const methods = Array.from(document.querySelectorAll(
-        '[role="tab"], [role="radio"], [role="option"], [role="menuitemradio"], input[type="radio"], label, li, button'))
-        .filter(el => (vis(el) || el.matches('input')) && methodText.test(ownText(el)) && ownText(el).length <= 40);
-    // The innermost match is the method itself, not the list around it.
-    const card = methods.find(el => !methods.some(other => other !== el && el.contains(other))) || null;
-    const heading = document.querySelector('h1');
-    const out = { url: location.href, host: location.host, heading: heading ? clean(heading.innerText) : null,
-                  card_method: card ? { text: ownText(card), selected: selected(card) } : null,
-                  card_inputs, payment_frames };
-    if (mark && card) {
-        document.querySelectorAll(`[${mark}]`).forEach(e => e.removeAttribute(mark));
-        card.setAttribute(mark, '1');
-        const target = card.matches('input') && card.labels && card.labels[0] ? card.labels[0] : card;
-        target.scrollIntoView({ block: 'center' });
-        const r = target.getBoundingClientRect();
-        out.card_method.x = r.left + r.width / 2;
-        out.card_method.y = r.top + r.height / 2;
-    }
-    return out;
-}"""
-CARD_METHOD = r"^((credit|debit)\s*(/|or|&)?\s*(credit|debit)?\s*)?cards?$"
-
-# Before the click, every visible dialog, <page-bottom-modal> and payment-looking (or reCAPTCHA) iframe is marked
-# with data-audit-overlay-before; after it, the visible ones without the mark are the overlays the click opened.
-JS_PAY_OVERLAYS = r"""({ before, frame }) => {
-    const frameLike = new RegExp(frame, 'i');
-    const shown = el => {
-        const s = getComputedStyle(el);
-        return s.display !== 'none' && s.visibility !== 'hidden' && parseFloat(s.opacity || '1') > 0.1 && vis(el, 40, 20);
-    };
-    const found = Array.from(document.querySelectorAll('[role="dialog"], [aria-modal="true"], page-bottom-modal, iframe'))
-        .filter(el => shown(el) && (el.tagName !== 'IFRAME' || frameLike.test(el.src || '') || /recaptcha/i.test(el.src || '')));
-    if (before) {
-        found.forEach(el => el.setAttribute('data-audit-overlay-before', '1'));
-        return found.length;
-    }
-    return found.filter(el => !el.hasAttribute('data-audit-overlay-before')).map(el => ({
-        tag: el.tagName.toLowerCase(),
-        src: el.tagName === 'IFRAME' ? (el.src || '').slice(0, 200) : null,
-        recaptcha: el.tagName === 'IFRAME' && /recaptcha/i.test(el.src || ''),
-        text: clean(el.innerText || '').slice(0, 160),
-    }));
-}"""
-
-
-class CardFee(BaseModel):
-    label: str = Field(description="What the fee is called, e.g. 'Card fee', 'Credit card surcharge (Visa)'")
-    amount: str | None = Field(description="Amount or percentage as shown, e.g. '$6.35' or '1.2%'; null if none shown")
-
-
-class CardWindowScreen(BaseModel):
-    """What the model reads off the card-payment screen. It is only ever read: nothing is typed or clicked on it."""
-
-    heading: str | None = Field(description="Main heading or title of this card payment screen")
-    amount_due: str | None = Field(description="Amount due / to pay as displayed, e.g. '$529.00'; null if not shown")
-    currency: str | None = Field(description="Currency code if shown, e.g. 'AUD'")
-    card_fees: list[CardFee] = Field(
-        description="Every card surcharge, card fee or payment processing fee shown on this screen. Empty if none."
-    )
-    fields_required: list[str] = Field(
-        description="Labels of the inputs asking for card data, e.g. 'Card number', 'Expiry (MM/YY)', 'CVV'"
-    )
-    messages: list[str] = Field(description="Errors, notices, warnings or reCAPTCHA messages shown. Empty if none.")
-    blocked_reason: str | None = Field(
-        description="If a login, CAPTCHA, 'verify you are human' or bot check stops this screen being used, "
-        "describe it; otherwise null"
-    )
-
-
-class CardWindow(CardWindowScreen):
-    """open_card_payment's record: where PAY WITH CARD went and what that screen showed (session.json card_window)."""
-
-    status: str = Field(default="not_reached", description="reached | not_reached | skipped")
-    kind: str = Field(default="none", description="new_tab | same_tab | overlay | none")
-    url: str | None = None
-    reason: str | None = None
-    card_fields: str | None = Field(default=None, description="empty | unreadable_iframe | filled | not_found")
-    heading: str | None = None
-    amount_due: str | None = None
-    currency: str | None = None
-    card_fees: list[CardFee] = Field(default_factory=list)
-    fields_required: list[str] = Field(default_factory=list)
-    messages: list[str] = Field(default_factory=list)
-    blocked_reason: str | None = None
-
-
-class ExtractOnly:
-    """The Stagehand handed to the card-payment step: extract() only. act() and observe() (and anything that could
-    click or type for the model) raise, so the model can never choose or press anything on the payment screens."""
-
-    def __init__(self, stagehand: Stagehand) -> None:
-        self._stagehand = stagehand
-
-    async def extract(self, instruction: str, schema: type[BaseModel], **options: Any) -> Any:
-        return await self._stagehand.extract(instruction, schema, **options)
-
-    def __getattr__(self, name: str) -> Any:
-        if name in ("act", "observe", "agent", "execute"):
-            raise PermissionError(f"{name}() is not allowed on the card payment step")
-        return getattr(self._stagehand, name)
-
-
-class NoTyping:
-    """The page handed to the card-payment step: reads, screenshots and the two code clicks (PAY WITH CARD, the
-    Card method) pass through; typing, key presses and navigation raise. Nothing on the step types, so this only
-    turns a future mistake into an error instead of card data in a field."""
-
-    BLOCKED = frozenset({"type", "key_press", "drag_and_drop", "goto", "reload", "go_back", "go_forward"})
-
-    def __init__(self, page: Page) -> None:
-        self._page = page
-
-    def __getattr__(self, name: str) -> Any:
-        if name in self.BLOCKED:
-            raise PermissionError(f"page.{name}() is not allowed on the card payment step")
-        return getattr(self._page, name)
-
-
-def card_fields_state(reading: dict | None) -> str:
-    """'filled' if any card input holds a value, 'empty' if card inputs were read and all are empty,
-    'unreadable_iframe' if there are none to read but a cross-origin payment iframe (hosted fields) is there,
-    'not_found' otherwise."""
-    reading = reading or {}
-    inputs = reading.get("card_inputs") or []
-    if any(i.get("filled") for i in inputs):
-        return "filled"
-    if inputs:
-        return "empty"
-    return "unreadable_iframe" if reading.get("payment_frames") else "not_found"
-
-
-def card_method_state(reading: dict | None) -> str:
-    """'selected' if the Card method reads as selected; 'panel_shown' if no method list was found but visible card
-    inputs are (the "Pay by card" panel shows only for Card); 'not_selected' or 'not_found' otherwise."""
-    reading = reading or {}
-    method = reading.get("card_method")
-    if method:
-        return "selected" if method.get("selected") else "not_selected"
-    return "panel_shown" if any(i.get("visible") for i in reading.get("card_inputs") or []) else "not_found"
-
-
-def card_guards(checkout: CheckoutDetails | None, reading: dict | None, step_type: str = "payment") -> list[dict]:
-    """Every check that must hold, right before the click, for PAY WITH CARD to be pressed. Pure, so it is tested
-    on its own. Each entry: name, ok, and why (what was found)."""
-    reading = reading or {}
-    heading = str(reading.get("heading") or "")
-    fields = card_fields_state(reading)
-    method = card_method_state(reading)
-    return [
-        {"name": "payment_page_read", "ok": bool(checkout and checkout.is_checkout_page and checkout.total),
-         "why": "the payment page was not read with a total"},
-        {"name": "on_payment_page", "ok": bool(PAYMENT_HEADING.match(heading)) and reading.get("host") == PAYMENT_HOST,
-         "why": f"not on the payment page (heading {heading!r}, host {reading.get('host')!r})"},
-        {"name": "card_method_selected", "ok": method in ("selected", "panel_shown"),
-         "why": f"the Card payment method is {method.replace('_', ' ')}"},
-        {"name": "card_fields_empty", "ok": fields in ("empty", "unreadable_iframe"),
-         "why": "card details already entered" if fields == "filled" else "card inputs not found"},
-        # Nothing on this step types: the passenger filler runs on passenger_details only (next_booking_action),
-        # and the card step's Stagehand and page refuse act/observe and typing (ExtractOnly, NoTyping).
-        {"name": "no_typing_on_payment_step", "ok": step_type == "payment",
-         "why": f"step is {step_type!r}, not the payment step"},
-    ]  # fmt: skip
-
-
-def why_not_pay(guards: list[dict]) -> str | None:
-    """The first guard that does not hold, as a reason; None if PAY WITH CARD may be clicked."""
-    return next((g["why"] for g in guards if not g["ok"]), None)
-
-
-def card_refusals(before: str, after: str) -> list[str]:
-    """Lines of the page text that appeared after the click and say it was refused: a card field is required or
-    invalid, or a reCAPTCHA / bot check. Each once, in order."""
-    seen = {" ".join(line.split()) for line in before.splitlines()}
-    found: list[str] = []
-    for raw in after.splitlines():
-        line = " ".join(raw.split())[:200]
-        fresh = line and line not in seen and line not in found
-        if fresh and (CARD_REFUSAL.search(line) or BOT_SIGNAL.search(line)) and not NOT_BOT_SIGNAL.search(line):
-            found.append(line)
-    return found
-
-
-async def read_card_state(page: Page, mark: bool = False) -> dict | None:
-    found = await js(
-        page,
-        JS_CARD_PAYMENT_STATE,
-        {"method": CARD_METHOD, "frame": PAYMENT_FRAME.pattern, "mark": CARD_METHOD_MARK if mark else None},
-        default=None,
-    )
-    return found if isinstance(found, dict) else None
-
-
-async def find_pay_with_card(page: Page) -> dict | None:
-    """The footer's PAY WITH CARD, marked with data-audit-pay-card; None if there is none (checked here too)."""
-    found = await js(page, JS_PAY_WITH_CARD, {"pattern": PAY_WITH_CARD.pattern, "mark": PAY_CARD_MARK}, default=None)
-    if not isinstance(found, dict) or not PAY_WITH_CARD.match(" ".join(str(found.get("text") or "").split())):
-        return None
-    return found
-
-
-async def select_card_method(page: Page, reading: dict | None) -> dict | None:
-    """If another payment method is selected, click the Card method in code and read the page again."""
-    if card_method_state(reading) != "not_selected":
-        return reading
-    marked = await read_card_state(page, mark=True)
-    method = (marked or {}).get("card_method") or {}
-    if "x" not in method:
-        return marked
-    trace("  PAY WITH CARD: Card is not the selected method; clicking Card in code", click="pay_with_card",
-          stage="select_card", method=method)  # fmt: skip
-    await click_at(page, method["x"], method["y"])
-    await settle(page, CARD_METHOD_SETTLE_MS)
-    return await read_card_state(page)
-
-
-async def page_text(page: Page) -> str:
-    with contextlib.suppress(*BROWSER_ERRORS):
-        return str(await js(page, JS_PAGE_TEXT, default="") or "")
-    return ""
-
-
-@dataclass
-class Detected:
-    kind: str  # new_tab | same_tab | overlay | none
-    window: Page | None = None
-    url: str | None = None
-    overlays: list[dict] | None = None
-    refusals: list[str] | None = None
-    polls: int = 0
-
-
-async def detect_card_window(
-    stagehand: ExtractOnly, page: Page, before_tabs: set[str], before_url: str, before_text: str
-) -> Detected:
-    """Poll up to PAY_WINDOW_WAIT_MS for the first sign of where the click went: a new tab or popup, the same tab
-    navigating, a new overlay (dialog, bottom modal or payment iframe), or a refusal on the same page (card fields
-    required, a reCAPTCHA). kind 'none' with no refusals if nothing happened."""
-    polls = PAY_WINDOW_WAIT_MS // PAY_WINDOW_POLL_MS
-    for poll_index in range(1, polls + 1):
-        await pause(PAY_WINDOW_POLL_MS)
-        new = [tab for tab in await open_tabs(stagehand) if tab.page_id not in before_tabs]
-        if new:
-            with contextlib.suppress(*BROWSER_ERRORS):
-                return Detected("new_tab", new[-1], await new[-1].url(), polls=poll_index)
-            return Detected("new_tab", new[-1], None, polls=poll_index)
-        url = None
-        with contextlib.suppress(*BROWSER_ERRORS):
-            url = await page.url()
-        if url and url != before_url:
-            return Detected("same_tab", page, url, polls=poll_index)
-        overlays = await js(page, JS_PAY_OVERLAYS, {"before": False, "frame": PAYMENT_FRAME.pattern}, default=[])
-        overlays = overlays if isinstance(overlays, list) else []
-        challenge = [o for o in overlays if o.get("recaptcha")]
-        windows = [o for o in overlays if not o.get("recaptcha")]
-        if windows:
-            return Detected("overlay", page, url, overlays=windows, polls=poll_index)
-        refusals = card_refusals(before_text, await page_text(page))
-        if challenge:
-            refusals.append("reCAPTCHA challenge shown")
-        if refusals:
-            return Detected("none", None, url, overlays=challenge, refusals=refusals, polls=poll_index)
-    return Detected("none", None, before_url, polls=polls)
-
-
-CARD_WINDOW_READ = (
-    "Read this card payment screen. Do not interact with it. Report its heading, the amount due as shown and its "
-    "currency, every card surcharge, card fee or payment processing fee shown (label and amount or percentage), the "
-    "labels of the inputs asking for card details, and any errors, notices or reCAPTCHA messages. Report if a "
-    "login, CAPTCHA or bot check stops the screen being used."
-)
-
-
-async def read_card_window(stagehand: ExtractOnly, window: Page, card: CardWindow, result: SiteResult) -> CardWindow:
-    """Screenshot and read the card window; nothing on it is typed into or clicked."""
-    await settle(window, PAY_WINDOW_SETTLE_MS)
-    await wait_for_render(window, 10)
-    await shot(window, result.out_dir / "pay-window.png")
-    screen = (await stagehand.extract(CARD_WINDOW_READ, CardWindowScreen, page=window)).data
-    blocked = screen.blocked_reason
-    note_bot_signals(result, "card payment window", [blocked, *screen.messages])
-    if blocked and is_soft_bot_signal(blocked):
-        log.info(f"  PAY WITH CARD: bot signal on the card window kept as a warning, not a block: {blocked[:120]}")
-        blocked = None
-    read = {**card.model_dump(), **screen.model_dump(), "blocked_reason": blocked}
-    if blocked:
-        read["reason"] = f"blocked: {blocked}"
-    return CardWindow.model_validate(read)
-
-
-async def open_card_payment(
-    stagehand: Stagehand, page: Page, result: SiteResult, checkout: CheckoutDetails | None, step_type: str = "payment"
-) -> CardWindow:
-    """Click the payment page's PAY WITH CARD in code, find where it went and read that screen. Then stop.
-
-    The click happens only if every card_guards check holds. Nothing is ever typed, and nothing is clicked on the
-    card screen: the model only reads it (ExtractOnly). The outcome is kept in result.card_window, and a screen not
-    reached or skipped in result.warnings; the run's status is left as it is. Never raises (bar cancellation).
-    """
-    partial = [CardWindow()]  # how far it got, so a failure part-way keeps where the click went
-    try:
-        card = await _open_card_payment(
-            ExtractOnly(stagehand), cast(Page, NoTyping(page)), result, checkout, step_type, partial
-        )
-    except Exception as error:  # noqa: BLE001 - extra evidence: a failure here must never change the run's status
-        failed = f"{type(error).__name__}: {str(error)[:200]}"
-        card = partial[-1].model_copy(update={"reason": f"card window not read: {failed}" if
-                                              partial[-1].status == "reached" else failed})  # fmt: skip
-        log.warning(f"  PAY WITH CARD: stopped by {failed}")
-    result.card_window = card.model_dump(mode="json")
-    if card.status != "reached":
-        warning = f"PAY WITH CARD: {card.status.replace('_', ' ')} – {card.reason or 'no reason recorded'}"
-        if warning not in result.warnings:
-            result.warnings.append(warning)
-    trace(f"  PAY WITH CARD: {card.status} ({card.kind}) {card.url or ''}".rstrip(), click="pay_with_card",
-          stage="outcome", card_window=result.card_window)  # fmt: skip
-    return card
-
-
-async def _open_card_payment(
-    stagehand: ExtractOnly,
-    page: Page,
-    result: SiteResult,
-    checkout: CheckoutDetails | None,
-    step_type: str,
-    partial: list[CardWindow],
-) -> CardWindow:
-    what = "pay_with_card"
-    reading = await select_card_method(page, await read_card_state(page))
-    guards = card_guards(checkout, reading, step_type)
-    fields = card_fields_state(reading)
-    trace("  PAY WITH CARD: guards " + ", ".join(f"{g['name']}={'ok' if g['ok'] else 'NO'}" for g in guards),
-          click=what, stage="guards", guards=guards, card_fields=fields, card_method=card_method_state(reading),
-          reading=reading)  # fmt: skip
-    if reason := why_not_pay(guards):
-        return CardWindow(status="skipped", reason=reason, card_fields=fields)
-
-    found = await find_pay_with_card(page)
-    trace(f"  PAY WITH CARD: {'found ' + repr(found.get('text')) if found else 'no button found'}",
-          click=what, stage="found", found=found)  # fmt: skip
-    if found is None:
-        return CardWindow(status="skipped", reason="no PAY WITH CARD button in the footer", card_fields=fields)
-    partial.append(CardWindow(status="not_reached", reason="stopped after the click", card_fields=fields))
-
-    tabs = await open_tabs(stagehand)
-    before_tabs = {tab.page_id for tab in tabs}
-    before_url = await page.url()
-    before_text = await page_text(page)
-    await js(page, JS_PAY_OVERLAYS, {"before": True, "frame": PAYMENT_FRAME.pattern}, default=0)
-    trace("  PAY WITH CARD: before the click", click=what, stage="before_click", url=before_url,
-          heading=(reading or {}).get("heading"), fingerprint=await screen_for_record(page), tabs=len(tabs),
-          target=await click_probe(page, PAY_CARD_MARK, found))  # fmt: skip
-
-    if found.get("hit_is_target"):
-        await click_at(page, found["x"], found["y"])
-        how = "mouse"
-    else:  # something else is on top at the button's centre: a mouse click there would land on it
-        await js(page, JS_DOM_CLICK, PAY_CARD_MARK)
-        how = "dom"
-    trace(f"  PAY WITH CARD: {how} click", click=what, stage="click", how=how, covered_by=found.get("hit"))
-
-    seen = await detect_card_window(stagehand, page, before_tabs, before_url, before_text)
-    trace(f"  PAY WITH CARD: detected {seen.kind}" + (f" at {seen.url}" if seen.kind != "none" else ""),
-          click=what, stage="detected", kind=seen.kind, url=seen.url, overlays=seen.overlays,
-          refusals=seen.refusals, polls=seen.polls, tabs=len(await open_tabs(stagehand)),
-          fingerprint=await screen_for_record(page))  # fmt: skip
-
-    if seen.kind == "none" or seen.window is None:
-        if seen.refusals:
-            await shot(page, result.out_dir / "pay-refused.png")
-            needs_card = any(CARD_REFUSAL.search(r) for r in seen.refusals)
-            reason = "card details required" if needs_card else "refused: " + "; ".join(seen.refusals[:2])
-            return CardWindow(status="not_reached", reason=reason, url=seen.url, messages=seen.refusals,
-                              card_fields=fields)  # fmt: skip
-        return CardWindow(status="not_reached", reason=f"nothing opened within {PAY_WINDOW_WAIT_MS // 1000} s",
-                          url=seen.url, card_fields=fields)  # fmt: skip
-
-    window = page if seen.window.page_id == page.page_id else cast(Page, NoTyping(seen.window))
-    card = CardWindow(status="reached", kind=seen.kind, url=seen.url, card_fields=fields)
-    partial.append(card)
-    card = await read_card_window(stagehand, window, card, result)
-    with contextlib.suppress(*BROWSER_ERRORS):
-        card.url = await window.url()
-    after = await read_card_state(window)
-    trace(f"  PAY WITH CARD: card window read: {card.heading!r}, amount due {card.amount_due}, "
-          f"{len(card.card_fees)} card fee(s)", click=what, stage="read", card_fields_after=card_fields_state(after),
-          url=card.url)  # fmt: skip
-    return card
-
-
-# ---------------------------------------------------------------------------
 # Workflow
 # ---------------------------------------------------------------------------
 def today() -> date:
@@ -3492,9 +2959,6 @@ class QantasWorkflow(Workflow):
                 result.fail(Status.NO_CHECKOUT, "Payment page not reached")
             else:
                 result.status = Status.OK
-                # One step further: PAY WITH CARD, to read the card screen it opens. Extra evidence only: the run
-                # stays ok whatever happens there, and nothing is typed or submitted on it.
-                await open_card_payment(stagehand, page, result, checkout)
         finally:  # keep whatever extras were seen, however the run ended
             self.conclude(result, lambda: compare_prices(result, checkout))
             with contextlib.suppress(*BROWSER_ERRORS):  # the browser may be gone; the URL is a nicety
