@@ -258,10 +258,8 @@ class RecordingStagehand:
 
     async def extract(self, instruction: str, schema: type[BaseModel], **options: Any) -> Any:
         options.setdefault("timeout", actions.LLM_TIMEOUT_MS)
-        # The page furniture is left out of the page being read: another tab (a payment popup) gets its own locators.
-        target = options.get("page") or self._page
-        if target is not None and "locator" not in options:
-            options.setdefault("ignore_locators", [target.locator(selector) for selector in EXTRACT_IGNORE])
+        if self._page is not None and "locator" not in options:
+            options.setdefault("ignore_locators", [self._page.locator(selector) for selector in EXTRACT_IGNORE])
         for attempt in range(2):
             try:
                 self.llm_calls += 1
@@ -552,7 +550,6 @@ async def audit_and_record(
         "message": result.message,
         "failure_reason": result.failure_reason,
         **({"warnings": result.warnings} if result.warnings else {}),
-        **({"card_window": result.card_window} if result.card_window is not None else {}),
         "execution_time_ms": usage.duration_ms,
         "tokens_used": token_total(after) - token_total(before) if after else None,
         "usage": usage.row(),

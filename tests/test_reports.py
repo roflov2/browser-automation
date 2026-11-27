@@ -136,24 +136,9 @@ def test_runs_csv_keeps_every_run(output_root):
     for folder in ("a.test/1", "a.test/2", "a.test/3"):
         update_summary(make_result(output_root, "https://a.test", folder), "coffee")
     runs = read_csv(output_root / "runs.csv")
-    assert list(runs[0]) == [*SUMMARY_COLUMNS, "workflow", "target", "failure_reason", "card_window_status"]
+    assert list(runs[0]) == [*SUMMARY_COLUMNS, "workflow", "target", "failure_reason"]
     assert [r["output_dir"] for r in runs] == [str(output_root / f"a.test/{n}") for n in (1, 2, 3)]
     assert len(read_csv(output_root / "summary.csv")) == 1
-
-
-def test_card_window_status_is_appended_to_runs_csv_and_older_rows_stay_valid(output_root):
-    old = [*SUMMARY_COLUMNS, "workflow", "target", "failure_reason"]  # runs.csv before card_window_status
-    core.write_csv(output_root / "runs.csv", old, [{"site": "https://old.test", "status": "ok", "workflow": "coffee"}])
-    result = make_result(output_root, "https://www.qantas.com/au/en.html", "qantas.com/1")
-    result.card_window = {"status": "not_reached", "kind": "none", "reason": "card details required"}
-    update_summary(result, "qantas")
-    older, newer = read_csv(output_root / "runs.csv")
-    assert (older["site"], older["card_window_status"]) == ("https://old.test", "")
-    assert newer["card_window_status"] == "not_reached"
-    assert "card_window_status" not in read_csv(output_root / "summary.csv")[0]  # summary.csv keeps its columns
-    write_reports(result)
-    report = json.loads((result.out_dir / "price_comparison.json").read_text(encoding="utf-8"))
-    assert report["card_window"]["reason"] == "card details required"
 
 
 def test_different_targets_from_one_start_url_do_not_replace_each_other(output_root):
