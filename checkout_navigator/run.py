@@ -51,7 +51,37 @@ async def main_async(args: argparse.Namespace) -> dict[str, Any]:
         )
     context = config.context(load_site_hints(url))
     async with open_session(config) as (stagehand, page):
-        return await reach_checkout(stagehand, page, url, context)
+        try:
+            result = await reach_checkout(stagehand, page, url, context)
+        except Exception as error:  # noqa: BLE001 - still report the tokens spent before the failure
+            result = error_result(url, error)
+        tokens = await token_usage(stagehand)
+        if tokens is not None:
+            result["tokens"] = tokens
+        return result
+
+
+def error_result(url: str, error: BaseException) -> dict[str, Any]:
+    logging.getLogger(__name__).debug("Run failed", exc_info=error)
+    return {"status": "ERROR", "url": url, "error": f"{type(error).__name__}: {error}"}
+
+
+async def token_usage(stagehand: Any) -> dict[str, int] | None:
+    """The model tokens Stagehand counted across every act, extract and observe call in the session."""
+    try:
+        metrics = await stagehand.metrics()
+    except Exception as error:  # noqa: BLE001 - the browser may be gone; the count is a nice-to-have
+        logging.getLogger(__name__).debug("Could not read Stagehand metrics: %s", error)
+        return None
+    prompt = int(metrics.get("total_prompt_tokens") or 0)
+    completion = int(metrics.get("total_completion_tokens") or 0)
+    return {
+        "input": prompt,
+        "cached_input": int(metrics.get("total_cached_input_tokens") or 0),
+        "output": completion,
+        "reasoning": int(metrics.get("total_reasoning_tokens") or 0),
+        "total": prompt + completion,
+    }
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -62,10 +92,11 @@ def main(argv: list[str] | None = None) -> None:
         result = asyncio.run(main_async(args))
     except KeyboardInterrupt:
         result = {"status": "INTERRUPTED", "url": args.url}
-    except Exception as error:
-        logging.getLogger(__name__).debug("Run failed", exc_info=error)
-        result = {"status": "ERROR", "url": args.url, "error": f"{type(error).__name__}: {error}"}
+    except Exception as error:  # noqa: BLE001 - any failure becomes the ERROR status
+        result = error_result(args.url, error)
     print(json.dumps(result, indent=2, default=str))
+    if tokens := result.get("tokens"):
+        print(f"Tokens: {tokens['total']:,} ({tokens['input']:,} in, {tokens['output']:,} out)", file=sys.stderr)
     sys.exit(0 if result.get("status") == "DONE" else 1)
 
 

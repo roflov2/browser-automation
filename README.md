@@ -34,8 +34,11 @@ python -m checkout_navigator.run --url ...          # same thing; `checkout-navi
 It prints one JSON status dictionary and exits with 0 for `DONE` and 1 for anything else:
 
 ```json
-{"status": "DONE", "steps": 7, "url": "https://.../checkout", "history": ["step 0: DO_DISMISS_OVERLAY ... -> ok", "..."]}
+{"status": "DONE", "steps": 7, "url": "https://.../checkout", "history": ["step 0: DO_DISMISS_OVERLAY ... -> ok", "..."],
+ "tokens": {"input": 84210, "cached_input": 0, "output": 3120, "reasoning": 0, "total": 87330}}
 ```
+
+`tokens` adds up every model call in the run, as Stagehand counts them (Azure calls included). It is followed by a one-line total on stderr, e.g. `Tokens: 87,330 (84,210 in, 3,120 out)`.
 
 | Status | Meaning |
 | --- | --- |
